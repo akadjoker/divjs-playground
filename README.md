@@ -95,7 +95,8 @@ npm run trailer -- all --both --check     # with and without narration, then che
 
 - **What is cut where** is `tools/trailer/timeline.mjs`: the order of the
   segments, their length in beats (120 bpm, 2 beats = 1 s), where each one
-  starts in its recording (`from`) and its texts. Change it and run again;
+  starts in its recording (`from`, or `cuts` to skip dull stretches) and
+  its texts. Change it and run again;
   only recordings that changed are made again (`--fresh` redoes them all).
 - **Recording**: the games play by the scripts in `tools/game-shots.mjs`
   (shared with `npm run capture`). The pages run on a virtual clock, so each
