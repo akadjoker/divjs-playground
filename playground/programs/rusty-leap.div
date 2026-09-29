@@ -610,6 +610,7 @@ pal[239] =
   fc = 0;                    // frame counter
   pskid = 0; pstretch = 0; pland = 0; auto_walk = 0;
   fw_x = 0.0; fw_y = 0.0; fw_vx = 0.0; fw_vy = 0.0; fw_g = 0; fw_turn = 0;   // foe_walk
+  scr = 0;                   // screen shown: 0 title, 1 stage card, 2 playing, 3 game over, 4 ending
   hiscore = 0; check_ty = 12; g_portal = 0; txt_a = 0; fbuf = ""; load_n = 0;
 
 LOCAL
@@ -1591,24 +1592,34 @@ END
 // ground is normally rows 13-14, so things stand on row 12
 // =====================================================================
 
-FUNCTION lv_new(w, th);
+// Empties the tile map (done a frame before a level is built: both
+// together are too much work for one frame)
+FUNCTION lv_clear(part);
 PRIVATE i;
 BEGIN
-  lw = w; theme = th; tb = th * 48;
-  FOR i = 0 TO w * LH - 1
+  FOR i = part * 1000 TO part * 1000 + 999
     tm[i] = 0;
     bump[i] = 0;
   END
+  RETURN 0;
+END
+
+FUNCTION lv_new(w, th);
+BEGIN
+  lw = w; theme = th; tb = th * 48;
   ne = 0; goal_tx = w - 8; check_tx = 0;
   RETURN 0;
 END
 
 FUNCTION fill(x1, y1, x2, y2, t);
-PRIVATE tx, ty;
+PRIVATE tx, ty, b;
 BEGIN
+  x1 = max(x1, 0); x2 = min(x2, lw - 1);
+  y1 = max(y1, 0); y2 = min(y2, LH - 1);
   FOR ty = y1 TO y2
-    FOR tx = x1 TO x2
-      IF (tx >= 0 AND tx < lw AND ty >= 0 AND ty < LH) tm[ty * lw + tx] = t; END
+    b = ty * lw;
+    FOR tx = b + x1 TO b + x2
+      tm[tx] = t;
     END
   END
   RETURN 0;
@@ -1687,17 +1698,16 @@ BEGIN
   gems(55, 8, 3);
   ent(E_DIL, 58, 12);
   hill(62, 68, 11);
-  ent(E_BUG, 66, 10);
+  ent(E_BUG, 72, 12);
   row(63, 7, 3, T_BRICK);
   put(64, 7, T_GIFT);
   gems(70, 11, 3);
   ent(E_CHECK, 75, 12);
   ent(E_FROG, 81, 12);
-  // wide pit crossed on planks: 86-93
-  row(87, 10, 3, T_PLANK);
-  row(91, 9, 2, T_PLANK);
-  gems(87, 8, 3);
-  gnd(94, 130);
+  // wide pit with a plank in the middle: 86-91
+  row(88, 10, 2, T_PLANK);
+  gems(88, 8, 2);
+  gnd(92, 130);
   ent(E_BEE, 99, 9);
   row(101, 9, 2, T_BRICK);
   put(103, 9, T_GIFTP);
@@ -2145,7 +2155,9 @@ BEGIN
   IF (pdead OR pgrow != 0) RETURN 0; END
   IF (iabs(pfx - ex) >= phw + ew) RETURN 0; END
   IF (pfy <= ey - eh OR pfy - ph >= ey + eh) RETURN 0; END
-  IF (pvy > 0 AND pfy - pvy <= ey - eh + 6) RETURN 1; END
+  IF (pvy > 0 AND pfy - pvy <= ey - eh + 8) RETURN 1; END
+  // a side touch has to overlap a little more: forgiving near misses
+  IF (iabs(pfx - ex) >= phw + ew - 3 OR pfy <= ey - eh + 3) RETURN 0; END
   RETURN 2;
 END
 
@@ -2898,10 +2910,12 @@ BEGIN
   RETURN 0;
 END
 
-FUNCTION spawn_blocks();
+// Bricks and crates of rows y0..y1 (a level's rows are spread over a
+// few frames)
+FUNCTION spawn_blocks(y0, y1);
 PRIVATE tx, ty, t;
 BEGIN
-  FOR ty = 0 TO LH - 1
+  FOR ty = y0 TO y1
     FOR tx = 0 TO lw - 1
       t = tm[ty * lw + tx];
       IF (t == T_BRICK OR t == T_GIFT OR t == T_GIFTP) block(tx, ty); END
@@ -2992,6 +3006,12 @@ BEGIN
   make_sounds();
   make_songs();
   FOR k = 1 TO NLEVELS
+    lv_clear(0);
+    FRAME;
+    lv_clear(1);
+    FRAME;
+    lv_clear(2);
+    FRAME;
     build_level(k);
     FRAME;
     paint_start(k);
@@ -3010,10 +3030,20 @@ BEGIN
     // ---- title screen: the meadow scrolls by behind the name
     let_me_alone();
     delete_text(all_text);
+    lv_clear(0);
+    FRAME;
+    lv_clear(1);
+    FRAME;
+    lv_clear(2);
+    FRAME;
     level1();
     FRAME;
     setup_scrolls(1);
-    spawn_blocks();
+    spawn_blocks(0, 4);
+    FRAME;
+    spawn_blocks(5, 9);
+    FRAME;
+    spawn_blocks(10, 14);
     title_fox();
     hud_icon(g_logo_bg, 200, 102);
     shadow_text(f_big, 200, 48, 4, "RUSTY LEAP", '#ffd24a', 2);
@@ -3022,6 +3052,7 @@ BEGIN
     shadow_text(f_small, 200, 162, 4, "STOMP, BUMP CRATES, REACH THE WAYSTONE", '#ffffff', 1);
     IF (hiscore > 0) shadow_text(f_small, 200, 90, 4, "BEST " + hiscore, '#7dffb0', 1); END
     song_play(m_title);
+    scr = 0;
     t = 0; camx = 0; pid = 0;
     LOOP
       t++; fc++;
@@ -3042,6 +3073,13 @@ BEGIN
       stop_scroll(0);
       stop_scroll(1);
       song_stop();
+      scr = 1;
+      FRAME;
+      lv_clear(0);
+    FRAME;
+    lv_clear(1);
+    FRAME;
+    lv_clear(2);
       FRAME;
       build_level(lvl);
       FRAME;
@@ -3057,12 +3095,17 @@ BEGIN
       delete_text(all_text);
       let_me_alone();
       setup_scrolls(lvl);
-      spawn_blocks();
+      spawn_blocks(0, 4);
+    FRAME;
+    spawn_blocks(5, 9);
+    FRAME;
+    spawn_blocks(10, 14);
       FRAME;
       spawn_level();
       time_left = ltime[lvl]; time_tick = 0; hurry = 0;
       game_state = ST_PLAY; freeze = 0; paused = 0; wait_t = 0;
       hud();
+      scr = 2;
       song_play(m_theme[theme]);
       LOOP
         fc++;
@@ -3112,6 +3155,7 @@ BEGIN
     delete_text(all_text);
     IF (lives <= 0)
       // ---- game over
+      scr = 3;
       stop_scroll(0); stop_scroll(1);
       song_play(m_over, 0);
       shadow_text(f_big, 200, 96, 4, "GAME OVER", '#ff6a5a', 2);
@@ -3119,12 +3163,24 @@ BEGIN
       shadow_text(f_small, 200, 170, 4, "PRESS ENTER", '#ffd24a', 1);
     ELSE
       // ---- the ending: back in the meadow
+      scr = 4;
+      lv_clear(0);
+    FRAME;
+    lv_clear(1);
+    FRAME;
+    lv_clear(2);
+      FRAME;
       level1();
       FRAME;
       setup_scrolls(1);
-      spawn_blocks();
+      spawn_blocks(0, 4);
+    FRAME;
+    spawn_blocks(5, 9);
+    FRAME;
+    spawn_blocks(10, 14);
       title_fox();
       song_play(m_win);
+      hud_icon(g_logo_bg, 200, 94);
       shadow_text(f_big, 200, 54, 4, "WELL DONE!", '#ffd24a', 2);
       shadow_text(f_small, 200, 80, 4, "RUSTY REACHED EVERY WAYSTONE", '#ffffff', 1);
       shadow_text(f_small, 200, 96, 4, "SCORE " + score + "   LIVES " + lives, '#ffffff', 1);
