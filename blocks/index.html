@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DivJS Blocks</title>
+  <meta name="description" content="Make games with blocks and see the real DIV code they turn into.">
+  <!-- The playground's palette, buttons, header and console styles. -->
+  <link rel="stylesheet" href="../playground/style.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="blocks-app">
+    <header class="topbar">
+      <div class="brand">
+        <h1>DivJS Blocks</h1>
+        <span>Snap blocks together, see the real DIV code</span>
+      </div>
+      <div class="actions">
+        <button id="runBtn" class="primary" title="Run the game">▶ Run</button>
+        <button id="stopBtn" title="Stop the game">■ Stop</button>
+        <a id="openLink" class="link-btn" href="../playground/" target="_blank" rel="noopener"
+          title="Open this DIV code in the text playground, to go on in real code">Open in the playground</a>
+        <span class="actions-gap" aria-hidden="true"></span>
+        <a class="link-btn" href="../playground/" title="The DivJS Playground: write DIV code as text">⌨ Playground</a>
+        <a class="link-btn" href="https://github.com/akadjoker/divjs" target="_blank" rel="noopener" title="DivJS on GitHub - a star helps!">★ GitHub</a>
+      </div>
+    </header>
+
+    <section class="lesson" aria-labelledby="lessonTitle">
+      <div class="lesson-head">
+        <nav id="lessonNav" class="lesson-nav" aria-label="Lessons"></nav>
+        <h2 id="lessonTitle">Loading…</h2>
+      </div>
+      <p id="lessonGoal" class="lesson-goal"></p>
+      <ol id="lessonHints" class="lesson-hints"></ol>
+      <div class="lesson-actions">
+        <button id="solutionBtn" title="Replace your blocks with a working solution">Show me the solution</button>
+        <button id="restartBtn" title="Go back to this lesson's starting blocks">Start again</button>
+        <button id="nextBtn" class="primary">Next lesson ▶</button>
+      </div>
+    </section>
+
+    <main id="workspace" class="workspace" aria-label="Blocks"></main>
+
+    <aside class="run-col">
+      <section class="screen-pane" aria-label="Game">
+        <div id="screen" class="screen">
+          <canvas id="game" tabindex="0" width="320" height="240" aria-label="Game screen"></canvas>
+        </div>
+        <div class="statusbar">
+          <span id="status">Stopped</span>
+          <span id="stats"></span>
+        </div>
+        <div id="console" class="console" role="log" aria-live="polite"></div>
+      </section>
+
+      <section class="code-pane" aria-labelledby="codeTitle">
+        <h2 id="codeTitle">DIV code <span>made from your blocks (read-only)</span></h2>
+        <pre id="code" class="code" tabindex="0"></pre>
+      </section>
+    </aside>
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

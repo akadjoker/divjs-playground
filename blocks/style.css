@@ -1,0 +1,293 @@
+/* DivJS Blocks. Loaded after ../playground/style.css, whose palette
+   (:root variables), buttons, header, status bar and console it reuses. */
+
+.blocks-app {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 400px);
+  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-areas:
+    "top top"
+    "lesson run"
+    "work run";
+  height: 100vh;
+  gap: 10px;
+  padding: 10px;
+}
+
+.topbar {
+  grid-area: top;
+}
+
+/* ── Lesson ────────────────────────────────────────────────────────── */
+
+.lesson {
+  grid-area: lesson;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  min-width: 0;
+}
+
+.lesson-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.lesson-head h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.lesson-nav {
+  display: flex;
+  gap: 4px;
+}
+
+.lesson-nav button {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--bg);
+}
+
+.lesson-nav button[aria-current="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
+.lesson-goal {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.lesson-hints {
+  margin: 0;
+  padding-left: 22px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.lesson-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+/* ── Blocks ────────────────────────────────────────────────────────── */
+
+.workspace {
+  grid-area: work;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+/* Blockly's toolbox: the category list on the left. */
+.workspace .blocklyToolbox {
+  padding: 6px 0;
+}
+
+.workspace .blocklyToolboxCategory {
+  margin: 2px 6px;
+  padding: 3px 6px 3px 0;
+  border-radius: 6px;
+}
+
+.workspace .blocklyToolboxCategoryLabel {
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.workspace .blocklyToolboxSelected .blocklyToolboxCategoryLabel {
+  color: #ffffff;
+}
+
+.workspace .blocklyFlyoutButton .blocklyText {
+  fill: var(--text);
+}
+
+.workspace .blocklyFlyoutButton {
+  fill: var(--panel-2);
+}
+
+/* ── Game and code: the right-hand column ─────────────────────────── */
+
+.run-col {
+  grid-area: run;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.screen-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px;
+}
+
+.screen-pane .screen {
+  flex: none;
+  aspect-ratio: 4 / 3;
+  min-height: 0;
+}
+
+.screen-pane .screen canvas {
+  width: 100%;
+  height: 100%;
+}
+
+.screen-pane .console {
+  flex: none;
+  min-height: 0;
+  max-height: 90px;
+}
+
+.screen-pane .console:empty {
+  display: none;
+}
+
+/* ── Code ──────────────────────────────────────────────────────────── */
+
+.code-pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 10px 10px;
+}
+
+.code-pane h2 {
+  margin: 0 0 6px;
+  font-size: 13px;
+}
+
+.code-pane h2 span {
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 12px;
+}
+
+.code {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  overflow: auto;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text);
+  tab-size: 2;
+}
+
+.code .k {
+  color: #c792ea;
+  font-weight: 600;
+}
+
+.code .c {
+  color: #7f95a8;
+  font-style: italic;
+}
+
+.code .s {
+  color: #c3e88d;
+}
+
+.code .n {
+  color: #f78c6c;
+}
+
+/* ── Smaller screens: one column, the game above the blocks ───────── */
+
+@media (max-width: 900px) {
+  .blocks-app {
+    display: flex;
+    flex-direction: column;
+    height: auto;
+    min-height: 100vh;
+    padding: 8px;
+  }
+
+  .topbar {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  /* The column's panels join the page's own column, game first. */
+  .run-col {
+    display: contents;
+  }
+
+  .lesson {
+    order: 1;
+  }
+
+  .screen-pane {
+    order: 2;
+  }
+
+  .workspace {
+    order: 3;
+  }
+
+  .code-pane {
+    order: 4;
+    flex: none;
+  }
+
+  .workspace .blocklyToolboxCategoryLabel {
+    font-size: 12px;
+  }
+
+  .workspace .blocklyToolboxCategory {
+    margin: 2px 3px;
+  }
+
+  .screen-pane .screen {
+    width: 100%;
+    max-width: 480px;
+    align-self: center;
+  }
+
+  .workspace {
+    height: 70vh;
+    min-height: 360px;
+    flex: none;
+  }
+
+  .code-pane {
+    height: 50vh;
+    min-height: 260px;
+  }
+}

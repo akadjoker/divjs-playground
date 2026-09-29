@@ -7,6 +7,7 @@
 //    persist, share links round-trip, run/stop stays clean, keys typed in
 //    the editor don't reach the game, project files, export.
 // 3. Online play (two tabs, hidden tabs, WebRTC) and sound.
+// 4. DivJS Blocks: the block editor and its lessons.
 //
 // A small static server over the repository root is started on a free
 // port, so nothing else needs to be running.
@@ -791,6 +792,240 @@ try
     const tutor = await focusAfterTab('tutor2');
     assert(ghosts === 'game', `in Ghost Squad Tab should stay on the game, focus went to ${ghosts}`);
     assert(tutor !== 'game', 'in a program that does not use Tab, Tab should move the focus on');
+  });
+
+  // ── 4. DivJS Blocks ───────────────────────────────────────────────────
+  // The block editor: it loads cleanly, every lesson's solution makes code
+  // that compiles and runs, the keys reach the game, the work is kept per
+  // lesson, and "Open in the playground" carries the same code over.
+  const { LESSONS } = await import('../blocks/lessons.js');
+
+  // Like watch(), but console warnings count too: Blockly reports
+  // problems with blocks and fields as warnings.
+  const openBlocks = async (context = null, viewport = { width: 1280, height: 800 }) =>
+  {
+    const page = await (context || browser).newPage({ viewport });
+    const problems = watch(page);
+    page.on('console', (m) =>
+    {
+      if (m.type() === 'warning')
+      {
+        problems.push(`console warning: ${m.text()}`);
+      }
+    });
+    await page.goto(`${BASE}/blocks/`);
+    await page.waitForFunction(() => window.divBlocks, null, { timeout: 15000 });
+    await page.waitForTimeout(300);
+    return { page, problems };
+  };
+
+  // VM ticks in `ms` milliseconds of the running game.
+  const countTicks = (page, ms) => page.evaluate(async (wait) =>
+  {
+    const vm = window.divBlocks.getState().vm;
+    let n = 0;
+    const tick = vm.tick.bind(vm);
+    vm.tick = () => { n += 1; return tick(); };
+    await new Promise((r) => setTimeout(r, wait));
+    vm.tick = tick;
+    return n;
+  }, ms);
+
+  await check('blocks: the page loads with its first lesson', async () =>
+  {
+    const { page, problems } = await openBlocks();
+    const blocks = await page.evaluate(() => window.divBlocks.workspace().getAllBlocks(false).length);
+    const code = await page.textContent('#code');
+    const title = await page.textContent('#lessonTitle');
+    const lessons = await page.locator('#lessonNav button').count();
+    const categories = await page.locator('.blocklyToolboxCategory').count();
+    await page.close();
+    assert(problems.length === 0, problems.join('\n'));
+    assert(blocks >= 2, `${blocks} blocks on the first lesson`);
+    assert(code.startsWith('// Made with DivJS Blocks') && code.includes('PROGRAM my_game;'), `code: ${code.slice(0, 120)}`);
+    assert(title === `1. ${LESSONS[0].title}`, `title "${title}"`);
+    assert(lessons === LESSONS.length, `${lessons} lesson buttons`);
+    assert(categories === 8, `${categories} toolbox categories`);
+  });
+
+  for (let i = 0; i < LESSONS.length; i++)
+  {
+    const lesson = LESSONS[i];
+    await check(`blocks: lesson ${i + 1} (${lesson.id}) solution compiles and runs`, async () =>
+    {
+      const { page, problems } = await openBlocks();
+      await page.click(`#lessonNav button[data-index="${i}"]`);
+      await page.click('#solutionBtn');
+      await page.waitForTimeout(200);
+      const code = await page.evaluate(() => window.divBlocks.getCode());
+      const shown = await page.textContent('#code');
+      const compiled = await page.evaluate(async (source) =>
+      {
+        const { compile } = await import('/engine/divjs.js');
+        try
+        {
+          compile(source);
+          return 'ok';
+        }
+        catch (err)
+        {
+          return `${err.name}: ${err.message}`;
+        }
+      }, code);
+      const warnings = await page.evaluate(() => window.divBlocks.workspace().getAllBlocks(false)
+        .filter((b) => b.getIcon && b.getIcon('warning')).length);
+      await page.click('#runBtn');
+      await page.waitForTimeout(800);
+      const ticks = await countTicks(page, 1000);
+      const status = await page.textContent('#status');
+      const consoleText = await page.textContent('#console');
+      const size = await page.$eval('#game', (c) => [c.width, c.height]);
+      const colours = await canvasColours(page, '#game');
+      await page.close();
+      assert(problems.length === 0, problems.join('\n'));
+      assert(shown === code, 'the code shown is not the generated code');
+      assert(compiled === 'ok', compiled);
+      assert(warnings === 0, `${warnings} blocks with a warning`);
+      assert(status === 'Running', `status "${status}"`);
+      assert(consoleText === '', `console: ${consoleText}`);
+      assert(ticks >= 30 && ticks <= 75, `${ticks} VM ticks in one second`);
+      assert(size[0] === 320 && size[1] === 240, `canvas ${size.join('x')}`);
+      assert(colours > 1, 'the canvas is blank');
+    });
+  }
+
+  await check('blocks: lesson 2 - the Right arrow moves the player', async () =>
+  {
+    const { page, problems } = await openBlocks();
+    await page.click('#lessonNav button[data-index="1"]');
+    await page.click('#solutionBtn');
+    await page.click('#runBtn');
+    await page.waitForTimeout(500);
+    // The only process with a graphic is the player.
+    const playerX = () => page.evaluate(() =>
+    {
+      const vm = window.divBlocks.getState().vm;
+      const sprites = vm.processManager.getAll().filter((p) => !p.isMouse && !p.dead && p.graph > 0);
+      return sprites.length === 1 ? sprites[0].x : null;
+    });
+    const before = await playerX();
+    await page.click('#game');
+    await page.keyboard.down('ArrowRight');
+    await page.waitForTimeout(500);
+    await page.keyboard.up('ArrowRight');
+    await page.waitForTimeout(100);
+    const after = await playerX();
+    await page.close();
+    assert(problems.length === 0, problems.join('\n'));
+    assert(before === 160, `the player should start at x 160, got ${before}`);
+    assert(after > before + 30, `holding Right for half a second moved the player from ${before} to ${after}`);
+  });
+
+  await check('blocks: lesson 3 - touching the coin scores and moves it', async () =>
+  {
+    const { page, problems } = await openBlocks();
+    await page.click('#lessonNav button[data-index="2"]');
+    await page.click('#solutionBtn');
+    const code = await page.evaluate(() => window.divBlocks.getCode());
+    await page.click('#runBtn');
+    await page.waitForTimeout(500);
+    // Put the player on the coin; score is the program's first GLOBAL.
+    const coinBefore = await page.evaluate(() =>
+    {
+      const vm = window.divBlocks.getState().vm;
+      const all = vm.processManager.getAll();
+      const player = all.find((p) => p.name === 'player');
+      const coin = all.find((p) => p.name === 'coin');
+      player.x = player.locals[0] = coin.x;
+      player.y = player.locals[1] = coin.y;
+      return [coin.x, coin.y];
+    });
+    await page.waitForTimeout(300);
+    const after = await page.evaluate(() =>
+    {
+      const vm = window.divBlocks.getState().vm;
+      const coin = vm.processManager.getAll().find((p) => p.name === 'coin');
+      return { score: vm.globals.get(0), coin: [coin.x, coin.y] };
+    });
+    const consoleText = await page.textContent('#console');
+    await page.close();
+    assert(problems.length === 0, problems.join('\n'));
+    assert(/GLOBAL\n {2}score = 0;/.test(code), 'score should be the first GLOBAL');
+    assert(after.score >= 1, `the score is ${after.score} after touching the coin`);
+    assert(after.coin.join() !== coinBefore.join(), 'the coin should have moved somewhere else');
+    assert(consoleText === '', `console: ${consoleText}`);
+  });
+
+  await check('blocks: the blocks are kept per lesson across reloads', async () =>
+  {
+    const context = await browser.newContext();
+    const { page, problems } = await openBlocks(context);
+    await page.click('#lessonNav button[data-index="2"]');
+    await page.click('#solutionBtn');
+    await page.waitForTimeout(600);
+    const solved = await page.evaluate(() => window.divBlocks.getCode());
+    await page.click('#lessonNav button[data-index="0"]');
+    const first = await page.evaluate(() => window.divBlocks.getCode());
+    await page.click('#lessonNav button[data-index="2"]');
+    const back = await page.evaluate(() => window.divBlocks.getCode());
+    await page.reload();
+    await page.waitForFunction(() => window.divBlocks);
+    const lessonAfterReload = await page.evaluate(() => window.divBlocks.getLesson());
+    const afterReload = await page.evaluate(() => window.divBlocks.getCode());
+    await context.close();
+    assert(problems.length === 0, problems.join('\n'));
+    assert(first !== solved, 'lesson 1 should have its own blocks');
+    assert(back === solved, 'going back to lesson 3 should bring its blocks back');
+    assert(lessonAfterReload === LESSONS[2].id, `after a reload the lesson is ${lessonAfterReload}`);
+    assert(afterReload === solved, 'the blocks of lesson 3 were not restored after a reload');
+  });
+
+  await check('blocks: "Open in the playground" opens the same code there', async () =>
+  {
+    const context = await browser.newContext();
+    const { page, problems } = await openBlocks(context);
+    await page.click('#lessonNav button[data-index="3"]');
+    await page.click('#solutionBtn');
+    await page.waitForTimeout(300);
+    const code = await page.evaluate(() => window.divBlocks.getCode());
+    const href = await page.$eval('#openLink', (a) => a.href);
+    await page.close();
+    assert(problems.length === 0, problems.join('\n'));
+    assert(href.startsWith(`${BASE}/playground/#p=new&code=`), `link ${href}`);
+    const { page: pg, problems: pgProblems } = await openPlayground(href.slice(href.indexOf('#')), context);
+    await pg.waitForTimeout(800);
+    const opened = await pg.evaluate(async () =>
+    {
+      const { EditorView } = await import('/playground/vendor/codemirror.js');
+      return EditorView.findFromDOM(document.querySelector('.cm-editor')).state.doc.toString();
+    });
+    const status = await pg.textContent('#status');
+    const size = await pg.$eval('#game', (c) => [c.width, c.height]);
+    const blocksLink = await pg.$eval('a.link-btn.blocks', (a) => a.getAttribute('href'));
+    await context.close();
+    assert(pgProblems.length === 0, pgProblems.join('\n'));
+    assert(opened === code, 'the playground opened different code');
+    assert(status === 'Running', `playground status "${status}"`);
+    assert(size[0] === 320 && size[1] === 240, `playground canvas ${size.join('x')}`);
+    assert(blocksLink === '../blocks/', `the playground's Blocks link is ${blocksLink}`);
+  });
+
+  await check('blocks: phone width stacks the page without sideways scrolling', async () =>
+  {
+    const { page, problems } = await openBlocks(null, { width: 390, height: 844 });
+    const layout = await page.evaluate(() =>
+    {
+      const top = (id) => document.getElementById(id).getBoundingClientRect().top;
+      return {
+        scrollWidth: document.documentElement.scrollWidth,
+        order: [top('lessonTitle'), top('screen'), top('workspace'), top('code')]
+      };
+    });
+    await page.close();
+    assert(problems.length === 0, problems.join('\n'));
+    assert(layout.scrollWidth <= 390, `the page is ${layout.scrollWidth} px wide`);
+    const [lessonTop, screenTop, workTop, codeTop] = layout.order;
+    assert(lessonTop < screenTop && screenTop < workTop && workTop < codeTop, `order: ${layout.order.join(', ')}`);
   });
 }
 finally

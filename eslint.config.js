@@ -2,8 +2,8 @@
 // opening braces always on their own line (Allman), single-line blocks
 // left alone so short guards like `if (x) return;` aren't forced to wrap.
 export default [
-  // Generated bundle (npm run build:vendor), not project code.
-  { ignores: ['playground/vendor/**', 'engine/**', 'dist/**'] },
+  // Generated bundles (npm run build:vendor, build:blockly), not project code.
+  { ignores: ['playground/vendor/**', 'blocks/vendor/**', 'engine/**', 'dist/**'] },
   {
     files: ['**/*.js', '**/*.mjs'],
     rules: {

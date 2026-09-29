@@ -122,6 +122,11 @@ canvas:focus-visible {
   border-color: var(--muted);
 }
 
+/* The block editor for beginners (blocks/). */
+.link-btn.blocks {
+  border-color: var(--accent);
+}
+
 .link-btn.coffee {
   background: #ffdd00;
   border-color: #ffdd00;
