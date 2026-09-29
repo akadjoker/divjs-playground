@@ -264,6 +264,24 @@ BEGIN
   RETURN (lo + hi) * 0.5;
 END
 
+// Ground angle of the surface at the contact point (px, py), felt all
+// round it: the free directions average to the surface normal. -1 when
+// the point is a corner (mostly free) or buried (mostly solid).
+FUNCTION surf_angle(px, py);
+PRIVATE k, a, sx, sy, nfree;
+BEGIN
+  sx = 0; sy = 0; nfree = 0;
+  FOR k = 0 TO 15
+    a = k * 22500;
+    IF (NOT solid(px + cos(a) * 3, py - sin(a) * 3))
+      sx += cos(a); sy += sin(a);
+      nfree++;
+    END
+  END
+  IF (nfree < 6 OR nfree > 10) RETURN -1; END
+  RETURN norm_ang(atan2(sy, sx) - 90000);
+END
+
 // =====================================================================
 // Level builder: the height map is drawn with segments
 // =====================================================================
@@ -1414,8 +1432,8 @@ BEGIN
   x = x0; y = top;
   FRAME;
   // the ground, a column pair at a time, over two frames
-  FOR k = 0 TO 1
-    FOR i = k * 128 TO k * 128 + 127
+  FOR k = 0 TO 3
+    FOR i = k * 64 TO k * 64 + 63
       paint_column(g, i * 2, x0 + i * 2 + 1, top, hgt);
     END
     FRAME;
@@ -1430,7 +1448,9 @@ BEGIN
   FOR j = 0 TO nloops - 1
     IF (lcx[j] + ROUT > x0 AND lcx[j] - ROUT < x0 + CHW)
       paint_ring(g, lcx[j] - x0, lcy[j] - top, RIN, ROUT, zcol(6, 0), zcol(6, 1), zcol(6, 2));
+      FRAME;
       paint_ring(g, lcx[j] - x0, lcy[j] - top, RIN + 16, ROUT, zcol(8, 0), zcol(8, 1), zcol(8, 2));
+      FRAME;
       paint_ring(g, lcx[j] - x0, lcy[j] - top, RIN, RIN + 4, zcol(7, 0), zcol(7, 1), zcol(7, 2));
       FOR i = 0 TO 23
         dx = i * 15000;
@@ -1585,7 +1605,9 @@ BEGIN
   IF (da < 50 AND db < 50 AND abs(da - db) < 24)
     ga = norm_ang(atan2(-((qy + dy * db) - (ay + dy * da)), (qx + dx * db) - (ax + dx * da)));
   ELSE
-    ga = m * 90000;
+    // one foot over an edge: feel the surface under the other one
+    IF (da <= db) d = surf_angle(ax + dx * da, ay + dy * da); ELSE d = surf_angle(qx + dx * db, qy + dy * db); END
+    IF (d >= 0) ga = d; ELSE ga = m * 90000; END
   END
   hmode = mode_of(ga);
   RETURN 1;
@@ -1822,8 +1844,12 @@ BEGIN
     d = min(da, db);
     IF (d < 0.5 AND d > -(ysp + 14))
       hy += d;
-      ang = 0;
-      IF (da < 50 AND db < 50 AND abs(da - db) < 24) ang = norm_ang(atan2(da - db, 2 * wr)); END
+      IF (da < 50 AND db < 50 AND abs(da - db) < 24)
+        ang = norm_ang(atan2(da - db, 2 * wr));
+      ELSE
+        IF (da <= db) ang = surf_angle(hx - wr, hy + hr); ELSE ang = surf_angle(hx + wr, hy + hr); END
+        IF (ang < 0) ang = 0; END
+      END
       land(ang);
     END
   END
@@ -2777,6 +2803,11 @@ BEGIN
     g_kip[1 + i] = make_kip(1, i);
     g_kip[5 + i] = make_kip(2, i);
   END
+  RETURN 0;
+END
+
+FUNCTION make_kip_frames2();
+BEGIN
   g_kip[9] = make_kip(3, 0);
   g_kip[10] = make_kip(4, 0);
   g_kip[11] = make_kip(5, 0);
@@ -2909,6 +2940,8 @@ BEGIN
   screen_color('#000000');
   init_colours();
   make_kip_frames();
+  FRAME;
+  make_kip_frames2();
   FRAME;
   make_objects();
   FRAME;
