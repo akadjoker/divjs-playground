@@ -2078,8 +2078,12 @@ BEGIN
         spr_ang = 0;
       ELSE
         IF (onground)
-          spr_ang = ga;
-          IF (abs(ang_diff(0, ga)) < 12000) spr_ang = 0; END
+          // follows the ground, eased so the sensor mode changes do not jerk it
+          IF (abs(ang_diff(0, ga)) < 12000)
+            spr_ang += ang_diff(spr_ang, 0) * 0.5;
+          ELSE
+            spr_ang += ang_diff(spr_ang, ga) * 0.5;
+          END
         ELSE
           spr_ang += ang_diff(spr_ang, 0) * 0.12;
         END
@@ -2592,7 +2596,7 @@ PROCESS endscreen();
 PRIVATE my_gen;
 BEGIN
   my_gen = gen;
-  z = -95;
+  z = -150;
   x = 240; y = 135;
   graph = g_end;
   LOOP
@@ -2682,14 +2686,14 @@ BEGIN
   IF (g_end) free_graphic(g_end); END
   g_end = new_graphic(SW, SH);
   IF (win)
-    gfx_fill_rgba(g_end, 10, 30, 60, 85);
+    gfx_fill_rgba(g_end, 10, 30, 60, 94);
     otext(g_end, 80, 30, 'BARON RUST FLIES OFF!', 255, 230, 90, 22);
     otext(g_end, 60, 76, 'The sparks are free again and the islands', 230, 250, 255, 13);
     otext(g_end, 60, 94, 'light up. Kip curls up for a well-earned nap.', 230, 250, 255, 13);
     otext(g_end, 150, 136, 'FINAL SCORE ' + score, 255, 255, 255, 16);
     otext(g_end, 150, 220, 'PRESS ENTER', 255, 230, 90, 16);
   ELSE
-    gfx_fill_rgba(g_end, 20, 10, 20, 85);
+    gfx_fill_rgba(g_end, 20, 10, 20, 94);
     otext(g_end, 150, 80, 'GAME OVER', 255, 90, 70, 34);
     otext(g_end, 160, 136, 'SCORE ' + score, 255, 255, 255, 16);
     otext(g_end, 150, 200, 'PRESS ENTER', 255, 230, 90, 16);
@@ -3040,6 +3044,7 @@ BEGIN
           loader(1, 1);
         ELSE
           gstate = ST_WIN; st_t = 0;
+          signal(TYPE results, s_kill);
           make_end(1);
           endscreen();
           music(mus_win);

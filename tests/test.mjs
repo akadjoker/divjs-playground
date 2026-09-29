@@ -156,6 +156,44 @@ for (const name of readdirSync(programsDir)) {
 	}
 }
 
+// Sparkroll: the momentum platformer compiles with the processes and
+// functions its physics and levels are built from.
+{
+	const problems = [];
+	try
+	{
+		const { bytecode } = compileSource(readFileSync(join(programsDir, 'sparkroll.div'), 'utf-8'));
+		for (const name of ['kip', 'chunk', 'spark', 'lost_spark', 'walker', 'flyer', 'spring', 'booster', 'goal', 'boss'])
+		{
+			if (!bytecode.processTable.has(name))
+			{
+				problems.push(`no PROCESS ${name}`);
+			}
+		}
+		for (const name of ['solid', 'probe', 'ground_follow', 'kip_ground', 'kip_air', 'loop_layers', 'coast_a', 'works_b'])
+		{
+			if (!bytecode.functionTable.has(name))
+			{
+				problems.push(`no FUNCTION ${name}`);
+			}
+		}
+	}
+	catch (err)
+	{
+		problems.push(err?.message || String(err));
+	}
+	if (problems.length > 0)
+	{
+		console.log(`FAIL  ${'sparkroll (compile)'.padEnd(35)} ${problems.join(', ')}`);
+		fail += 1;
+	}
+	else
+	{
+		console.log(`OK    ${'sparkroll (compile)'.padEnd(35)} processes and physics functions present`);
+		ok += 1;
+	}
+}
+
 // Export packs the engine bundle as a single module (the packer's own
 // tests live with the library).
 {
