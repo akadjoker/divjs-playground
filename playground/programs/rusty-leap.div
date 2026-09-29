@@ -1407,7 +1407,7 @@ BEGIN
   gfx_fill_rgba(g_hud, 16, 10, 34, 62);
   gfx_rect(g_hud, 0, 19, 400, 1, 255, 210, 120);
   g_logo_bg = new_graphic(304, 146);
-  gfx_fill_rgba(g_logo_bg, 20, 12, 40, 52);
+  gfx_fill_rgba(g_logo_bg, 20, 12, 40, 78);
   gfx_rect_outline(g_logo_bg, 0, 0, 304, 146, 255, 210, 120);
   RETURN 0;
 END
@@ -2201,7 +2201,7 @@ BEGIN
         IF (dead_t == 30) dvy = -5.5; END
         IF (dead_t > 30)
           pfy += dvy;
-          dvy += 0.25;
+          dvy = min(dvy + 0.25, 7);
         END
         x = int(pfx); y = int(pfy) - 8;
       END
@@ -2399,7 +2399,7 @@ END
 
 // kind 0: SUN BERRY (rolls away), 1: ACORN SLING (stays and bobs)
 PROCESS item(kind, x, y);
-PRIVATE t = 0, fx, fy, vx = 1.0, vy = 0.0;
+PRIVATE t = 0, fx, fy, by, vx = 1.0, vy = 0.0;
 BEGIN
   ctype = c_scroll; cnumber = c_1; z = 10;
   IF (kind == 0) graph = g_berry; ELSE graph = g_acorn; END
@@ -2411,6 +2411,7 @@ BEGIN
     FRAME;
   END
   z = -1;
+  by = fy;
   IF (pfx > fx) vx = -1.0; END
   LOOP
     IF (NOT paused AND NOT freeze)
@@ -2421,7 +2422,7 @@ BEGIN
         fx = fw_x; fy = fw_y; vx = fw_vx; vy = fw_vy;
         IF (bump_t > 0 AND iabs(fx - bump_x) < 14 AND iabs(fy + 8 - bump_y) < 4) vy = -4.5; END
       ELSE
-        fy = y + sin(t * 6000) * 0.4;
+        fy = by + sin(t * 5000) * 2;
       END
       IF (fy > 270) BREAK; END
     END

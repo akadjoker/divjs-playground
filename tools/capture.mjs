@@ -87,6 +87,13 @@ const SHOTS = {
     play: [hold('Space', 1000), ['wait', 1200], ['press', 'z'], ['press', 'm'], ['wait', 600], ['press', 'z'], ['wait', 400], ['press', 'm'],
       ['wait', 500], ['press', 'z'], ['press', 'm']]
   },
+  'rusty-leap': {
+    seconds: 7,
+    setup: [['wait', 5500], ['press', 'Enter'], ['wait', 2900]],
+    play: [['down', 'ArrowRight'], ['wait', 700], hold('z', 260), ['wait', 450], hold('z', 160), ['wait', 500], hold('z', 300),
+      ['wait', 250], hold('z', 300), ['wait', 600], ['down', 'x'], ['wait', 400], hold('z', 330), ['wait', 500], hold('z', 330),
+      ['wait', 500], hold('z', 300), ['up', 'x'], ['up', 'ArrowRight']]
+  },
   'vector-asteroids': {
     seconds: 6,
     setup: [['wait', 1200], ['press', 'Enter'], ['wait', 800]],
