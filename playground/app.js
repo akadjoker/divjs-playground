@@ -542,6 +542,9 @@ function ensureRunner(entry)
     onLog: (line) => logLine(line, line.startsWith('[warn]') ? 'warn' : ''),
     onError: handleError,
     onFrame: handleFrame,
+    // On a phone the touch controls sit in the game panel's bottom
+    // corners (under the game when the phone is upright).
+    touchArea: el.screen,
     // An online game's invitation as a link: this code plus the
     // invitation, so the guest runs exactly the same program.
     netInviteLink: async (code) => `${await buildShareUrl()}&net=${code}`
@@ -607,6 +610,9 @@ function run()
   setStatus('Running', 'running');
   el.stopBtn.disabled = false;
   active.setFiles(filesForRuntime());
+  // The program's on-screen controls (manifest "touch"; the default pad
+  // and buttons for programs without one).
+  active.setTouchLayout(current.touch);
   active.start(currentText());
   if (active.getState().running)
   {
@@ -1047,7 +1053,8 @@ async function exportGame()
       title: current.title,
       width: current.width,
       height: current.height,
-      clearColor: current.clearColor || '#000000'
+      clearColor: current.clearColor || '#000000',
+      touch: current.touch
     });
     const name = `${current.id === NEW_PROGRAM.id ? 'my-game' : current.id}.html`;
     const link = document.createElement('a');

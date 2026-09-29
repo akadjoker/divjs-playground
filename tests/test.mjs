@@ -3,7 +3,7 @@ import { dirname, extname, join, relative } from 'path';
 import { fileURLToPath } from 'url';
 
 // The engine this site runs on: engine/divjs.js (npm run engine).
-const { Lexer, Parser, Compiler, bundleEngineModules, buildPackedHtml } = await import('../engine/divjs.js');
+const { Lexer, Parser, Compiler, bundleEngineModules, buildPackedHtml, BUILTIN_CONSTANTS } = await import('../engine/divjs.js');
 
 const rootDir = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -111,6 +111,41 @@ const programsDir = join(rootDir, 'playground', 'programs');
 const manifest = JSON.parse(readFileSync(join(programsDir, 'manifest.json'), 'utf-8'));
 const categories = new Set((manifest.categories || []).map((c) => c.id));
 const listed = new Set();
+// The keys a "touch" entry may name: the key constants without the "_".
+const keyNames = new Set(Object.keys(BUILTIN_CONSTANTS).filter((k) => k.startsWith('_')).map((k) => k.slice(1)));
+function touchProblems(touch)
+{
+	if (touch === false)
+	{
+		return [];
+	}
+	if (!touch || typeof touch !== 'object')
+	{
+		return ['missing "touch" (the phone controls; false for none)'];
+	}
+	const problems = [];
+	if (!['dpad', 'stick', 'none'].includes(touch.pad))
+	{
+		problems.push(`touch.pad "${touch.pad}"`);
+	}
+	for (const [field, max] of [['buttons', 6], ['menu', 2]])
+	{
+		const items = String(touch[field] ?? '').split(',').filter(Boolean);
+		if (items.length > max)
+		{
+			problems.push(`touch.${field}: more than ${max}`);
+		}
+		for (const item of items)
+		{
+			const [key, label] = item.split(':');
+			if (!keyNames.has(key) || !label)
+			{
+				problems.push(`touch.${field}: "${item}"`);
+			}
+		}
+	}
+	return problems;
+}
 for (const entry of manifest.programs || []) {
 	const problems = [];
 	for (const field of ['id', 'title', 'category', 'file', 'width', 'height']) {
@@ -141,6 +176,7 @@ for (const entry of manifest.programs || []) {
 	} catch {
 		// Missing file: reported above.
 	}
+	problems.push(...touchProblems(entry.touch));
 	const label = `manifest: ${entry.id}`;
 	if (problems.length > 0) {
 		console.log(`FAIL  ${label.padEnd(35)} ${problems.join(', ')}`);
