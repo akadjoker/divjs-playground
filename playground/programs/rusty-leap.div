@@ -611,6 +611,7 @@ pal[239] =
   pskid = 0; pstretch = 0; pland = 0; auto_walk = 0;
   fw_x = 0.0; fw_y = 0.0; fw_vx = 0.0; fw_vy = 0.0; fw_g = 0; fw_turn = 0;   // foe_walk
   scr = 0;                   // screen shown: 0 title, 1 stage card, 2 playing, 3 game over, 4 ending
+  stomp_fc = -1;
   hiscore = 0; check_ty = 12; g_portal = 0; txt_a = 0; fbuf = ""; load_n = 0;
 
 LOCAL
@@ -649,13 +650,14 @@ BEGIN
 END
 
 // 1 when feet at (px, py) land on something: solid, or a plank whose top
-// the feet were above (old_y) before this move
+// the feet were above (old_y, with a few pixels of grace for feet that
+// reach the plank's end from the side) before this move
 FUNCTION land_px(px, py, old_y);
 PRIVATE t;
 BEGIN
   t = tile_at(tcell(px), tcell(py));
   IF (tsolid[t]) RETURN 1; END
-  IF (t == T_PLANK AND old_y <= tcell(py) * 16 + 0.01) RETURN 1; END
+  IF (t == T_PLANK AND old_y <= tcell(py) * 16 + 5) RETURN 1; END
   RETURN 0;
 END
 
@@ -930,10 +932,15 @@ END
 FUNCTION draw_plank(g, ox, oy, tx);
 BEGIN
   IF (theme == 2)
-    gfx_circle(g, ox + 4, oy + 4, 4, 250, 250, 255);
-    gfx_circle(g, ox + 11, oy + 4, 4, 250, 250, 255);
-    gfx_rect(g, ox, oy + 5, 16, 3, 214, 214, 244);
-    gfx_rect(g, ox + 2, oy + 2, 3, 1, 255, 255, 255);
+    // a cloud step: outlined so it stands out from the clouds behind
+    gfx_rect(g, ox, oy + 2, 16, 7, 96, 84, 170);
+    gfx_circle(g, ox + 4, oy + 4, 4, 96, 84, 170);
+    gfx_circle(g, ox + 11, oy + 4, 4, 96, 84, 170);
+    gfx_circle(g, ox + 4, oy + 4, 3, 255, 255, 255);
+    gfx_circle(g, ox + 11, oy + 4, 3, 255, 255, 255);
+    gfx_rect(g, ox, oy + 4, 16, 3, 255, 255, 255);
+    gfx_rect(g, ox, oy + 7, 16, 1, 200, 196, 240);
+    gfx_pixel(g, ox + 8, oy + 5, 255, 210, 90);
     RETURN 0;
   END
   IF (theme == 1)
@@ -1010,7 +1017,7 @@ BEGIN
   END
   IF (theme == 1)
     IF (h % 7 == 0)
-      // glowing mushroom
+      // glowing cave fungus
       gfx_rect(g, ox + 7, oy + 11, 2, 5, 220, 210, 190);
       gfx_circle(g, ox + 8, oy + 10, 4, 80, 230, 210);
       gfx_rect(g, ox + 4, oy + 11, 9, 2, 16, 12, 34);
@@ -1227,10 +1234,15 @@ BEGIN
   // moving platform, 48 x 8
   g_mp[th] = new_graphic(48, 8);
   IF (th == 2)
+    gfx_rect(g_mp[th], 0, 3, 48, 5, 96, 84, 170);
     FOR i = 0 TO 5
-      gfx_circle(g_mp[th], 4 + i * 8, 4, 4, 250, 250, 255);
+      gfx_circle(g_mp[th], 4 + i * 8, 4, 4, 96, 84, 170);
     END
-    gfx_rect(g_mp[th], 2, 5, 44, 3, 206, 206, 240);
+    FOR i = 0 TO 5
+      gfx_circle(g_mp[th], 4 + i * 8, 4, 3, 255, 255, 255);
+    END
+    gfx_rect(g_mp[th], 1, 4, 46, 3, 255, 255, 255);
+    gfx_rect(g_mp[th], 1, 6, 46, 1, 200, 196, 240);
   ELSE
     rect_c(g_mp[th], 0, 0, 48, 8, C_PL_D);
     rect_c(g_mp[th], 1, 0, 46, 6, C_PL);
@@ -1778,8 +1790,8 @@ BEGIN
   ent(E_DIL, 92, 12);
   gems(95, 10, 3);
   // a lift over the chasm 101-110
-  e_p[ent(E_MPV, 102, 11)] = 64;
-  e_p[ent(E_MPV, 107, 9)] = 48;
+  e_p[ent(E_MPV, 102, 12)] = 64;
+  e_p[ent(E_MPV, 107, 10)] = 48;
   gnd(111, 150);
   ent(E_BEE, 115, 8);
   fill(120, 13, 125, 13, T_THORN);
@@ -2095,7 +2107,7 @@ BEGIN
       pvy = 0; pground = 1;
     ELSE
       FOR i = 0 TO nmp - 1
-        IF (pfx + phw > mp_x[i] AND pfx - phw < mp_x[i] + mp_w[i] AND pfy <= mp_y[i] + 1 AND ny >= mp_y[i])
+        IF (pfx + phw > mp_x[i] AND pfx - phw < mp_x[i] + mp_w[i] AND pfy <= mp_y[i] + 5 AND ny >= mp_y[i])
           ny = mp_y[i]; pvy = 0; pground = 1; pon = i;
         END
       END
@@ -2156,6 +2168,8 @@ BEGIN
   IF (iabs(pfx - ex) >= phw + ew) RETURN 0; END
   IF (pfy <= ey - eh OR pfy - ph >= ey + eh) RETURN 0; END
   IF (pvy > 0 AND pfy - pvy <= ey - eh + 8) RETURN 1; END
+  // a second enemy under Rusty in the frame of a stomp is stomped too
+  IF (stomp_fc == fc AND pfy <= ey - eh + 10) RETURN 1; END
   // a side touch has to overlap a little more: forgiving near misses
   IF (iabs(pfx - ex) >= phw + ew - 3 OR pfy <= ey - eh + 3) RETURN 0; END
   RETURN 2;
@@ -2163,6 +2177,7 @@ END
 
 FUNCTION stomp_bounce();
 BEGIN
+  stomp_fc = fc;
   IF (k_jump()) pvy = -6.2; pjump = 1; ELSE pvy = -4.2; pjump = 0; END
   pground = 0;
   RETURN 0;
@@ -2934,6 +2949,13 @@ BEGIN
     f_on[i] = 0; f_hit[i] = 0;
   END
   nmp = 0; nacorn = 0; bump_t = 0;
+  // Rusty's place first: lanterns and glimmers look at it as they start
+  IF (cp > 0)
+    pfx = cp * 16 + 8; pfy = check_ty * 16 + 16;
+  ELSE
+    pfx = start_tx * 16 + 8; pfy = start_ty * 16 + 16;
+  END
+  pdead = 0;
   FOR i = 0 TO ne - 1
     k = e_k[i];
     px = e_x[i] * 16 + 8; py = e_y[i] * 16 + 8;
