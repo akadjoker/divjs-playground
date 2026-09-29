@@ -14,7 +14,7 @@
     "itch": "node tools/itch.mjs"
   },
   "dependencies": {
-    "divjs": "github:akadjoker/divjs#caa23f31085ae72d3a3477362679d0ff3770401a"
+    "divjs": "github:akadjoker/divjs#9a9dd250ea27485fb9bfcb2f13304e94518c0d2b"
   },
   "devDependencies": {
     "@codemirror/autocomplete": "^6.20.3",
