@@ -122,10 +122,11 @@ export function rectOf(t, selector)
 export const center = (r) => ({ x: r.x + r.w / 2, y: r.y + r.h / 2 });
 
 // A block's rect: a spec (see __find), or with `flyout` the first block
-// of that type in the open flyout.
-export function blockRect(t, spec, { flyout = false } = {})
+// of that type in the open flyout. With `own`, the block alone, without
+// the blocks inside and under it.
+export function blockRect(t, spec, { flyout = false, own = false } = {})
 {
-  return t.page.evaluate(([spec, flyout]) =>
+  return t.page.evaluate(([spec, flyout, own]) =>
   {
     let block = null;
     if (flyout)
@@ -136,8 +137,12 @@ export function blockRect(t, spec, { flyout = false } = {})
     {
       block = window.__find(spec);
     }
+    if (block && own)
+    {
+      return window.__rect(block.pathObject.svgPath);
+    }
     return block ? window.__rect(block.getSvgRoot()) : null;
-  }, [spec, flyout]);
+  }, [spec, flyout, own]);
 }
 
 // The rect of several blocks together.
@@ -547,9 +552,9 @@ export async function play(t, keys, { at = null, click = true } = {})
 // Scrolls the workspace (the mouse wheel over an empty part of it) until
 // the block `spec` has `margin` page pixels below it in view (and `top`
 // above it).
-export function revealBlock(t, spec, { margin = 150, top = 20 } = {})
+export function revealBlock(t, spec, { margin = 150, top = 20, own = false } = {})
 {
-  return scrollWorkspace(t, () => blockRect(t, spec), { below: margin, above: top });
+  return scrollWorkspace(t, () => blockRect(t, spec, { own }), { below: margin, above: top });
 }
 
 // Scrolls the workspace until the rect rect() returns has `above` page

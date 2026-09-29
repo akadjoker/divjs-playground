@@ -1,7 +1,7 @@
 // Tutorial video: DivJS Blocks, lesson 5 "Free play".
 // See blocks-1.mjs for how a lesson script works.
 
-import { blocksUrl, openLesson, rectOf, blockRect, center, revealBlock, play, allowTooltips } from '../blocks.mjs';
+import { blocksUrl, openLesson, rectOf, blockRect, center, revealBlock, play, allowTooltips, childId } from '../blocks.mjs';
 
 const SHIP = { type: 'div_sprite', name: 'ship' };
 const SHOT = { type: 'div_sprite', name: 'shot' };
@@ -125,13 +125,14 @@ export default {
       async run(t)
       {
         await allowTooltips(t);
+        // The ship's first block, "look like a triangle": its tooltip.
+        const look = await childId(t, SHIP, 'DO');
+        await revealBlock(t, look, { own: true, margin: 200, top: 60 });
+        const r = await blockRect(t, look, { own: true });
         const ws = await rectOf(t, '#workspace');
-        await revealBlock(t, SHIP, { margin: 40, top: 40 });
-        const r = await blockRect(t, SHIP);
-        t.focus({ x: ws.x, y: r.y - 20, w: ws.w * 0.7, h: 300 });
+        t.focus({ x: ws.x, y: r.y - 40, w: Math.min(ws.w, 700), h: 260 });
         await t.cue('hover', -0.6);
-        // The tooltip of "look like a", on the ship's first block.
-        await t.moveTo({ x: r.x + 60, y: r.y + 62 });
+        await t.moveTo({ x: r.x + 40, y: r.y + r.h * 0.5 });
         await t.lineEnd();
       }
     },
