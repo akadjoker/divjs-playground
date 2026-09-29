@@ -14,7 +14,7 @@
     "xy": "O ecrã do jogo tem {w}320 píxeis de largura e {h}240 de altura. {so}Por isso, x {x}160, y {y}120 é mesmo o meio.",
     "run": "Agora carrega em {click}Executar.",
     "result": "E aí está: {circle}o teu círculo azul-turquesa, no meio do ecrã.",
-    "code": "Aqui está o código. {code}Este é o verdadeiro código DIV que os teus blocos fizeram: {process}o player, com o seu círculo, {create}e a linha que o cria em 160, 120.",
+    "code": "Aqui está o código. {code}Este é o verdadeiro código DIV que os teus blocos fizeram: {process}o player, com o seu círculo, {create}e a linha que o cria em {at}160, 120.",
     "outro": "Muito bem! {next}Na lição dois, vais mover o teu círculo com as setas do teclado."
   }
 }

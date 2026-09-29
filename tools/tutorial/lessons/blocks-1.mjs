@@ -173,6 +173,11 @@ export default {
         t.focus({ x: panel.x, y: create.y - 90, w: panel.w, h: create.h + 180 });
         t.highlight(create);
         await t.moveTo({ x: create.x + create.w + 10, y: create.y + create.h * 0.7 });
+        // Under the numbers as they are said.
+        await t.cue('at', -0.2);
+        const numbers = await codeLineRect(t, '160, 120');
+        await t.moveTo({ x: numbers.x + 20, y: numbers.y + numbers.h * 0.9 }, { seconds: 0.5 });
+        await t.moveTo({ x: numbers.x + 80, y: numbers.y + numbers.h * 0.9 }, { seconds: 1.2 });
         await t.lineEnd();
         t.highlight(null);
       }

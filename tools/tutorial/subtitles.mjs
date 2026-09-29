@@ -25,6 +25,15 @@ function chunks(words)
       cur = [];
     }
   });
+  // A word or two left on their own go with the cue before (two lines).
+  for (let i = out.length - 1; i > 0; i--)
+  {
+    if (len(out[i]) < 14 && !/[.!?]$/.test(out[i - 1][out[i - 1].length - 1].w) && len(out[i - 1]) + len(out[i]) < 84)
+    {
+      out[i - 1] = out[i - 1].concat(out[i]);
+      out.splice(i, 1);
+    }
+  }
   return out;
 }
 

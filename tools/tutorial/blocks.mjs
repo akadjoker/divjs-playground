@@ -122,7 +122,8 @@ export function categoryRect(t, name)
   }, CATEGORIES.indexOf(name));
 }
 
-// The line of the DIV code panel that holds `text`.
+// The line of the DIV code panel that holds `text`: from where the text
+// starts to the end of its line.
 export function codeLineRect(t, text)
 {
   return t.page.evaluate((text) =>
@@ -146,11 +147,15 @@ export function codeLineRect(t, text)
       const [node, start] = nodes.filter(([, s]) => s <= i).pop();
       return [node, i - start];
     };
+    const eol = all.indexOf('\n', at);
     const range = document.createRange();
     range.setStart(...find(at));
-    range.setEnd(...find(at + text.length - 1));
+    range.setEnd(...find((eol < 0 ? all.length : eol) - 1));
     const r = range.getBoundingClientRect();
-    return { x: r.x, y: r.y, w: r.width + 8, h: r.height };
+    // Not past the panel's edge (long lines run on under it).
+    const box = pre.getBoundingClientRect();
+    const right = Math.min(r.right + 10, box.right - 6);
+    return { x: r.x, y: r.y, w: right - r.x, h: r.height };
   }, text);
 }
 

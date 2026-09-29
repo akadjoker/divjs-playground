@@ -224,8 +224,10 @@ export class Director
     const tc = { x: c.to.x + tw / 2, y: c.to.y + tw * 9 / 32 };
     const cx = fc.x + (tc.x - fc.x) * k;
     const cy = fc.y + (tc.y - fc.y) * k;
+    // Two slow motions of different periods: never still at the same time.
     const breath = 1 - 0.011 * (0.5 - 0.5 * Math.cos(2 * Math.PI * t / 7));
-    return this.clampRect({ x: cx - (w * breath) / 2, y: cy - (w * breath * 9 / 16) / 2, w: w * breath });
+    const drift = 0.004 * w * Math.sin(2 * Math.PI * t / 11.3);
+    return this.clampRect({ x: cx + drift - (w * breath) / 2, y: cy - (w * breath * 9 / 16) / 2, w: w * breath });
   }
 
   clampRect(r)

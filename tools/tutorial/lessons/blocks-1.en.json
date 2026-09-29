@@ -15,7 +15,7 @@
     "run": "Now press {click}Run.",
     "result": "And there it is: {circle}your teal circle, in the middle of the screen.",
     "code": {
-      "text": "Over here is the code. {code}This is the real DIV code your blocks made: {process}the player, with its circle, {create}and the line that creates it at 160, 120.",
+      "text": "Over here is the code. {code}This is the real DIV code your blocks made: {process}the player, with its circle, {create}and the line that creates it at {at}160, 120.",
       "say": "Over here is the code. This is the real [DIV](/dˈɪv/) code your blocks made: the player, with its circle, and the line that creates it at 160, 120."
     },
     "outro": "Well done! {next}In lesson two, you'll make your circle move with the arrow keys."
