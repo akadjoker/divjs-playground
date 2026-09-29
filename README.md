@@ -4,6 +4,8 @@ The online home of [DivJS](https://github.com/akadjoker/divjs), the DIV Games
 Studio language in the browser: an editor to write and run DIV programs, the
 DIV tutorials, and over 30 games to play, read and change.
 
+[![Buy me a coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/akadjoker)
+
 **[▶ Open the playground](https://akadjoker.github.io/divjs-playground/)**
 
 <table>
