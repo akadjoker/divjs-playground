@@ -179,6 +179,135 @@ for (const name of readdirSync(programsDir)) {
 	}
 }
 
+// DivJS Blocks (blocks/): every lesson's starting blocks and solution turn
+// into DIV code that compiles, the solutions use every block together, and
+// sprite and variable names become identifiers DIV accepts. Blockly runs
+// headless here; it needs jsdom (a peer dependency of blockly) for the XML
+// it uses when loading shadow blocks.
+{
+	const Blockly = await import('../blocks/vendor/blockly.js');
+	const { JSDOM } = await import('jsdom');
+	Blockly.utils.xml.injectDependencies(new JSDOM('<!DOCTYPE html>').window);
+	const { registerBlocks, BLOCK_TYPES } = await import('../blocks/blocks.js');
+	const { generateDiv, reservedNames } = await import('../blocks/generator.js');
+	const { LESSONS } = await import('../blocks/lessons.js');
+	const { compile } = await import('../engine/divjs.js');
+	registerBlocks();
+
+	const generate = (state) =>
+	{
+		const ws = new Blockly.Workspace();
+		try
+		{
+			Blockly.serialization.workspaces.load(state, ws);
+			const types = new Set(ws.getAllBlocks(false).map((b) => b.type));
+			return { ...generateDiv(ws), types };
+		}
+		finally
+		{
+			ws.dispose();
+		}
+	};
+	const report = (label, problems, detail) =>
+	{
+		if (problems.length > 0)
+		{
+			console.log(`FAIL  ${label.padEnd(35)} ${problems.join('; ')}`);
+			fail += 1;
+		}
+		else
+		{
+			console.log(`OK    ${label.padEnd(35)} ${detail}`);
+			ok += 1;
+		}
+	};
+
+	const used = new Set();
+	for (const lesson of LESSONS)
+	{
+		for (const which of ['start', 'solution'])
+		{
+			const problems = [];
+			let detail = '';
+			try
+			{
+				const { code, warnings, types } = generate(lesson[which]);
+				if (which === 'solution')
+				{
+					types.forEach((t) => used.add(t));
+				}
+				if (warnings.length > 0)
+				{
+					problems.push(`warnings: ${warnings.map((w) => w.text).join(' / ')}`);
+				}
+				if (!code.startsWith('// Made with DivJS Blocks'))
+				{
+					problems.push('no header comment');
+				}
+				const bytecode = compile(code);
+				detail = `${bytecode.instructions.length} instr, ${bytecode.processTable.size} procs`;
+			}
+			catch (err)
+			{
+				problems.push(err?.message || String(err));
+			}
+			report(`blocks: ${lesson.id} ${which}`, problems, detail);
+		}
+	}
+	const unused = BLOCK_TYPES.filter((t) => !used.has(t));
+	report('blocks: solutions use every block', unused.length > 0 ? [`not used: ${unused.join(', ')}`] : [], `${BLOCK_TYPES.length} block types`);
+
+	// Awkward names: keywords, engine names, spaces, accents, digits, case.
+	{
+		const problems = [];
+		const awkward = ['x', 'key', 'Score', 'score', 'my score!', 'élan', '2fast', 'loop', 'text', 'sfx_coin', 'MAIN', 'make_look', ''];
+		const state = {
+			blocks: {
+				languageVersion: 0,
+				blocks: [
+					{ type: 'div_start', x: 0, y: 0, inputs: { DO: { block: { type: 'div_create', fields: { SPRITE: 'if' }, next: { block: { type: 'div_create', fields: { SPRITE: 'nobody' } } } } } } },
+					{ type: 'div_sprite', x: 0, y: 200, fields: { NAME: 'if' } },
+					{ type: 'div_sprite', x: 0, y: 400, fields: { NAME: 'player' }, inputs: { DO: { block: {
+						type: 'div_var_set',
+						fields: { VAR: { id: 'v0' } },
+						inputs: { VALUE: { shadow: { type: 'div_number', fields: { NUM: -3 } } } },
+						next: { block: { type: 'div_var_show', fields: { VAR: { id: 'v2' } } } }
+					} } } },
+					{ type: 'div_sprite', x: 0, y: 600, fields: { NAME: 'player' } }
+				]
+			},
+			variables: awkward.map((name, i) => ({ name: name || 'blank', id: `v${i}` }))
+		};
+		try
+		{
+			const { code, warnings } = generate(state);
+			compile(code);
+			const globals = code.slice(code.indexOf('GLOBAL'), code.indexOf('PROCESS')).match(/^ {2}([a-z_][a-z0-9_]*) = 0;$/gm) || [];
+			const ids = globals.map((line) => line.trim().split(' ')[0]);
+			if (ids.length !== awkward.length || new Set(ids).size !== ids.length)
+			{
+				problems.push(`globals not unique: ${ids.join(', ')}`);
+			}
+			const reserved = reservedNames();
+			const clash = ids.filter((id) => reserved.has(id));
+			if (clash.length > 0)
+			{
+				problems.push(`reserved names used: ${clash.join(', ')}`);
+			}
+			const texts = warnings.map((w) => w.text).join(' / ');
+			if (!/no sprite called "nobody"/.test(texts) || !/already a sprite called "player"/.test(texts))
+			{
+				problems.push(`expected warnings, got: ${texts}`);
+			}
+		}
+		catch (err)
+		{
+			problems.push(err?.message || String(err));
+		}
+		report('blocks: names', problems, 'awkward names compile');
+	}
+}
+
 console.log(`\nSummary: ${ok} ok, ${fail} failed`);
 if (fail > 0) {
 	process.exitCode = 1;

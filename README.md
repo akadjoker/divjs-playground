@@ -38,6 +38,10 @@ DIV tutorials, and over 30 games to play, read and change.
   **Files** takes your own `.fpg`, `.map`, `.fnt` and `.png` files, **Share**
   copies a link with your code, **Export** downloads the game as a single
   `.html` that works offline and can go straight onto itch.io.
+- **DivJS Blocks** (`blocks/`) - a Scratch-like block editor for beginners,
+  with five short lessons. The blocks turn into real DIV code, shown as you
+  build, that runs in the same engine and opens in the playground. Blockly is
+  bundled into `blocks/vendor/` by `npm run build:blockly`.
 - **The games and tutorials** (`playground/programs/`, listed in
   `manifest.json`) - every one of them is plain DIV source.
 - **Demos and examples** (`demos/`, `examples/`) - pages that run a program
