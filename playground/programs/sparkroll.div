@@ -420,7 +420,7 @@ BEGIN
   RETURN 0;
 END
 
-// A ring of sparks round a point
+// A circle of sparks round a point
 FUNCTION sparks_ring(cx, cy, r, n, a0, a1);
 PRIVATE i, a;
 BEGIN
