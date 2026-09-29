@@ -1,0 +1,535 @@
+PROGRAM vector_asteroids;
+
+// Asteroids drawn in vector style. Nothing is loaded: every rock gets its
+// own jagged outline, drawn with gfx_line into a new_graphic of its own, so
+// the engine rotates it for us through ANGLE. The collision circle of each
+// rock is taken from the same random radii that shaped its outline.
+// Sound is made by the engine too (sfx, sfx_tone, song_*): the classic
+// two-note heartbeat that quickens as a wave goes on, a thrust rumble,
+// shots, rock explosions by size, hyperspace, the extra ship chime, and
+// chiptunes on the title and (quietly) in play. M switches the music.
+
+GLOBAL
+  scr_w = 640;
+  scr_h = 480;
+
+  g_ship   = 0;     // ship outline
+  g_thrust1 = 0;    // ship + short flame
+  g_thrust2 = 0;    // ship + long flame (they alternate: flicker)
+  g_bullet = 0;
+  g_spark  = 0;     // short line used for the particle bursts
+  g_stars  = 0;
+
+  score    = 0;
+  hiscore  = 0;
+  lives    = 3;
+  wave     = 0;
+  state    = 0;     // 0 title, 1 playing, 2 game over
+  rocks    = 0;     // asteroids alive
+  nbullets = 0;     // player bullets alive (limited)
+  purge    = 0;     // 1 = every asteroid removes itself
+  next_life = 10000;
+  ship_x   = 320;   // where the ship is (new waves spawn away from it)
+  ship_y   = 240;
+  ship_alive = 0;
+
+  // Sound: ids made once, a private random generator for the pitch
+  // variations (the game's rand() sequence stays untouched), the
+  // heartbeat clock and the music the game wants now.
+  sn_fire = 0; sn_rock[2]; sn_crack = 0; sn_beat[1]; sn_thrust = 0;
+  sn_hyper = 0; sn_hyper2 = 0; sn_die = 0; sn_die2 = 0; sn_life = 0; sn_wave = 0;
+  sn_start = 0;
+  sn_r = 1234; sn_tick = 0; sn_rock_t = -99; sn_beat_t = 0; sn_beat_i = 0; sn_wave_t = 0;
+  sn_music = 1; sn_want = 0; sn_cur = -1; sn_loop = 1;
+  song_title = 0; song_space = 0; song_over = 0;
+
+LOCAL
+  hit = 0;          // set to 1 by whoever smashes an asteroid
+
+// ---------------------------------------------------------------------
+// Graphics
+// ---------------------------------------------------------------------
+
+// The ship points right (angle 0). All three versions share the same
+// 48x20 canvas so the pivot (its centre) never moves when GRAPH changes.
+FUNCTION draw_ship(g, flame);
+BEGIN
+  gfx_fill_rgba(g, 0, 0, 0, 0);
+  gfx_line(g, 37, 10, 11, 2, 230, 240, 255);   // nose to rear corners
+  gfx_line(g, 37, 10, 11, 18, 230, 240, 255);
+  gfx_line(g, 11, 2, 16, 10, 230, 240, 255);   // notched tail
+  gfx_line(g, 11, 18, 16, 10, 230, 240, 255);
+  IF (flame > 0)
+    gfx_line(g, 14, 6, 14 - flame, 10, 255, 170, 60);
+    gfx_line(g, 14, 14, 14 - flame, 10, 255, 170, 60);
+  END
+  RETURN g;
+END
+
+FUNCTION make_graphics();
+BEGIN
+  g_ship    = draw_ship(new_graphic(48, 20), 0);
+  g_thrust1 = draw_ship(new_graphic(48, 20), 7);
+  g_thrust2 = draw_ship(new_graphic(48, 20), 13);
+
+  g_bullet = new_graphic(3, 3);
+  gfx_fill_rgba(g_bullet, 0, 0, 0, 0);
+  gfx_rect(g_bullet, 0, 0, 3, 3, 255, 255, 255);
+
+  g_spark = new_graphic(8, 2);
+  gfx_fill_rgba(g_spark, 0, 0, 0, 0);
+  gfx_line(g_spark, 0, 0, 7, 0, 220, 230, 255);
+
+  // A faint starfield as the background.
+  g_stars = new_graphic(scr_w, scr_h);
+  gfx_fill(g_stars, 0, 0, 6);
+  FOR i = 0 TO 119
+    c = rand(40, 110);
+    gfx_pixel(g_stars, rand(scr_w - 1), rand(scr_h - 1), c, c, c + 20);
+  END
+  put_screen(0, g_stars);
+  RETURN 0;
+END
+
+// ---------------------------------------------------------------------
+// Sound
+// ---------------------------------------------------------------------
+
+// A random number for sound variations only (a small LCG of our own).
+FUNCTION srnd(a, b);
+BEGIN
+  sn_r = (sn_r * 1103 + 4271) % 65521;
+  RETURN a + sn_r % (b - a + 1);
+END
+
+// Pan for a screen x: -70 at the left edge, 70 at the right.
+FUNCTION sn_pan(px);
+BEGIN
+  RETURN clamp((px - 320) / 4, -70, 70);
+END
+
+FUNCTION make_sounds();
+BEGIN
+  sn_fire = sfx_tone(wave_square, 1900, 420, 100, 32);
+  sn_rock[0] = sfx(sfx_explosion, 5);          // small, medium, large rock
+  sn_rock[1] = sfx(sfx_explosion, 11);
+  sn_rock[2] = sfx(sfx_explosion, 17);
+  sn_crack = sfx(sfx_hit, 6);
+  sn_beat[0] = sfx_tone(wave_sine, 74, 50, 130, 85);    // the heartbeat
+  sn_beat[1] = sfx_tone(wave_sine, 66, 44, 130, 85);
+  sn_thrust = sfx_tone(wave_noise, 420, 260, 150, 34);
+  sn_hyper = sfx_tone(wave_sine, 180, 2600, 260, 40);
+  sn_hyper2 = sfx_tone(wave_saw, 2200, 300, 220, 18);
+  sn_die = sfx(sfx_explosion, 9);
+  sn_die2 = sfx_tone(wave_saw, 500, 40, 1000, 26);
+  sn_life = sfx_tone(wave_triangle, 1046, 1046, 140, 45);
+  sn_wave = sfx_tone(wave_triangle, 220, 440, 260, 34);
+  sn_start = sfx(sfx_powerup, 4);
+  RETURN 0;
+END
+
+FUNCTION make_songs();
+BEGIN
+  // Title: slow, spacey arpeggios over a pad
+  song_title = song_new(100);
+  song_track(song_title, inst_pluck,
+    "D4 A4 D5 E5 F5 E5 D5 A4 D4 A4 D5 E5 F5 A5 G5 E5 | Bb3 F4 Bb4 C5 D5 C5 Bb4 F4 C4 G4 C5 D5 E5 G5 F5 E5 ", 30);
+  song_track(song_title, inst_pad,
+    "D4 - - - - - - - - - - - - - - - | Bb3 - - - - - - - C4 - - - - - - - ", 26);
+  song_track(song_title, inst_bass,
+    "D3 - - - . . D3 . D3 - - - . . A2 . | Bb2 - - - . . Bb2 . C3 - - - . . C3 . ", 45);
+  song_track(song_title, inst_drums, "k . . . h . . . k . k . h . . . ", 26);
+  // In play: a low drone and sparse bleeps, the heartbeat keeps the time
+  song_space = song_new(100);
+  song_track(song_space, inst_pad,
+    "D3 - - - - - - - - - - - - - - - | D3 - - - - - - - - - - - - - - - |" +
+    "Bb2 - - - - - - - - - - - - - - - | C3 - - - - - - - - - - - - - - - ", 20);
+  song_track(song_space, inst_sine,
+    ". . . . . . A5 . . . . . . . . . | . . . . D6 . . . . . . . . . . . |" +
+    ". . . . . . F5 . . . . . . . G5 . | . . . . . . . . E5 . . . . . . . ", 16);
+  // Game over: once
+  song_over = song_new(90);
+  song_track(song_over, inst_square, "A4 - G4 - F4 - E4 - D4 - - - - - - - . . . . ", 36);
+  song_track(song_over, inst_pad, "D4 - - - - - - - - - - - - - - - . . . . ", 26);
+  song_track(song_over, inst_bass, "D3 - - - C3 - - - Bb2 - - - A2 - - - . . . . ", 55);
+  music_volume(36);
+  RETURN 0;
+END
+
+// Once a frame from the main loops: M toggles the music, and the song
+// the game wants starts when it changes (a jingle, loop 0, plays even
+// with the music off).
+FUNCTION snd_update();
+BEGIN
+  sn_tick = sn_tick + 1;
+  IF (key_pressed(_m)) sn_music = 1 - sn_music; sn_cur = -1; END
+  IF (sn_want != sn_cur)
+    IF (sn_want AND (sn_music OR sn_loop == 0)) song_play(sn_want, sn_loop); ELSE song_stop(); END
+    sn_cur = sn_want;
+  END
+  RETURN 0;
+END
+
+FUNCTION want_song(sng, lp);
+BEGIN
+  sn_want = sng; sn_loop = lp;
+  RETURN 0;
+END
+
+// The heartbeat: two low notes in turn, closer together as the wave
+// goes on and as the rocks get fewer.
+FUNCTION heartbeat();
+PRIVATE gap;
+BEGIN
+  IF (ship_alive == 0 OR rocks == 0) RETURN 0; END
+  sn_wave_t = sn_wave_t + 1;
+  gap = 58 - sn_wave_t / 40 - (12 - min_int(rocks, 12)) * 2;
+  IF (gap < 14) gap = 14; END
+  IF (sn_tick - sn_beat_t >= gap)
+    sn_beat_t = sn_tick;
+    play_sound(sn_beat[sn_beat_i], 70, 100, 0);
+    sn_beat_i = 1 - sn_beat_i;
+  END
+  RETURN 1;
+END
+
+// A rock breaking: bigger rocks lower and louder (a few frames apart at most).
+FUNCTION rock_sound(tier, px);
+BEGIN
+  IF (sn_tick - sn_rock_t < 2) RETURN 0; END
+  sn_rock_t = sn_tick;
+  play_sound(sn_rock[tier - 1], 45 + tier * 15, 150 - tier * 28 + srnd(-8, 8), sn_pan(px));
+  play_sound(sn_crack, 30, srnd(80, 120), sn_pan(px));
+  RETURN 1;
+END
+
+// A little tune of up to four notes of sound snd (pitch percent, 0 none).
+PROCESS sn_arp(snd, vol, gap, a, b, c, d);
+PRIVATE k = 0; p = 0;
+BEGIN
+  FROM k = 0 TO 3;
+    p = a;
+    IF (k == 1) p = b; END
+    IF (k == 2) p = c; END
+    IF (k == 3) p = d; END
+    IF (p > 0) play_sound(snd, vol, p, 0); END
+    FRAME(gap * 100);
+  END
+END
+
+// ---------------------------------------------------------------------
+// Particles: a short line flying outwards and fading away
+// ---------------------------------------------------------------------
+PROCESS spark(px, py, dir, spd, life);
+PRIVATE t = 0;
+BEGIN
+  x = px; y = py; angle = dir; graph = g_spark; z = -5;
+  FROM t = 1 TO life;
+    advance(spd);
+    angle = angle + 9000;           // tumbling line
+    alpha = 100 - t * 100 / life;
+    FRAME;
+  END
+END
+
+FUNCTION burst(px, py, n, spd);
+BEGIN
+  FROM i = 1 TO n;
+    spark(px, py, rand(0, 359999), rand(spd / 2, spd), rand(20, 40));
+  END
+  RETURN 0;
+END
+
+// ---------------------------------------------------------------------
+// Asteroid: tier 3 = large, 2 = medium, 1 = small
+// ---------------------------------------------------------------------
+PROCESS asteroid(ax, ay, tier);
+PRIVATE r = 0; c = 0; n = 0; step = 0; a = 0; rr = 0; sum = 0;
+        px = 0; py = 0; fx = 0; fy = 0; qx = 0; qy = 0;
+        vx = 0; vy = 0; spin = 0; dir = 0; spd = 0.0;
+BEGIN
+  x = ax; y = ay;
+  rocks = rocks + 1;
+
+  // Outline: n vertices around the centre, each at its own random radius
+  // between 55% and 100% of the tier radius, joined by lines.
+  IF (tier == 3) r = 38; n = 12; END
+  IF (tier == 2) r = 21; n = 10; END
+  IF (tier == 1) r = 11; n = 8;  END
+  c = r + 2;                          // centre of a (2r+4)-square canvas
+  graph = new_graphic(c * 2, c * 2);  // pivot = centre = (c, c)
+  gfx_fill_rgba(graph, 0, 0, 0, 0);
+  step = 360000 / n;
+  FROM i = 0 TO n - 1;
+    a = i * step + rand(-step / 4, step / 4);
+    rr = rand(r * 55 / 100, r);
+    sum = sum + rr;
+    px = round(c + cos(a) * rr);
+    py = round(c - sin(a) * rr);
+    IF (i == 0) fx = px; fy = py;
+    ELSE gfx_line(graph, qx, qy, px, py, 200, 210, 230);
+    END
+    qx = px; qy = py;
+  END
+  gfx_line(graph, qx, qy, fx, fy, 200, 210, 230);
+
+  // Collision circle in graphic-local coordinates (the canvas centre),
+  // with the average vertex radius: it follows the outline, is scaled by
+  // SIZE and ignores the transparent corners of the square graphic.
+  add_collision_circle(c, c, sum / n);
+
+  // Smaller rocks fly faster; every wave adds a little speed.
+  dir = rand(0, 359999);
+  spd = (4 - tier) * 0.55 + 0.3 + wave * 0.06 + rand(0, 40) / 100.0;
+  vx = cos(dir) * spd;
+  vy = -sin(dir) * spd;
+  spin = rand(-2500, 2500);
+  angle = rand(0, 359999);
+
+  WHILE (hit == 0 AND purge == 0)
+    x = x + vx;
+    y = y + vy;
+    angle = angle + spin;
+    // Screen wrap: the rock leaves completely before it reappears.
+    IF (x < -c)        x = x + scr_w + c * 2; END
+    IF (x > scr_w + c) x = x - scr_w - c * 2; END
+    IF (y < -c)        y = y + scr_h + c * 2; END
+    IF (y > scr_h + c) y = y - scr_h - c * 2; END
+    FRAME;
+  END
+
+  IF (hit)
+    rock_sound(tier, x);
+    IF (tier == 3) score = score + 20;  END
+    IF (tier == 2) score = score + 50;  END
+    IF (tier == 1) score = score + 100; END
+    IF (tier > 1)
+      // Split into two smaller rocks, each with a brand new shape.
+      asteroid(x, y, tier - 1);
+      asteroid(x, y, tier - 1);
+      burst(x, y, 4, 3);
+    ELSE
+      burst(x, y, 10, 4);
+    END
+  END
+  rocks = rocks - 1;
+  free_graphic(graph);
+END
+
+// ---------------------------------------------------------------------
+// Bullets: limited number alive, they wrap and expire
+// ---------------------------------------------------------------------
+PROCESS bullet(bx, by, dir, svx, svy);
+PRIVATE vx = 0; vy = 0; life = 48; rock = 0;
+BEGIN
+  x = bx; y = by; graph = g_bullet;
+  nbullets = nbullets + 1;
+  vx = cos(dir) * 8 + svx;
+  vy = -sin(dir) * 8 + svy;
+  WHILE (life > 0)
+    life = life - 1;
+    x = x + vx;
+    y = y + vy;
+    IF (x < 0) x = x + scr_w; END
+    IF (x >= scr_w) x = x - scr_w; END
+    IF (y < 0) y = y + scr_h; END
+    IF (y >= scr_h) y = y - scr_h; END
+    rock = collision(TYPE asteroid);
+    IF (rock)
+      IF (rock.hit == 0)
+        rock.hit = 1;
+        BREAK;
+      END
+    END
+    FRAME;
+  END
+  nbullets = nbullets - 1;
+END
+
+// ---------------------------------------------------------------------
+// The ship: rotate, thrust with inertia, fire, hyperspace, die, respawn
+// ---------------------------------------------------------------------
+PROCESS ship();
+PRIVATE vx = 0.0; vy = 0.0; inv = 0; spd = 0.0; rock = 0; t = 0; blink = 0;
+BEGIN
+  graph = g_ship; z = -10;
+  add_collision_circle(24, 10, 9);   // the hull, not the whole 48x20 box
+  LOOP
+    // (Re)spawn in the middle, blinking while invulnerable.
+    x = scr_w / 2; y = scr_h / 2; angle = 90000;
+    vx = 0; vy = 0; inv = 150; alpha = 100;
+    ship_alive = 1;
+
+    LOOP
+      IF (key(_left))  angle = angle + 5000; END
+      IF (key(_right)) angle = angle - 5000; END
+
+      IF (key(_up))
+        vx = vx + cos(angle) * 0.14;
+        vy = vy - sin(angle) * 0.14;
+        blink = blink + 1;
+        IF ((blink / 3) % 2 == 0) graph = g_thrust1; ELSE graph = g_thrust2; END
+        IF (blink % 6 == 1) play_sound(sn_thrust, 38, srnd(85, 105), sn_pan(x)); END   // rumble loop
+      ELSE
+        graph = g_ship;
+      END
+      // Space friction, and a speed cap.
+      vx = vx * 0.99;
+      vy = vy * 0.99;
+      spd = sqrt(vx * vx + vy * vy);
+      IF (spd > 6.0) vx = vx * 6.0 / spd; vy = vy * 6.0 / spd; END
+
+      x = x + vx;
+      y = y + vy;
+      IF (x < -10)        x = x + scr_w + 20; END
+      IF (x > scr_w + 10) x = x - scr_w - 20; END
+      IF (y < -10)        y = y + scr_h + 20; END
+      IF (y > scr_h + 10) y = y - scr_h - 20; END
+      ship_x = x; ship_y = y;
+
+      IF (key_pressed(_space) AND nbullets < 5)
+        bullet(x + cos(angle) * 15, y - sin(angle) * 15, angle, vx, vy);
+        play_sound(sn_fire, 50, srnd(92, 112), sn_pan(x));
+      END
+
+      // Hyperspace: jump to a random place (no guarantee it is safe).
+      IF (key_pressed(_down))
+        burst(x, y, 6, 2);
+        play_sound(sn_hyper, 60, 100, sn_pan(x));
+        x = rand(40, scr_w - 40); y = rand(40, scr_h - 40);
+        play_sound(sn_hyper2, 50, 100, sn_pan(x));
+        vx = 0; vy = 0;
+        burst(x, y, 6, 2);
+      END
+
+      IF (inv > 0)
+        inv = inv - 1;
+        IF ((inv / 6) % 2 == 0) alpha = 100; ELSE alpha = 20; END
+      ELSE
+        alpha = 100;
+        rock = collision(TYPE asteroid);
+        IF (rock)
+          IF (rock.hit == 0) rock.hit = 1; END   // the rock breaks too
+          BREAK;
+        END
+      END
+      FRAME;
+    END
+
+    // Destroyed: a burst of line fragments, then wait and respawn.
+    ship_alive = 0;
+    burst(x, y, 14, 3);
+    play_sound(sn_die, 100, 70, sn_pan(x));
+    play_sound(sn_die2, 60, 100, sn_pan(x));
+    graph = 0;
+    lives = lives - 1;
+    FROM t = 1 TO 90; FRAME; END
+    IF (lives <= 0) state = 2; BREAK; END
+    graph = g_ship;
+  END
+END
+
+// Spawns a wave of large rocks along the screen border, away from the ship.
+FUNCTION spawn_wave(count);
+BEGIN
+  FROM i = 1 TO count;
+    REPEAT
+      IF (rand(0, 1) == 0) sx = rand(0, scr_w); sy = rand(0, 1) * scr_h;
+      ELSE sx = rand(0, 1) * scr_w; sy = rand(0, scr_h);
+      END
+    UNTIL (distance(sx, sy, ship_x, ship_y) > 150)
+    asteroid(sx, sy, 3);
+  END
+  RETURN 0;
+END
+
+// Removes every asteroid (each one frees its own graphic on the way out).
+FUNCTION clear_rocks();
+BEGIN
+  purge = 1;
+  WHILE (rocks > 0) FRAME; END
+  purge = 0;
+  RETURN 0;
+END
+
+// ---------------------------------------------------------------------
+// MAIN: title, waves, game over, restart
+// ---------------------------------------------------------------------
+PRIVATE t1 = 0; t2 = 0; t3 = 0; t4 = 0; wait = 0;
+BEGIN
+  set_mode(640, 480);
+  set_fps(60, 0);
+  screen_color('#000006');
+  make_graphics();
+  make_sounds();
+  make_songs();
+
+  // HUD, written once: OFFSET keeps the numbers live.
+  write(0, 8, 8, 0, "SCORE");
+  write_int(0, 44, 8, 0, OFFSET score);
+  write(0, 270, 8, 0, "WAVE");
+  write_int(0, 300, 8, 0, OFFSET wave);
+  write(0, 530, 8, 0, "SHIPS");
+  write_int(0, 566, 8, 0, OFFSET lives);
+  write(0, 8, 20, 0, "HI");
+  write_int(0, 44, 20, 0, OFFSET hiscore);
+
+  // ---- Title: a few rocks drift behind the instructions ----
+  wave = 1;
+  spawn_wave(5);
+  t1 = write(0, 320, 180, 4, "V E C T O R   A S T E R O I D S");
+  t2 = write(0, 320, 230, 4, "LEFT/RIGHT rotate   UP thrust   SPACE fire   DOWN hyperspace");
+  t3 = write(0, 320, 260, 4, "press ENTER or SPACE to start");
+  t4 = write(0, 320, 290, 4, "M  music on/off");
+  want_song(song_title, 1);
+  REPEAT snd_update(); FRAME; UNTIL (key_pressed(_enter) OR key_pressed(_space))
+  delete_text(t4);
+  play_sound(sn_start, 60, 100, 0);
+  delete_text(t1); delete_text(t2); delete_text(t3);
+  clear_rocks();
+
+  LOOP
+    // ---- Play ----
+    score = 0; lives = 3; wave = 0; next_life = 10000;
+    state = 1;
+    ship();
+    wait = 60;
+    want_song(song_space, 1);
+    WHILE (state == 1)
+      // Next wave once the field is clear (after a short pause).
+      IF (rocks == 0)
+        wait = wait - 1;
+        IF (wait <= 0)
+          wave = wave + 1;
+          spawn_wave(min_int(3 + wave, 11));
+          wait = 90;
+          sn_wave_t = 0;
+          play_sound(sn_wave, 45, 100, 0);
+        END
+      END
+      IF (score >= next_life)
+        lives = lives + 1; next_life = next_life + 10000;
+        sn_arp(sn_life, 45, 6, 100, 126, 150, 200);   // extra ship
+      END
+      heartbeat();
+      snd_update();
+      IF (score > hiscore) hiscore = score; END
+      FRAME;
+    END
+
+    // ---- Game over ----
+    t1 = write(0, 320, 220, 4, "G A M E   O V E R");
+    t2 = write(0, 320, 250, 4, "press ENTER or SPACE to play again");
+    want_song(song_over, 0);
+    FROM wait = 1 TO 60; snd_update(); FRAME; END    // don't skip it with a held fire key
+    REPEAT snd_update(); FRAME; UNTIL (key_pressed(_enter) OR key_pressed(_space))
+    delete_text(t1); delete_text(t2);
+    clear_rocks();
+  END
+END
+
+FUNCTION min_int(a, b);
+BEGIN
+  IF (a < b) RETURN a; END
+  RETURN b;
+END
