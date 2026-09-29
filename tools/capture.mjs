@@ -91,8 +91,8 @@ const SHOTS = {
     seconds: 8,
     setup: [['wait', 1500], ['press', 'Enter'], ['wait', 1800]],
     play: [['down', 'ArrowDown'], ['wait', 150], ['press', 'Space'], ['wait', 120], ['press', 'Space'], ['wait', 120], ['press', 'Space'],
-      ['up', 'ArrowDown'], ['down', 'ArrowRight'], ['wait', 1600], ['press', 'ArrowDown'], ['wait', 2600], ['press', 'Space'], ['wait', 2400],
-      ['up', 'ArrowRight']]
+      ['up', 'ArrowDown'], ['down', 'ArrowRight'], ['wait', 450], ['press', 'ArrowDown'], ['wait', 1500], ['press', 'ArrowDown'], ['wait', 2400],
+      ['press', 'Space'], ['wait', 2200], ['up', 'ArrowRight']]
   },
   'vector-asteroids': {
     seconds: 6,
