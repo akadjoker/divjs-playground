@@ -5,15 +5,22 @@
 // it, and saves the workspace in localStorage for the current lesson.
 // "Run" runs that code with the DivJS engine, exactly as the text
 // playground would; "Open in the playground" hands it over as a share link.
+//
+// The page speaks English or Portuguese (i18n.js): ?lang=en or ?lang=pt in
+// the address, else the last choice made with the EN | PT switch, else the
+// browser's language. Switching rebuilds the blocks with their new labels
+// (same blocks, same places) and leaves the game and the code alone.
 
 import * as Blockly from './vendor/blockly.js';
 import { runDivDemo } from '../engine/divjs.js';
-import { registerBlocks, registerFlyouts, TOOLBOX, SCREEN_WIDTH, SCREEN_HEIGHT } from './blocks.js';
+import { registerBlocks, registerFlyouts, toolbox, SCREEN_WIDTH, SCREEN_HEIGHT } from './blocks.js';
 import { generateDiv } from './generator.js';
 import { LESSONS } from './lessons.js';
+import { t, getLanguage, setLanguage, knownLanguage } from './i18n.js';
 
 const STORAGE_PREFIX = 'divjs.blocks.workspace.';
 const LESSON_KEY = 'divjs.blocks.lesson';
+const LANGUAGE_KEY = 'divjs.blocks.language';
 const SAVE_DELAY_MS = 400;
 const MAX_CONSOLE_LINES = 200;
 const STATS_INTERVAL_MS = 500;
@@ -37,7 +44,8 @@ const el = {
   status: document.getElementById('status'),
   stats: document.getElementById('stats'),
   console: document.getElementById('console'),
-  code: document.getElementById('code')
+  code: document.getElementById('code'),
+  langSwitch: document.getElementById('langSwitch')
 };
 
 let workspace = null;
@@ -50,6 +58,8 @@ let lessonOpen = false;    // false until the first lesson's blocks are loaded
 let lastStatsAt = 0;
 let linkToken = 0;
 let warnedIds = new Set();
+let statusKey = 'STATUS_STOPPED';
+let idleScreen = false;    // true while the canvas shows "Press Run"
 
 // ── Storage (may be unavailable: private windows, blocked site data) ────
 
@@ -135,9 +145,11 @@ function logLine(text, kind = '')
   el.console.scrollTop = el.console.scrollHeight;
 }
 
-function setStatus(text, kind = '')
+// The status is kept as a key, so a language switch can say it again.
+function setStatus(key, kind = '')
 {
-  el.status.textContent = text;
+  statusKey = key;
+  el.status.textContent = t(key);
   el.status.className = kind;
 }
 
@@ -304,7 +316,7 @@ function loadState(state, arrange = false)
   }
   catch (err)
   {
-    logLine(`These blocks could not be loaded: ${err.message || err}`, 'warn');
+    logLine(t('LOAD_FAILED', { message: err.message || err }), 'warn');
     return false;
   }
   finally
@@ -332,7 +344,7 @@ function renderLesson()
   }
   const last = lessonIndex === LESSONS.length - 1;
   el.nextBtn.hidden = last;
-  document.title = `${current.title} - DivJS Blocks`;
+  document.title = t('PAGE_TITLE', { lesson: current.title });
 }
 
 function openLesson(index)
@@ -373,7 +385,7 @@ function showSolution()
 
 function restartLesson()
 {
-  if (!window.confirm('Go back to the starting blocks of this lesson? Your blocks for it will be lost.'))
+  if (!window.confirm(t('RESTART_CONFIRM')))
   {
     return;
   }
@@ -407,22 +419,27 @@ function drawIdleScreen()
   ctx.fillStyle = '#95a8b8';
   ctx.font = '16px "Fira Sans", "Segoe UI", system-ui, sans-serif';
   ctx.textAlign = 'center';
-  ctx.fillText('Press ▶ Run to play', SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2);
+  ctx.fillText(t('PRESS_RUN'), SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2);
   el.stats.textContent = '';
+  idleScreen = true;
 }
 
 function handleError(err)
 {
   if (err && err.name === 'DivError')
   {
-    const where = err.line ? ` (line ${err.line}${err.col ? `, column ${err.col}` : ''})` : '';
-    logLine(`Compile error: ${err.reason || err.message}${where}`, 'error');
-    setStatus('Compile error', 'error');
+    let where = '';
+    if (err.line)
+    {
+      where = err.col ? t('AT_LINE_COLUMN', { line: err.line, col: err.col }) : t('AT_LINE', { line: err.line });
+    }
+    logLine(t('COMPILE_ERROR', { reason: err.reason || err.message, where }), 'error');
+    setStatus('STATUS_COMPILE_ERROR', 'error');
   }
   else
   {
-    logLine(`Runtime error: ${err?.message || String(err)}`, 'error');
-    setStatus('Stopped by an error', 'error');
+    logLine(t('RUNTIME_ERROR', { message: err?.message || String(err) }), 'error');
+    setStatus('STATUS_ERROR', 'error');
   }
   el.stopBtn.disabled = true;
 }
@@ -434,11 +451,11 @@ function handleFrame({ runtime, vm })
   {
     lastStatsAt = now;
     const sprites = vm.processManager.getAll().filter((p) => !p.isMouse).length;
-    el.stats.textContent = `${Math.round(runtime.fpsValue || 0)} fps · ${sprites} processes`;
+    el.stats.textContent = t('STATS', { fps: Math.round(runtime.fpsValue || 0), count: sprites });
   }
   if (vm.halted && !el.stopBtn.disabled)
   {
-    setStatus('Finished');
+    setStatus('STATUS_FINISHED');
     el.stopBtn.disabled = true;
   }
 }
@@ -467,8 +484,9 @@ function run()
   saveNow();
   el.console.replaceChildren();
   const active = ensureRunner();
-  setStatus('Running', 'running');
+  setStatus('STATUS_RUNNING', 'running');
   el.stopBtn.disabled = false;
+  idleScreen = false;
   active.start(code);
   if (active.getState().running)
   {
@@ -483,7 +501,7 @@ function stop()
   {
     runner.stop();
   }
-  setStatus('Stopped');
+  setStatus('STATUS_STOPPED');
   el.stopBtn.disabled = true;
 }
 
@@ -556,7 +574,7 @@ function createWorkspace()
 {
   registerBlocks();
   workspace = Blockly.inject(el.workspace, {
-    toolbox: TOOLBOX,
+    toolbox: toolbox(),
     renderer: 'zelos',
     theme: THEME,
     media: 'vendor/media/',
@@ -571,11 +589,113 @@ function createWorkspace()
   new ResizeObserver(() => Blockly.svgResize(workspace)).observe(el.workspace);
 }
 
+// ── Language ────────────────────────────────────────────────────────────
+
+// ?lang= in the address, else the saved choice, else the browser's.
+function startingLanguage()
+{
+  const fromAddress = knownLanguage(new URLSearchParams(window.location.search).get('lang'));
+  if (fromAddress)
+  {
+    return fromAddress;
+  }
+  const saved = knownLanguage(storageGet(LANGUAGE_KEY));
+  if (saved)
+  {
+    return saved;
+  }
+  const browser = navigator.languages?.length ? navigator.languages : [navigator.language];
+  return browser.some((code) => knownLanguage(code) === 'pt') ? 'pt' : 'en';
+}
+
+// The page's own texts: elements marked with data-i18n (text),
+// data-i18n-title and data-i18n-aria-label, then the lesson and status.
+function translatePage()
+{
+  const language = getLanguage();
+  document.documentElement.lang = language === 'pt' ? 'pt-PT' : 'en';
+  for (const node of document.querySelectorAll('[data-i18n]'))
+  {
+    node.textContent = t(node.dataset.i18n);
+  }
+  for (const node of document.querySelectorAll('[data-i18n-title]'))
+  {
+    node.title = t(node.dataset.i18nTitle);
+  }
+  for (const node of document.querySelectorAll('[data-i18n-aria-label]'))
+  {
+    node.setAttribute('aria-label', t(node.dataset.i18nAriaLabel));
+  }
+  for (const button of el.langSwitch.querySelectorAll('button'))
+  {
+    button.setAttribute('aria-pressed', String(button.dataset.lang === language));
+  }
+  el.status.textContent = t(statusKey);
+}
+
+// Rebuilds the blocks from their saved state so they take the new labels:
+// the same blocks with the same ids, in the same places, the view left
+// where it was. Events are off, so it is not an edit (nothing to undo,
+// nothing to save) and the code, which does not depend on the language,
+// stays as it was.
+function relabelBlocks()
+{
+  Blockly.hideChaff();
+  const state = Blockly.serialization.workspaces.save(workspace);
+  const { scrollX, scrollY } = workspace;
+  loading = true;
+  Blockly.Events.disable();
+  try
+  {
+    workspace.updateToolbox(toolbox());
+    Blockly.serialization.workspaces.load(state, workspace);
+    workspace.scroll(scrollX, scrollY);
+  }
+  finally
+  {
+    Blockly.Events.enable();
+    loading = false;
+  }
+  // The warnings on blocks are in the new language too.
+  warnedIds = new Set();
+  showWarnings(generateDiv(workspace).warnings);
+}
+
+function switchLanguage(language)
+{
+  if (language === getLanguage())
+  {
+    return;
+  }
+  setLanguage(language);
+  storageSet(LANGUAGE_KEY, language);
+  // An address that asked for a language now asks for this one.
+  const url = new URL(window.location.href);
+  if (url.searchParams.has('lang'))
+  {
+    url.searchParams.set('lang', language);
+    window.history.replaceState(null, '', url);
+  }
+  translatePage();
+  if (lessonOpen)
+  {
+    renderLessonNav();
+    renderLesson();
+    relabelBlocks();
+  }
+  if (idleScreen)
+  {
+    drawIdleScreen();
+  }
+}
+
 // ── Start ───────────────────────────────────────────────────────────────
 
 function init()
 {
   el.stopBtn.disabled = true;
+  setLanguage(startingLanguage());
+  translatePage();
   createWorkspace();
   renderLessonNav();
   el.runBtn.addEventListener('click', run);
@@ -583,6 +703,14 @@ function init()
   el.solutionBtn.addEventListener('click', showSolution);
   el.restartBtn.addEventListener('click', restartLesson);
   el.nextBtn.addEventListener('click', () => openLesson(lessonIndex + 1));
+  el.langSwitch.addEventListener('click', (event) =>
+  {
+    const button = event.target.closest('button[data-lang]');
+    if (button)
+    {
+      switchLanguage(button.dataset.lang);
+    }
+  });
   el.canvas.addEventListener('pointerdown', () => el.canvas.focus({ preventScroll: true }));
   window.addEventListener('beforeunload', saveNow);
   const savedLesson = LESSONS.findIndex((l) => l.id === storageGet(LESSON_KEY));
@@ -596,6 +724,8 @@ window.divBlocks = {
   getState: () => (runner ? runner.getState() : null),
   getCode: () => code,
   getLesson: () => lesson().id,
+  getLanguage,
+  setLanguage: switchLanguage,
   lessonCount: LESSONS.length,
   openLesson,
   showSolution,

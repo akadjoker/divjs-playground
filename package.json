@@ -14,7 +14,7 @@
     "capture": "node tools/capture.mjs"
   },
   "dependencies": {
-    "divjs": "github:akadjoker/divjs#6c6c1c602abc6d519e46e91174a9e1186ca04a93"
+    "divjs": "github:akadjoker/divjs#83df671407063ad15ba6a25abd90d3d5a6a1483f"
   },
   "devDependencies": {
     "@codemirror/autocomplete": "^6.20.3",

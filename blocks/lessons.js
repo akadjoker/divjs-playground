@@ -4,6 +4,11 @@
 // complete solution ("Show me the solution"; the tests also run every
 // solution). Workspaces are Blockly's JSON serialization, written here
 // with a few small helpers so a lesson reads almost like the blocks.
+// A lesson's title, goal and hints are in i18n.js (LESSON_<ID>_TITLE,
+// _GOAL, _HINTS), in each language; lesson.title and the others read them
+// in the page's current language.
+
+import { t as text } from './i18n.js';
 
 // ── Helpers that build Blockly JSON ─────────────────────────────────────
 
@@ -190,13 +195,6 @@ const enemyBlocks = () => [
 export const LESSONS = [
   {
     id: 'shape',
-    title: 'Make a shape appear',
-    goal: 'Show a teal circle in the middle of the game screen.',
-    hints: [
-      'From Looks, drag "look like a circle" into the "define sprite player" block.',
-      'From Program, drag "create sprite player at x 160 y 120" under "when the game starts".',
-      'Press ▶ Run. The screen is 320 wide and 240 tall, so 160, 120 is the middle.'
-    ],
     start: workspace([
       at(20, 20, start()),
       at(20, 160, sprite('player'))
@@ -208,14 +206,6 @@ export const LESSONS = [
   },
   {
     id: 'arrows',
-    title: 'Move it with the arrow keys',
-    goal: 'Make the circle move when you press the arrow keys.',
-    hints: [
-      'Put a "forever" loop (Control) at the end of "define sprite player": it runs every frame.',
-      'Inside it, add "if key right arrow pressed? then change x by 3" (Control, Sensing, Motion).',
-      'Do the same for left (change x by -3), up (change y by -3) and down (change y by 3): y grows DOWN the screen.',
-      'Run, then click the game so it gets the keys.'
-    ],
     start: workspace([
       at(20, 20, start(create('player', 160, 120))),
       at(20, 160, sprite('player', playerLooks()))
@@ -227,14 +217,6 @@ export const LESSONS = [
   },
   {
     id: 'coin',
-    title: 'Catch the coin',
-    goal: 'Add a coin at a random place. When the player touches it: add 1 to the score, play a sound and move the coin somewhere else.',
-    hints: [
-      'Under "when the game starts", create sprite coin (at x 60, y 60 for example).',
-      'In "define sprite coin": look like a small yellow circle, "go to a random place" (Motion), then forever: if touching sprite player?',
-      'Inside the if: change score by 1 (the "score" variable is ready in Variables), play sound coin, go to a random place.',
-      'Show the score: a "forever" with "show variable score at x 8 y 8" at the end of "when the game starts".'
-    ],
     start: workspace([
       at(20, 20, start(create('player', 160, 120))),
       at(20, 170, sprite('player', playerLooks(), arrowKeys())),
@@ -252,13 +234,6 @@ export const LESSONS = [
   },
   {
     id: 'enemy',
-    title: 'Avoid the enemy',
-    goal: 'Add a red box that flies around and bounces off the edges. If it touches the player, the score goes back to 0.',
-    hints: [
-      'Create the enemy under "when the game starts", in a corner (x 300, y 20).',
-      'In "define sprite enemy": look like a red box, point in direction 40, then forever: move forward 2 steps and bounce off the edges.',
-      'Still inside the forever: if touching sprite player? then set score to 0, play sound hit, and go to x 300 y 20.'
-    ],
     start: workspace([
       at(20, 20, start(
         create('player', 160, 120),
@@ -283,13 +258,6 @@ export const LESSONS = [
   },
   {
     id: 'free',
-    title: 'Free play',
-    goal: 'Make your own game with every block. The solution is an example: a ship that turns, flies and shoots at rocks.',
-    hints: [
-      'Every block has a tip: hold the mouse over it.',
-      '"Open in the playground" takes the DIV code of your blocks to the text editor, to go on in real code.',
-      'Your blocks are saved in this browser, for each lesson.'
-    ],
     start: workspace([
       at(20, 20, start())
     ]),
@@ -367,3 +335,13 @@ export const LESSONS = [
     ], [HITS, AIM])
   }
 ];
+
+for (const lesson of LESSONS)
+{
+  const key = `LESSON_${lesson.id.toUpperCase()}`;
+  Object.defineProperties(lesson, {
+    title: { get: () => text(`${key}_TITLE`), enumerable: true },
+    goal: { get: () => text(`${key}_GOAL`), enumerable: true },
+    hints: { get: () => text(`${key}_HINTS`), enumerable: true }
+  });
+}

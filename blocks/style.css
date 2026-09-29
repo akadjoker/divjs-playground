@@ -18,6 +18,31 @@
   grid-area: top;
 }
 
+/* The language switch: EN | PT, the current one lit. */
+.lang-switch {
+  display: flex;
+}
+
+.lang-switch button {
+  padding: 7px 10px;
+  border-radius: 0;
+}
+
+.lang-switch button:first-child {
+  border-radius: 8px 0 0 8px;
+}
+
+.lang-switch button:last-child {
+  border-left: none;
+  border-radius: 0 8px 8px 0;
+}
+
+.lang-switch button[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
 /* ── Lesson ────────────────────────────────────────────────────────── */
 
 .lesson {
@@ -188,7 +213,7 @@
   font-size: 13px;
 }
 
-.code-pane h2 span {
+.code-pane h2 small {
   color: var(--muted);
   font-weight: 400;
   font-size: 12px;
@@ -274,9 +299,14 @@
     margin: 2px 3px;
   }
 
+  /* The playground's phone layout gives its own game screen a tall band
+     for touch controls; here the screen keeps the game's 4:3 shape. */
   .screen-pane .screen {
     width: 100%;
     max-width: 480px;
+    height: auto;
+    margin: 0;
+    border-radius: 8px;
     align-self: center;
   }
 
