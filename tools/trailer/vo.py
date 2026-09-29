@@ -1,5 +1,5 @@
 """Narration for the DivJS trailers (optional): speaks the lines of
-vo_lines.json with the Kokoro TTS model and checks them by transcribing
+vo_lines.json with the Kokoro text-to-speech voice and checks them by transcribing
 them back with faster-whisper.
 
     <python> tools/trailer/vo.py --video short --out <dir> [--voice bm_george]

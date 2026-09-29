@@ -295,7 +295,7 @@ export const VIDEOS = {
         // The GRAV line zoomed in (5x: the number is as big as the
         // captions), the game under it. The cuts leave out the fort being
         // built again.
-        id: 'live', beats: 14, take: 'live-edit', cuts: LIVE_CUTS, say: 'Change any\ngame {live}', music: 'calm', hit: 'blip',
+        id: 'live', beats: 12, take: 'live-edit', cuts: LIVE_CUTS, say: 'Change any\ngame {live}', music: 'calm', hit: 'blip',
         stack: [{ region: 'line', box: [20, -26, 216, 74] }, { region: 'screen' }]
       },
       {
@@ -336,7 +336,7 @@ export const VIDEOS = {
       ], { music: 'calm', hit: 'blip' }),
       {
         // The GRAV line with its number and comment (2.7x), the game under it.
-        id: 'live', beats: 15, take: 'live-edit', cuts: LIVE_CUTS, window: [0, 0, 1920, 1080],
+        id: 'live', beats: 12, take: 'live-edit', cuts: LIVE_CUTS, window: [0, 0, 1920, 1080],
         stack: [{ region: 'line', box: [-70, -26, 620, 74], outWidth: 1700 }, { region: 'screen', outWidth: 1200 }]
       },
       card('blocks-card', 6, [
