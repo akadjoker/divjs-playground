@@ -230,6 +230,44 @@ for (const name of readdirSync(programsDir)) {
 	}
 }
 
+// Rusty Leap: the jump-and-stomp platformer compiles with the processes
+// and functions its player physics, enemies and levels are built from.
+{
+	const problems = [];
+	try
+	{
+		const { bytecode } = compileSource(readFileSync(join(programsDir, 'rusty-leap.div'), 'utf-8'));
+		for (const name of ['player', 'block', 'foe', 'item', 'gem', 'acorn_shot', 'lamp', 'waystone', 'mplat', 'hud'])
+		{
+			if (!bytecode.processTable.has(name))
+			{
+				problems.push(`no PROCESS ${name}`);
+			}
+		}
+		for (const name of ['player_move', 'ptouch', 'hit_block', 'foe_walk', 'hurt_player', 'level1', 'level2', 'level3', 'font_part'])
+		{
+			if (!bytecode.functionTable.has(name))
+			{
+				problems.push(`no FUNCTION ${name}`);
+			}
+		}
+	}
+	catch (err)
+	{
+		problems.push(err?.message || String(err));
+	}
+	if (problems.length > 0)
+	{
+		console.log(`FAIL  ${'rusty-leap (compile)'.padEnd(35)} ${problems.join(', ')}`);
+		fail += 1;
+	}
+	else
+	{
+		console.log(`OK    ${'rusty-leap (compile)'.padEnd(35)} processes and physics functions present`);
+		ok += 1;
+	}
+}
+
 // Export packs the engine bundle as a single module (the packer's own
 // tests live with the library).
 {

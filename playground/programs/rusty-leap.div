@@ -588,7 +588,7 @@ pal[239] =
     00000, 00100, 00100, 00000, 00100, 00100, 00000,   // :
     00000, 00000, 00000, 00000, 00000, 01100, 01100,   // .
     00100, 00100, 01000, 00000, 00000, 00000, 00000,   // '
-    00000, 00000, 00000, 00000, 01100, 00100, 01000,   // ,
+    00000, 00000, 00000, 00000, 00100, 00100, 01000,   // ,
     00001, 00010, 00010, 00100, 01000, 01000, 10000,   // /
     01110, 10001, 00001, 00010, 00100, 00000, 00100,   // ?
     00000, 10101, 01110, 11111, 01110, 10101, 00000,   // *
@@ -1254,7 +1254,6 @@ BEGIN
   RETURN 0;
 END
 
-// Far sky plane (400 x 240, wraps) and the nearer plane (480 x 240, wraps)
 // Far sky plane (400 x 240, wraps) in three slices of work: part 0 the
 // gradient, parts 1 and 2 half of the shapes each
 FUNCTION make_far(th, part);
@@ -1720,7 +1719,7 @@ BEGIN
   row(88, 10, 2, T_PLANK);
   gems(88, 8, 2);
   gnd(92, 130);
-  ent(E_BEE, 99, 9);
+  ent(E_BEE, 96, 8);
   row(101, 9, 2, T_BRICK);
   put(103, 9, T_GIFTP);
   row(104, 9, 2, T_BRICK);
@@ -1728,7 +1727,7 @@ BEGIN
   ent(E_BUG, 107, 12);
   ent(E_DIL, 112, 12);
   fill(115, 11, 116, 12, T_STONE);
-  ent(E_BEE, 120, 8);
+  ent(E_BEE, 120, 7);
   row(121, 9, 4, T_PLANK);
   gems(121, 8, 4);
   ent(E_FROG, 127, 12);
@@ -1738,7 +1737,7 @@ BEGIN
   gnd(137, 172);
   stair_dn(137, 4, 12);
   ent(E_BUG, 146, 12);
-  ent(E_BEE, 150, 9);
+  ent(E_BEE, 149, 6);
   row(151, 9, 3, T_BRICK);
   put(152, 9, T_GIFT);
   ent(E_DIL, 155, 12);
@@ -1784,8 +1783,8 @@ BEGIN
   ent(E_FROG, 76, 12);
   row(78, 9, 3, T_BRICK);
   put(79, 9, T_GIFT);
-  row(82, 6, 3, T_BRICK);
-  put(83, 6, T_GIFTP);
+  row(82, 8, 3, T_BRICK);
+  put(83, 8, T_GIFTP);
   ent(E_DIL, 87, 12);
   ent(E_DIL, 92, 12);
   gems(95, 10, 3);
@@ -1889,7 +1888,7 @@ FUNCTION one_up(px, py);
 BEGIN
   lives++;
   jingle(1);
-  popup(px, py, "1UP");
+  popup(px, py, "+1 LIFE");
   RETURN 0;
 END
 
@@ -2483,7 +2482,7 @@ BEGIN
       set_color('#1a1020');
       write_later(px - icam + 1, py - t / 2 + 1, s);
       set_color('#ffffff');
-      IF (s == "1UP") set_color('#7dffb0'); END
+      IF (s == "+1 LIFE") set_color('#7dffb0'); END
       write_later(px - icam, py - t / 2, s);
     END
     FRAME;
@@ -2966,11 +2965,6 @@ BEGIN
     IF (k == E_MPH AND nmp < 8) mplat(e_x[i] * 16, e_y[i] * 16, e_p[i], 0, nmp); nmp++; END
     IF (k == E_MPV AND nmp < 8) mplat(e_x[i] * 16, e_y[i] * 16, 0, e_p[i], nmp); nmp++; END
   END
-  IF (cp > 0)
-    pfx = cp * 16 + 8; pfy = check_ty * 16 + 16;
-  ELSE
-    pfx = start_tx * 16 + 8; pfy = start_ty * 16 + 16;
-  END
   pvx = 0; pvy = 0; pground = 1; pface = 1; pdead = 0; pgrow = 0; pinv = 0; pon = -1;
   pbuf = 0; pcoy = 0; pjump = 0; pchain = 0; plook = 0; auto_walk = 0;
   IF (pbig) phw = 6; ph = 22; ELSE phw = 5; ph = 14; END
@@ -3061,12 +3055,9 @@ BEGIN
     FRAME;
     level1();
     FRAME;
+    // the meadow's painted tiles only: bricks and crates would be drawn
+    // over the title panel
     setup_scrolls(1);
-    spawn_blocks(0, 4);
-    FRAME;
-    spawn_blocks(5, 9);
-    FRAME;
-    spawn_blocks(10, 14);
     title_fox();
     hud_icon(g_logo_bg, 200, 102);
     shadow_text(f_big, 200, 48, 4, "RUSTY LEAP", '#ffd24a', 2);
@@ -3099,10 +3090,10 @@ BEGIN
       scr = 1;
       FRAME;
       lv_clear(0);
-    FRAME;
-    lv_clear(1);
-    FRAME;
-    lv_clear(2);
+      FRAME;
+      lv_clear(1);
+      FRAME;
+      lv_clear(2);
       FRAME;
       build_level(lvl);
       FRAME;
@@ -3119,10 +3110,10 @@ BEGIN
       let_me_alone();
       setup_scrolls(lvl);
       spawn_blocks(0, 4);
-    FRAME;
-    spawn_blocks(5, 9);
-    FRAME;
-    spawn_blocks(10, 14);
+      FRAME;
+      spawn_blocks(5, 9);
+      FRAME;
+      spawn_blocks(10, 14);
       FRAME;
       spawn_level();
       time_left = ltime[lvl]; time_tick = 0; hurry = 0;
@@ -3188,19 +3179,14 @@ BEGIN
       // ---- the ending: back in the meadow
       scr = 4;
       lv_clear(0);
-    FRAME;
-    lv_clear(1);
-    FRAME;
-    lv_clear(2);
+      FRAME;
+      lv_clear(1);
+      FRAME;
+      lv_clear(2);
       FRAME;
       level1();
       FRAME;
       setup_scrolls(1);
-      spawn_blocks(0, 4);
-    FRAME;
-    spawn_blocks(5, 9);
-    FRAME;
-    spawn_blocks(10, 14);
       title_fox();
       song_play(m_win);
       hud_icon(g_logo_bg, 200, 94);
