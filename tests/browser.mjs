@@ -17,7 +17,7 @@ import { readFile, readdir, stat, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { chromium } from 'playwright';
+import { chromium, devices } from 'playwright';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const MIME = {
@@ -295,12 +295,12 @@ try
     const client = await page.context().newCDPSession(page);
     const { result } = await client.send('Runtime.evaluate', { expression: 'document.getElementById("game")' });
     const { listeners } = await client.send('DOMDebugger.getEventListeners', { objectId: result.objectId });
-    const moves = listeners.filter((l) => l.type === 'mousemove').length;
+    const moves = listeners.filter((l) => l.type === 'pointermove').length;
     await page.close();
     assert(problems.length === 0, problems.join('\n'));
     assert(ticks <= 75, `${ticks} VM ticks in one second - more than one loop is running`);
     assert(ticks >= 20, `${ticks} VM ticks in one second - the program is not running`);
-    assert(moves === 1, `${moves} mousemove listeners on the canvas`);
+    assert(moves === 1, `${moves} pointermove listeners on the canvas`);
   });
 
   await check('playground: game speed does not depend on the display rate', async () =>
@@ -765,6 +765,386 @@ try
     }
   });
 
+  // Touch: on a phone, real touches (not mouse events) play a mouse game.
+  // Chicken Cannon starts with a tap, aims while a finger is held and
+  // dragged, and fires the chicken when the finger lifts.
+  await check('touch: tap to start, hold and drag to aim, lift to fire (Chicken Cannon)', async () =>
+  {
+    const context = await browser.newContext({ ...devices['Pixel 7'], viewport: { width: 900, height: 700 } });
+    try
+    {
+      const page = await context.newPage();
+      const problems = watch(page);
+      await page.goto(`${BASE}/playground/#p=chicken-cannon`);
+      await page.waitForFunction(() => window.divPlayground?.getState()?.vm);
+      await page.waitForTimeout(1200);
+      const read = () => page.evaluate(() =>
+      {
+        const s = window.divPlayground.getState();
+        const g = (n) => Number(s.vm.globals.get(s.bytecode.globals[n]));
+        return { state: g('state'), phase: g('phase'), ang: g('aim_ang'), pow: g('aim_pow'), shots: g('shots'), left: s.runtime._mouse.buttons[0] };
+      });
+      // The page finishes laying out after the game starts (the canvas
+      // moves as panels above it fill in): wait until it holds still, and
+      // aim each touch from where the canvas is at that moment.
+      await page.locator('#game').scrollIntoViewIfNeeded();
+      let last = '';
+      for (let i = 0; i < 40; i++)
+      {
+        const now = JSON.stringify(await page.locator('#game').boundingBox());
+        if (now === last)
+        {
+          break;
+        }
+        last = now;
+        await page.waitForTimeout(100);
+      }
+      let box = await page.locator('#game').boundingBox();
+      const at = (x, y) => ({ x: box.x + x * box.width / 800, y: box.y + y * box.height / 480 });
+      const cdp = await context.newCDPSession(page);
+      const touch = (type, points) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: points });
+      await touch('touchStart', [at(400, 200)]);
+      await page.waitForTimeout(100);
+      await touch('touchEnd', []);
+      await page.waitForTimeout(1500);
+      const started = await read();
+      box = await page.locator('#game').boundingBox();
+      assert(started.state === 2, `a tap should start the game: ${JSON.stringify(started)}`);
+      await touch('touchStart', [at(400, 300)]);
+      await page.waitForTimeout(150);
+      for (let i = 1; i <= 8; i++)
+      {
+        await touch('touchMove', [at(400 - i * 9, 300 - i * 14)]);
+        await page.waitForTimeout(40);
+      }
+      await page.waitForTimeout(300);
+      const held = await read();
+      assert(held.left && held.phase === 0 && (held.ang !== started.ang || held.pow !== started.pow),
+        `a held, dragged finger should aim: ${JSON.stringify(held)} (start ${JSON.stringify(started)})`);
+      await touch('touchEnd', []);
+      await page.waitForTimeout(500);
+      const fired = await read();
+      assert(!fired.left && fired.phase === 1 && fired.shots === 1, `lifting the finger should fire: ${JSON.stringify(fired)}`);
+      assert(problems.length === 0, problems.join('\n'));
+    }
+    finally
+    {
+      await context.close();
+    }
+  });
+
+  // On-screen controls on a phone, with real touches (several fingers at
+  // once) in a Pixel 7, upright and sideways: they appear with the first
+  // touch, press the game's keys (manifest "touch"), and stay off the game.
+  // A mouse game (Chicken Cannon) gets none and is still played by
+  // dragging.
+  const openOnPhone = async (id, landscape) =>
+  {
+    const context = await browser.newContext({ ...devices[landscape ? 'Pixel 7 landscape' : 'Pixel 7'] });
+    const page = await context.newPage();
+    const problems = watch(page);
+    await page.goto(`${BASE}/playground/#p=${id}`);
+    await page.waitForFunction(() => window.divPlayground?.getState()?.vm);
+    await page.waitForTimeout(800);
+    const cdp = await context.newCDPSession(page);
+    const points = new Map();
+    const phone = {
+      context,
+      page,
+      problems,
+      // CDP: touchStart lists every finger down; touchEnd the ones lifting.
+      down: async (finger, at) =>
+      {
+        points.set(finger, at);
+        await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [...points].map(([i, p]) => ({ id: i, x: p.x, y: p.y })) });
+      },
+      move: async (finger, at) =>
+      {
+        points.set(finger, at);
+        await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [...points].map(([i, p]) => ({ id: i, x: p.x, y: p.y })) });
+      },
+      up: async (finger) =>
+      {
+        const p = points.get(finger);
+        points.delete(finger);
+        await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [{ id: finger, x: p.x, y: p.y }] });
+      },
+      tap: async (at, ms = 120) =>
+      {
+        await phone.down(99, at);
+        await page.waitForTimeout(ms);
+        await phone.up(99);
+      },
+      centre: (selector) => page.evaluate((s) =>
+      {
+        const node = document.querySelector(s);
+        if (!node)
+        {
+          return null;
+        }
+        const r = node.getBoundingClientRect();
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2, r: r.width / 2 };
+      }, selector),
+      // A global of the running program; arrays by index (their slots come
+      // from compiling the same source again).
+      g: (name, index = 0) => page.evaluate(async ([n, k]) =>
+      {
+        const s = window.divPlayground.getState();
+        if (window.touchTestSlotsFor !== s.source)
+        {
+          const { Lexer, Parser, Compiler } = await import('/engine/divjs.js');
+          const compiler = new Compiler();
+          compiler.compile(new Parser(new Lexer(s.source).tokenize()).parse());
+          window.touchTestSlots = compiler.globalMap;
+          window.touchTestSlotsFor = s.source;
+        }
+        const slot = window.touchTestSlots.get(n);
+        return Number(s.vm.globals.get(typeof slot === 'number' ? slot : slot.base + k) ?? 0);
+      }, [name, index]),
+      layout: () => page.evaluate(() =>
+      {
+        const box = (n) =>
+        {
+          const r = n.getBoundingClientRect();
+          return { x: r.x, y: r.y, w: r.width, h: r.height, right: r.right, bottom: r.bottom };
+        };
+        const root = document.querySelector('[data-divjs-touch]');
+        return {
+          scrollY: window.scrollY,
+          scrollWidth: document.documentElement.scrollWidth,
+          game: box(document.getElementById('game')),
+          shown: !!root && root.style.display !== 'none',
+          controls: [...document.querySelectorAll('[data-touch-pad], [data-touch-key]')].map(box)
+        };
+      })
+    };
+    // The first touch, on the game, brings the controls up.
+    const game = await page.locator('#game').boundingBox();
+    await phone.tap({ x: game.x + game.width / 2, y: game.y + 8 }, 40);
+    await page.waitForTimeout(300);
+    return phone;
+  };
+
+  // The game at the top of the page, nothing sideways, the controls on and
+  // (upright, where there is room under the game) not over it.
+  const checkPhoneLayout = async (phone, landscape, name) =>
+  {
+    const l = await phone.layout();
+    assert(l.scrollY === 0 && l.game.y < 1, `${name}: the game should be at the top of the page: ${JSON.stringify(l.game)} scrollY ${l.scrollY}`);
+    assert(l.scrollWidth <= Math.ceil(phone.page.viewportSize().width), `${name}: the page is ${l.scrollWidth} px wide`);
+    assert(l.shown && l.controls.length > 0, `${name}: the touch controls should be on after a touch`);
+    for (const c of l.controls)
+    {
+      assert(c.w >= 44 && c.x >= 0 && c.right <= phone.page.viewportSize().width && c.bottom <= phone.page.viewportSize().height,
+        `${name}: a control is too small or off screen: ${JSON.stringify(c)}`);
+      if (!landscape)
+      {
+        assert(c.y >= l.game.bottom - 1, `${name}: upright, a control covers the game: ${JSON.stringify(c)} (game ends at ${l.game.bottom})`);
+      }
+    }
+  };
+
+  for (const landscape of [false, true])
+  {
+    const way = landscape ? 'sideways' : 'upright';
+
+    await check(`touch controls (${way}): Sparkroll - hold right on the pad and jump`, async () =>
+    {
+      const phone = await openOnPhone('sparkroll', landscape);
+      try
+      {
+        await checkPhoneLayout(phone, landscape, 'Sparkroll');
+        const kip = () => phone.page.evaluate(() =>
+        {
+          const s = window.divPlayground.getState();
+          const id = s.vm.globals.get(s.bytecode.globals.kip_id);
+          const p = s.vm.processManager.getAll().find((q) => q.id === id);
+          return { state: s.vm.globals.get(s.bytecode.globals.gstate), x: p ? p.x : null, y: p ? p.y : null };
+        });
+        await phone.tap(await phone.centre('[data-touch-key="enter"]'));
+        for (let i = 0; i < 30 && (await kip()).x === null; i++)
+        {
+          await phone.page.waitForTimeout(200);
+        }
+        await phone.page.waitForTimeout(1500);
+        const before = await kip();
+        assert(before.x !== null, `Start should start the game: ${JSON.stringify(before)}`);
+        const pad = await phone.centre('[data-touch-pad]');
+        await phone.down(1, { x: pad.x + pad.r * 0.8, y: pad.y });
+        await phone.page.waitForTimeout(500);
+        const running = await kip();
+        await phone.down(2, await phone.centre('[data-touch-key="space"]'));
+        await phone.page.waitForTimeout(200);
+        const jumping = await kip();
+        await phone.up(2);
+        await phone.up(1);
+        assert(running.x > before.x + 10, `holding right should run: ${JSON.stringify([before, running])}`);
+        assert(jumping.x > running.x && jumping.y < running.y - 10, `jump while running: ${JSON.stringify([running, jumping])}`);
+        assert(phone.problems.length === 0, phone.problems.join('\n'));
+      }
+      finally
+      {
+        await phone.context.close();
+      }
+    });
+
+    await check(`touch controls (${way}): Street Duel - move and attack`, async () =>
+    {
+      const phone = await openOnPhone('fighter', landscape);
+      try
+      {
+        await checkPhoneLayout(phone, landscape, 'Street Duel');
+        const ok = await phone.centre('[data-touch-key="enter"]');
+        // Title, character select, round intro: OK until the fight is on
+        // and fighter 0 is the player's.
+        for (let i = 0; i < 25 && !((await phone.g('ctl_on')) === 1 && (await phone.g('fctrl', 0)) === 0); i++)
+        {
+          await phone.tap(ok);
+          await phone.page.waitForTimeout(600);
+        }
+        assert((await phone.g('ctl_on')) === 1 && (await phone.g('fctrl', 0)) === 0, 'OK should lead to a fight');
+        const x0 = await phone.g('fx', 0);
+        const pad = await phone.centre('[data-touch-pad]');
+        await phone.down(1, { x: pad.x + pad.r * 0.8, y: pad.y });
+        await phone.page.waitForTimeout(500);
+        const x1 = await phone.g('fx', 0);
+        await phone.up(1);
+        assert(Math.abs(x1 - x0) > 5, `the pad should walk the fighter: ${x0} -> ${x1}`);
+        await phone.page.waitForTimeout(400);
+        await phone.down(2, await phone.centre('[data-touch-key="z"]'));
+        let attacking = -1;
+        for (let i = 0; i < 10 && attacking !== 4; i++)
+        {
+          attacking = await phone.g('fs', 0);
+          await phone.page.waitForTimeout(30);
+        }
+        await phone.up(2);
+        assert(attacking === 4, `LK should attack (state 4), state ${attacking}`);
+        assert(phone.problems.length === 0, phone.problems.join('\n'));
+      }
+      finally
+      {
+        await phone.context.close();
+      }
+    });
+
+    await check(`touch controls (${way}): Bomber - move and drop a bomb`, async () =>
+    {
+      const phone = await openOnPhone('bomber', landscape);
+      try
+      {
+        await checkPhoneLayout(phone, landscape, 'Bomber');
+        const bomb = await phone.centre('[data-touch-key="space"]');
+        await phone.tap(bomb);
+        for (let i = 0; i < 40 && !((await phone.g('state')) === 2 && (await phone.g('attract')) === 0); i++)
+        {
+          await phone.page.waitForTimeout(250);
+        }
+        const pad = await phone.centre('[data-touch-pad]');
+        const where = async () => [await phone.g('p_x', 0), await phone.g('p_y', 0)];
+        const start = await where();
+        let moved = false;
+        // Player 1 starts in the top-left corner: right or down is open.
+        for (const [dx, dy] of [[1, 0], [0, 1]])
+        {
+          await phone.down(1, { x: pad.x + dx * pad.r * 0.8, y: pad.y + dy * pad.r * 0.8 });
+          await phone.page.waitForTimeout(450);
+          await phone.up(1);
+          const now = await where();
+          moved = moved || now[0] !== start[0] || now[1] !== start[1];
+        }
+        assert(moved, `the pad should move player 1 from ${start}`);
+        const mine = async () =>
+        {
+          let n = 0;
+          for (let k = 0; k < 40; k++)
+          {
+            n += (await phone.g('b_on', k)) && (await phone.g('b_own', k)) === 0 ? 1 : 0;
+          }
+          return n;
+        };
+        const before = await mine();
+        await phone.tap(bomb);
+        await phone.page.waitForTimeout(200);
+        const after = await mine();
+        assert(after === before + 1, `Bomb should drop a bomb of player 1: ${before} -> ${after}`);
+        assert(phone.problems.length === 0, phone.problems.join('\n'));
+      }
+      finally
+      {
+        await phone.context.close();
+      }
+    });
+
+    await check(`touch controls (${way}): Chicken Cannon has none, and drag-to-aim still works`, async () =>
+    {
+      const phone = await openOnPhone('chicken-cannon', landscape);
+      try
+      {
+        const l = await phone.layout();
+        assert(!l.shown && l.controls.length === 0, 'a mouse game should get no on-screen controls');
+        assert(l.scrollY === 0 && l.game.y < 1, `the game should be at the top: ${JSON.stringify(l.game)}`);
+        const read = () => phone.page.evaluate(() =>
+        {
+          const s = window.divPlayground.getState();
+          const g = (n) => Number(s.vm.globals.get(s.bytecode.globals[n]));
+          return { state: g('state'), ang: g('aim_ang'), pow: g('aim_pow'), left: s.runtime._mouse.buttons[0] };
+        });
+        await phone.page.waitForTimeout(1200);
+        const box = await phone.page.locator('#game').boundingBox();
+        const at = (x, y) => ({ x: box.x + x * box.width / 800, y: box.y + y * box.height / 480 });
+        if ((await read()).state !== 2)
+        {
+          await phone.tap(at(400, 200));
+          await phone.page.waitForTimeout(1500);
+        }
+        const started = await read();
+        assert(started.state === 2, `a tap should start the game: ${JSON.stringify(started)}`);
+        await phone.down(1, at(400, 300));
+        for (let i = 1; i <= 8; i++)
+        {
+          await phone.move(1, at(400 - i * 9, 300 - i * 14));
+          await phone.page.waitForTimeout(40);
+        }
+        await phone.page.waitForTimeout(300);
+        const held = await read();
+        await phone.up(1);
+        assert(held.left && (held.ang !== started.ang || held.pow !== started.pow), `a dragged finger should aim: ${JSON.stringify([started, held])}`);
+        assert(phone.problems.length === 0, phone.problems.join('\n'));
+      }
+      finally
+      {
+        await phone.context.close();
+      }
+    });
+  }
+
+  // The desktop page is unchanged: no controls without a touch, the three
+  // columns side by side.
+  await check('touch controls: none on a desktop, layout in three columns', async () =>
+  {
+    const page = await browser.newPage({ viewport: { width: 1400, height: 850 } });
+    try
+    {
+      await page.goto(`${BASE}/playground/#p=sparkroll`);
+      await page.waitForFunction(() => window.divPlayground?.getState()?.vm);
+      await page.mouse.click(1000, 300);
+      await page.waitForTimeout(500);
+      const l = await page.evaluate(() =>
+      {
+        const x = (s) => document.querySelector(s).getBoundingClientRect().x;
+        const root = document.querySelector('[data-divjs-touch]');
+        return { shown: !!root && root.style.display !== 'none', side: x('.sidebar'), editor: x('.editor-pane'), run: x('.run-pane'), height: document.documentElement.scrollHeight };
+      });
+      assert(!l.shown, 'a mouse click should not bring the touch controls up');
+      assert(l.side < l.editor && l.editor < l.run && l.height <= 850, `desktop layout: ${JSON.stringify(l)}`);
+    }
+    finally
+    {
+      await page.close();
+    }
+  });
+
   // Tab: a program that plays with it (Ghost Squad switches ghosts with it
   // once a round is on) keeps
   // the focus on the game; one that doesn't (Tutorial 2) lets Tab move on
@@ -1008,6 +1388,93 @@ try
     assert(status === 'Running', `playground status "${status}"`);
     assert(size[0] === 320 && size[1] === 240, `playground canvas ${size.join('x')}`);
     assert(blocksLink === '../blocks/', `the playground's Blocks link is ${blocksLink}`);
+  });
+
+  // EN | PT: the switch translates the page, the toolbox, the blocks and
+  // the lesson, and leaves the blocks, their places, the code and the
+  // running game as they were. The choice is kept; ?lang= overrides it.
+  await check('blocks: the language switch (EN | PT)', async () =>
+  {
+    const { STRINGS } = await import('../blocks/i18n.js');
+    const context = await browser.newContext();
+    const { page, problems } = await openBlocks(context);
+    const snapshot = () => page.evaluate(() =>
+    {
+      const ws = window.divBlocks.workspace();
+      return {
+        code: window.divBlocks.getCode(),
+        shown: document.getElementById('code').textContent,
+        // Every block, and where each stack sits (blocks inside a stack
+        // move with the width of the words before them).
+        blocks: ws.getAllBlocks(false).map((b) => `${b.id} ${b.type} ${b.getParent()?.id ?? '-'}`).sort().join('\n'),
+        stacks: ws.getTopBlocks(false).map((b) =>
+        {
+          const xy = b.getRelativeToSurfaceXY();
+          return `${b.id} ${Math.round(xy.x)},${Math.round(xy.y)}`;
+        }).sort().join('\n'),
+        running: window.divBlocks.getState()?.running ?? false,
+        processes: window.divBlocks.getState()?.vm.processManager.getAll().length ?? 0
+      };
+    });
+    const texts = () => page.evaluate(() =>
+    {
+      const ws = window.divBlocks.workspace();
+      const repeat = ws.getBlocksByType('div_repeat', false)[0];
+      return {
+        lang: document.documentElement.lang,
+        categories: [...document.querySelectorAll('.blocklyToolboxCategoryLabel')].map((n) => n.textContent),
+        title: document.getElementById('lessonTitle').textContent,
+        run: document.getElementById('runBtn').textContent,
+        status: document.getElementById('status').textContent,
+        block: repeat ? repeat.toString() : '',
+        pressed: document.querySelector('#langSwitch [aria-pressed="true"]').dataset.lang
+      };
+    });
+    await page.click('#lessonNav button[data-index="4"]');
+    await page.click('#solutionBtn');
+    await page.click('#runBtn');
+    await page.waitForTimeout(600);
+    const en = await texts();
+    const before = await snapshot();
+    await page.click('#langSwitch button[data-lang="pt"]');
+    await page.waitForTimeout(300);
+    const pt = await texts();
+    const after = await snapshot();
+    await page.reload();
+    await page.waitForFunction(() => window.divBlocks);
+    await page.waitForTimeout(300);
+    const reloaded = await texts();
+    const reloadedCode = await page.evaluate(() => window.divBlocks.getCode());
+    await page.goto(`${BASE}/blocks/?lang=en`);
+    await page.waitForFunction(() => window.divBlocks);
+    await page.waitForTimeout(300);
+    const forced = await texts();
+    await page.click('#langSwitch button[data-lang="pt"]');
+    await page.waitForTimeout(300);
+    const address = page.url();
+    await page.click('#langSwitch button[data-lang="en"]');
+    await page.waitForTimeout(300);
+    const back = await texts();
+    const backCode = await page.evaluate(() => window.divBlocks.getCode());
+    await context.close();
+    assert(problems.length === 0, problems.join('\n'));
+    assert(en.lang === 'en' && en.pressed === 'en' && en.run === STRINGS.en.RUN, `English at first: ${JSON.stringify(en)}`);
+    assert(pt.lang === 'pt-PT' && pt.pressed === 'pt', `lang ${pt.lang}, pressed ${pt.pressed}`);
+    assert(pt.categories.join() === 'Programa,Aparência,Movimento,Controlo,Sensores,Operadores,Variáveis,Som', `categories: ${pt.categories.join()}`);
+    assert(pt.block.startsWith('repete ') && pt.block.includes(' vezes'), `repeat block: ${pt.block}`);
+    assert(pt.title === `5. ${STRINGS.pt.LESSON_FREE_TITLE}`, `title "${pt.title}"`);
+    assert(pt.run === STRINGS.pt.RUN && pt.status === STRINGS.pt.STATUS_RUNNING, `run "${pt.run}", status "${pt.status}"`);
+    assert(before.running && after.running && after.processes >= before.processes - 3, 'the game should keep running');
+    assert(after.code === before.code && after.shown === before.shown, 'the code changed with the language');
+    assert(after.blocks === before.blocks, `the blocks changed:\n${before.blocks}\n---\n${after.blocks}`);
+    assert(after.stacks === before.stacks, `the stacks moved:\n${before.stacks}\n---\n${after.stacks}`);
+    assert(reloaded.lang === 'pt-PT' && reloaded.title === pt.title, `after a reload: ${reloaded.lang} "${reloaded.title}"`);
+    assert(reloadedCode === before.code, 'the code changed after the reload');
+    assert(forced.lang === 'en' && forced.run === STRINGS.en.RUN && forced.categories[0] === 'Program', `?lang=en: ${JSON.stringify(forced)}`);
+    assert(address.endsWith('?lang=pt'), `the address after switching is ${address}`);
+    assert(back.lang === 'en' && back.title === `5. ${STRINGS.en.LESSON_FREE_TITLE}` && back.block.startsWith('repeat '), `back to English: ${JSON.stringify(back)}`);
+    assert(back.categories.join() === 'Program,Looks,Motion,Control,Sensing,Operators,Variables,Sound', `categories: ${back.categories.join()}`);
+    assert(backCode === before.code, 'the code changed after switching back');
   });
 
   await check('blocks: phone width stacks the page without sideways scrolling', async () =>

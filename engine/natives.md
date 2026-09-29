@@ -34,9 +34,52 @@ Conventions used below:
 | `key_pressed` | `key` | 1/0 | 1 only in the frame after the key went down (edge); `key()` stays 1 while held. Not a DIV function. |
 | `mouse_x` | — | number | Cursor x in screen coordinates. Same as `mouse.x`. |
 | `mouse_y` | — | number | Cursor y in screen coordinates. Same as `mouse.y`. |
-| `mouse_button` | `button` | 1/0 | 1 while mouse button `button` (0 left, 1 middle, 2 right) is held during this frame; a click shorter than a frame still reads 1 for one frame. `mouse.left`, `mouse.middle`, `mouse.right` are the same buttons. |
+| `mouse_button` | `button` | 1/0 | 1 while mouse button `button` (0 left, 1 middle, 2 right) is held during this frame; a click shorter than a frame still reads 1 for one frame. `mouse.left`, `mouse.middle`, `mouse.right` are the same buttons. On a touch screen the first finger is the mouse: it moves the cursor and holds the left button while it touches. |
 | `__get_mouse_field` | `field` | value | Compiler-internal: reads `mouse.<field>` (graph, file, size…). |
 | `__set_mouse_field` | `field, value` | value | Compiler-internal: writes `mouse.<field>`. |
+
+## Touch and gamepads
+
+On a phone or tablet, `runDivDemo` lays on-screen controls over the game:
+a pad on the left (8 directions, the arrow keys) and up to 6 buttons on the
+right, plus up to 2 small menu buttons (Start/Back). They press keys, the
+same way a keyboard does, so `key()`, `key_pressed()` and online play need
+nothing else. Each finger works on its own: one on the pad and another on a
+button at the same time, a finger can slide from one button to the next,
+and a finger anywhere else on the game is still the mouse. They appear with
+the first touch and hide when a key is typed on a keyboard or a gamepad is
+used. The default layout is a d-pad, `A` (`z`), `B` (`x`) and `Start`
+(`Enter`).
+
+Gamepads (Xbox, PlayStation and other standard-mapping pads) press the same
+keys: the d-pad and left stick the pad's keys, A, B, X, Y, LB, RB the
+buttons in order (`z`, `x`, `c`, `space` when the layout has fewer), Start
+the first menu key (`Enter`) and Back/Select the second (`Esc`).
+
+A key list is a string of `key:Label` pairs separated by commas, such as
+`"z:A,x:B"` or `"space:Jump,esc:Pause"`. Keys are the key constants'
+names without the `_`: `a`…`z`, `0`…`9`, `left`, `space`, `enter`, `esc`,
+`ctrl`, `alt`, `shift`, `tab`… A key alone (`"space"`) shows its name.
+
+Each run starts from the page's layout (`runDivDemo({ touchLayout })`,
+below); these functions change it for the running program.
+
+| Name | Arguments | Returns | Description |
+|------|-----------|---------|-------------|
+| `touch_pad` | `kind[, keys]` | — | The pad: `0` none, `1` d-pad, `2` stick (drawn as a thumb stick; still 8 directions). `keys` is `"up,down,left,right"`, e.g. `"w,s,a,d"`; default the arrow keys. |
+| `touch_buttons` | `keys` | — | The buttons on the right, a key list of up to 6 (`""` none). With 4 or more they sit in two rows, in reading order. |
+| `touch_menu` | `keys` | — | The small buttons at the bottom, a key list of up to 2 (`""` none), e.g. `"enter:Start,esc:Back"`. |
+| `touch_controls` | `[state]` | — | `0` hides the controls (a mouse-only screen), `1` (default) shows them on a touch screen, `2` shows them even without a touch. |
+| `is_touch` | — | 1/0 | 1 on a phone or tablet (the main pointer is a finger), or once the screen has been touched. |
+
+The page chooses with `runDivDemo` options: `touchControls` (`'auto'`, the
+default, as above; `true` always shown; `false` never), `touchLayout`
+(`{ pad: 'dpad' | 'stick' | 'none', padKeys: 'up,down,left,right',
+buttons: 'z:A,x:B', menu: 'enter:Start' }`, missing fields take the
+default's; `false` for no controls, as in a mouse-only game), `touchArea`
+(the element whose bottom corners the controls sit in; default the canvas)
+and `gamepad` (default `true`). `runner.setTouchLayout(layout)` changes the
+layout for the next runs.
 
 ## Program, screen and timing
 
@@ -368,7 +411,7 @@ Constants: waveforms `wave_square`, `wave_triangle`, `wave_saw`,
 | Function | Arguments | Returns | Description |
 |---|---|---|---|
 | `load_wav` | `path` | sound | Loads a sound file the browser can decode (WAV, OGG, MP3), from the project files or a URL. The frame waits for it, like graphics. |
-| `load_pcm` | `path` | sound | DIV's name, same as `load_wav`. DIV's own `.pcm` format is **not** read yet (we have no sample file or description of it): convert such sounds to WAV. |
+| `load_pcm` | `path` | sound | DIV's name, same as `load_wav`. DIV's own `.pcm` format is **not** read yet: convert such sounds to WAV. |
 | `sfx` | `effect[, seed]` | sound | A ready-made effect (`sfx_coin`...); `seed` gives a variation. The same arguments give the same sound (no new sound per call). |
 | `sfx_tone` | `wave, freq, freq_end, ms[, volume]` | sound | A tone of `ms` milliseconds sliding from `freq` to `freq_end` Hz; `volume` 0-100 (default 50). |
 | `sound` | `sound[, volume, frequency]` | channel | Plays a sound, DIV style: `volume` and `frequency` 256 = as recorded (frequency 512 is an octave up and twice as fast). |
@@ -383,7 +426,3 @@ Constants: waveforms `wave_square`, `wave_triangle`, `wave_saw`,
 | `song_play` | `song[, loop]` | 1/0 | Plays the song (stopping the one playing), looping unless `loop` is 0. |
 | `song_stop` | — | 1 | Stops the music. |
 | `song_playing` | — | song | The song playing (or waiting for the player's first click), 0 for none. |
-
-To be confirmed: the DIV 2 scale used by `sound` and `change_sound` (256
-= normal volume and frequency) is from memory of the DIV manual, not
-checked against it; `play_sound` has the engine's own, documented scale.
