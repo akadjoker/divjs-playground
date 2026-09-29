@@ -49,10 +49,6 @@ DIV tutorials, and over 30 games to play, read and change.
 - **itch.io pages** (`itch/`) and the tools that make the GIFs and the uploads
   (`npm run capture`, `npm run itch`).
 
-Most of the games were written by AI coding agents working from the
-engine's reference - see the [DivJS README](https://github.com/akadjoker/divjs#made-by-ai-on-purpose)
-for why.
-
 ## The engine
 
 `engine/divjs.js` is the DivJS library's single-file build, pinned to a
