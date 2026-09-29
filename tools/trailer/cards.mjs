@@ -14,7 +14,8 @@
 // colour; `\n` starts a new line. `x` is the left edge, or the centre with
 // align 'center' (the default, x defaults to the middle); `y` is the top.
 // `at` is when typing starts (seconds), `cps` characters per second (0 =
-// all at once), `until` when the text goes (seconds, default never),
+// all at once; raised so no text takes longer than 0.3 s to type),
+// `until` when the text goes (seconds, default never),
 // `cursor` leaves DIV's blinking block after the last character.
 
 import { CanvasEngineRuntime } from '../../engine/divjs.js';
@@ -31,6 +32,7 @@ export const COLORS = {
 };
 
 const GLYPH_W = 6;
+const MAX_TYPING = 0.3;
 const GLYPH_H = 8;
 
 // The engine's 6x8 font, read through its own atlas builder with a stand-in
@@ -192,7 +194,11 @@ export function cardSource(screen)
     const scale = text.scale || 1;
     const color = text.color || COLORS.text;
     const shadow = text.shadow !== false;
-    const cps = text.cps ?? 30;
+    // Typed, but never slower than MAX_TYPING seconds a text: a title is
+    // readable almost at once.
+    const lines = text.text.split('\n');
+    const typing = lines.reduce((n, l) => n + l.replace(/[{}[\]]/g, '').length, 0) + 4 * (lines.length - 1);
+    const cps = (text.cps ?? 30) > 0 ? Math.max(text.cps ?? 30, typing / MAX_TYPING) : 0;
     const at = frames(text.at || 0);
     const until = text.until ? frames(text.until) : 999999;
     const lineHeight = (GLYPH_H + (text.gap ?? 3)) * scale;

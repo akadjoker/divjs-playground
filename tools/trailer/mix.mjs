@@ -100,7 +100,6 @@ export async function mixAudio(plan, { takesDir, workDir, musicTake, musicDelay,
   for (const seg of plan.segments)
   {
     const at = Math.round(seg.start * RATE);
-    const count = Math.round(seg.seconds * RATE);
     if (seg.take && seg.takeMeta.audio && seg.gameSound !== false)
     {
       if (!cache.has(seg.take))
@@ -108,8 +107,13 @@ export async function mixAudio(plan, { takesDir, workDir, musicTake, musicDelay,
         cache.set(seg.take, await readWav(join(takesDir, `${seg.take}.wav`)));
       }
       const sound = cache.get(seg.take);
-      const from = Math.round(seg.from * RATE);
-      stems.game.forEach((ch, c) => place(ch, c ? sound.right : sound.left, at, from, count, db(seg.gameGain || 0)));
+      let into = at;
+      for (const [from, seconds] of seg.pieces)
+      {
+        const n = Math.round(seconds * RATE);
+        stems.game.forEach((ch, c) => place(ch, c ? sound.right : sound.left, into, Math.round(from * RATE), n, db(seg.gameGain || 0)));
+        into += n;
+      }
     }
     if (seg.vo)
     {

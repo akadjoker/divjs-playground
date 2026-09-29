@@ -37,8 +37,8 @@ export function plan(name, { vo = null, voDir = null, log = console.log } = {})
       // cuts stay on the music.
       seconds = Math.max(seconds, Math.ceil((VO_LEAD + line.seconds + VO_TAIL) * 2) / 2);
     }
-    let from = seg.from || 0;
-    if (seg.take)
+    let from = seg.cuts ? seg.cuts[0][0] : seg.from || 0;
+    if (seg.take && !seg.cuts)
     {
       const room = TAKES[seg.take].seconds;
       if (from + seconds > room)
@@ -48,10 +48,36 @@ export function plan(name, { vo = null, voDir = null, log = console.log } = {})
       }
     }
     const out = { ...seg, from, start, seconds, vo: line };
+    out.pieces = pieces(out);
     start += seconds;
     return out;
   });
   return { name, format, segments, total: start };
+}
+
+// The parts of its take a segment plays, one after the other, as
+// [from, seconds]: `from` to the end of the segment, or its `cuts`
+// ([[from, to], ...] in take seconds, the last one running on as long as
+// needed) to leave out the dull bits of a take.
+function pieces(seg)
+{
+  if (!seg.cuts)
+  {
+    return [[seg.from, seg.seconds]];
+  }
+  const out = [];
+  let left = seg.seconds;
+  seg.cuts.forEach(([a, b], i) =>
+  {
+    const last = i === seg.cuts.length - 1;
+    const n = last || b === undefined ? left : Math.min(left, b - a);
+    if (n > 0)
+    {
+      out.push([a, n]);
+      left -= n;
+    }
+  });
+  return out;
 }
 
 // ── Layout ──────────────────────────────────────────────────────────────
@@ -114,6 +140,11 @@ function screenFor(seg, plan)
   {
     return null;
   }
+  if (seg.stack)
+  {
+    // Trailer: editor parts on the starry background, no panel.
+    return { ...base, texts: seg.texts || [] };
+  }
   // Trailer: a panel left of the footage with the name and the caption.
   const x = 12;
   let y = 24;
@@ -138,24 +169,35 @@ function layersFor(seg, plan, meta)
   {
     return [];
   }
-  const [wx, wy, ww, wh] = plan.format.window;
+  const [wx, wy, ww, wh] = seg.window || plan.format.window;
   if (TAKES[seg.take].screenshot)
   {
-    if (plan.format === FORMATS.trailer)
+    if (!seg.stack)
     {
       return [{ take: seg.take, crop: seg.crop || [0, 0, meta.width, meta.height], rect: [0, 0, ...plan.format.size], pixelArt: false }];
     }
-    // Short: parts of the page (`stack`) one above the other, as wide as
-    // the video or `outWidth`.
+    // Parts of the page (`stack`) one above the other, as wide as the
+    // window or `outWidth`. A part is a recorded region, or `box`: [x, y,
+    // w, h] from the region's top left corner (to zoom into a line of it).
     const parts = seg.stack.map((part) =>
     {
       const [rx, ry, rw, rh] = meta.regions[part.region];
-      const x = rx + (part.left || 0);
-      const w = Math.min(rw - (part.left || 0), part.width || rw);
-      const h = part.height ? Math.min(rh, part.height) : rh;
-      const y = part.height ? Math.round(ry + (part.at ?? 0.5) * (rh - h)) : ry;
+      let crop;
+      if (part.box)
+      {
+        const [bx, by, bw, bh] = part.box;
+        crop = [rx + bx, ry + by, bw, bh];
+      }
+      else
+      {
+        const x = rx + (part.left || 0);
+        const w = Math.min(rw - (part.left || 0), part.width || rw);
+        const h = part.height ? Math.min(rh, part.height) : rh;
+        const y = part.height ? Math.round(ry + (part.at ?? 0.5) * (rh - h)) : ry;
+        crop = [x, y, w, h];
+      }
       const width = part.outWidth || ww;
-      return { crop: [x, y, w, h], width, height: Math.round(h * width / w / 2) * 2 };
+      return { crop, width, height: Math.round(crop[3] * width / crop[2] / 2) * 2 };
     });
     const gap = 12;
     const total = parts.reduce((n, p) => n + p.height, 0) + gap * (parts.length - 1);
@@ -244,11 +286,22 @@ async function renderSegment(seg, plan, takesDir, file)
   seg.layers.forEach((layer, i) =>
   {
     const n = i + 1;
-    args.push('-ss', seg.from.toFixed(4), '-t', String(seg.seconds), '-i', join(takesDir, `${layer.take}.mkv`));
+    let pick = '';
+    if (seg.pieces.length > 1)
+    {
+      // The pieces of the take back to back (frame-exact, from its start).
+      const spans = seg.pieces.map(([a, n]) => `gte(t\\,${(a - 0.001).toFixed(4)})*lt(t\\,${(a + n - 0.001).toFixed(4)})`);
+      pick = `select=${spans.join('+')},setpts=N/(${FPS}*TB),`;
+      args.push('-i', join(takesDir, `${layer.take}.mkv`));
+    }
+    else
+    {
+      args.push('-ss', seg.from.toFixed(4), '-t', String(seg.seconds), '-i', join(takesDir, `${layer.take}.mkv`));
+    }
     const [cx, cy, cw, ch] = layer.crop;
     const [x, y, w, h] = layer.rect;
     const scaler = layer.pixelArt ? 'neighbor' : 'lanczos';
-    filters.push(`[${n}:v]crop=${cw}:${ch}:${cx}:${cy},scale=${w}:${h}:flags=${scaler},setsar=1[l${n}]`);
+    filters.push(`[${n}:v]${pick}crop=${cw}:${ch}:${cx}:${cy},scale=${w}:${h}:flags=${scaler},setsar=1[l${n}]`);
     let out = `o${n}`;
     filters.push(`[${last}][l${n}]overlay=${x}:${y}:eof_action=repeat[${out}]`);
     if (layer.border)

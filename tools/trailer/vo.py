@@ -4,12 +4,15 @@ them back with faster-whisper.
 
     <python> tools/trailer/vo.py --video short --out <dir> [--voice bm_george]
                                  [--speed 1.0] [--lines tools/trailer/vo_lines.json]
+                                 [--whisper small.en]
 
 <python> is a Python that has the `kokoro`, `soundfile` and `faster-whisper`
 packages (a virtualenv outside the repository; `npm run trailer` finds it
 in $DIVJS_VO_PYTHON or --vo-python). Writes <dir>/<segment>.wav (24 kHz
 mono) and <dir>/vo.json: each line's text, duration and transcription,
-with a similarity score (1 = the words match).
+with a similarity score (1 = the words match). A line can be
+{"text": ..., "say": ...} to speak it differently from how it is written,
+with Kokoro's [word](/phonemes/) markup where a word needs help.
 """
 
 import argparse
@@ -30,6 +33,11 @@ def words(text):
     return re.sub(r"[^a-z0-9' ]+", ' ', text).split()
 
 
+def plain(spoken):
+    """The words of a line to speak, without Kokoro's [word](/phonemes/) markup."""
+    return re.sub(r'\[([^\]]+)\]\(/[^)]*/\)', r'\1', spoken)
+
+
 def trim(audio, threshold=0.004, pad=0.06):
     """Cuts the silence before and after the speech (keeps `pad` s)."""
     loud = np.where(np.abs(audio) > threshold)[0]
@@ -48,6 +56,7 @@ def main():
     parser.add_argument('--voice', default='bm_george')
     parser.add_argument('--speed', type=float, default=1.0)
     parser.add_argument('--lines', default=os.path.join(here, 'vo_lines.json'))
+    parser.add_argument('--whisper', default='small.en')
     args = parser.parse_args()
 
     with open(args.lines, encoding='utf-8') as f:
@@ -57,7 +66,7 @@ def main():
     from kokoro import KPipeline
     pipeline = KPipeline(lang_code=args.voice[0], repo_id='hexgrad/Kokoro-82M')
     from faster_whisper import WhisperModel
-    whisper = WhisperModel('base.en', device='cpu', compute_type='int8')
+    whisper = WhisperModel(args.whisper, device='cpu', compute_type='int8')
 
     report = {'voice': args.voice, 'speed': args.speed, 'lines': {}}
     for segment, line in lines.items():
@@ -68,7 +77,8 @@ def main():
         path = os.path.join(args.out, f'{segment}.wav')
         sf.write(path, audio, RATE, subtype='FLOAT')
         heard = ' '.join(s.text.strip() for s in whisper.transcribe(path, language='en', beam_size=5)[0])
-        score = difflib.SequenceMatcher(None, words(text), words(heard)).ratio()
+        # Heard as written, or as said ("It is back" for "It's back").
+        score = max(difflib.SequenceMatcher(None, words(t), words(heard)).ratio() for t in (text, plain(spoken)))
         report['lines'][segment] = {'text': text, 'said': spoken, 'seconds': round(len(audio) / RATE, 3), 'heard': heard, 'match': round(score, 3)}
         print(f'{segment}: {len(audio) / RATE:.2f} s, match {score:.2f} - heard "{heard}"', file=sys.stderr)
 

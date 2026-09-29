@@ -100,7 +100,14 @@ export const TAKES = {
   strike: game('strike'),
   'bad-cat': game('bad-cat'),
   'chicken-cannon': game('chicken-cannon'),
-  'net-tanks': game('net-tanks'),
+  // Both tanks on the move and firing all the time (one keyboard: blue
+  // WASD + Space, red arrows + Enter).
+  'net-tanks': game('net-tanks', 8, {
+    steps: [['down', 'w'], ['down', 'ArrowUp'], ['wait', 400], ['press', 'Space'], ['hold', 'a', 250], ['press', 'Enter'],
+      ['hold', 'ArrowRight', 250], ['wait', 300], ['press', 'Space'], ['press', 'Enter'], ['hold', 'd', 500], ['hold', 'ArrowLeft', 400],
+      ['wait', 300], ['press', 'Space'], ['press', 'Enter'], ['wait', 400], ['press', 'Space'], ['press', 'Enter'], ['hold', 'a', 300],
+      ['wait', 300], ['press', 'Space'], ['press', 'Enter'], ['wait', 600], ['up', 'w'], ['up', 'ArrowUp']]
+  }),
   'wobbly-walker': game('wobbly-walker'),
   'ghost-squad': game('ghost-squad'),
   racer: game('racer'),
@@ -108,13 +115,14 @@ export const TAKES = {
   'vector-asteroids': game('vector-asteroids', 10, { steps: asteroidsPlay() }),
 
   // The playground: Chicken Cannon fires a chicken into the fort, its
-  // gravity is changed from 600 to 200 in the code, Run, and the same
-  // shot (aimed with the keys this time) floats high over it. Regions (take pixels) for the layouts:
+  // gravity is changed from 600 to 1800 in the code, Run, and the same
+  // shot (aimed with the keys this time) drops short. The fort takes
+  // longer to build under the new gravity: the segments cut that out. Regions (take pixels) for the layouts:
   // code (the editor), line (the GRAV line), screen (the game).
   'live-edit': {
     ...UI,
     url: 'playground/#p=chicken-cannon',
-    seconds: 10,
+    seconds: 11,
     ready: async (ctx) =>
     {
       await inGame(ctx);
@@ -153,18 +161,19 @@ export const TAKES = {
       const line = await region(page, '#trailer-line', UI.scale);
       // The first shot, as the game was written.
       await run([['drag', 400, 300, 330, 190, 400], ['wait', 300]]);
-      // While it flies: select 600 and type 200.
+      // While it flies: select 600 and type 1800.
       await pointTo(ctx, found, 24);
       await page.mouse.dblclick(ctx.mouse.x, ctx.mouse.y);
       // The pointer steps aside so the new number can be read.
       await pointTo(ctx, { x: found.x + 40, y: found.y + 34, width: 0, height: 0 }, 8);
       await clock.wait(150);
-      for (const ch of '200')
+      for (const ch of '1800')
       {
         await page.keyboard.type(ch);
         await clock.wait(160);
       }
-      await clock.wait(300);
+      // See the first shot land.
+      await clock.wait(900);
       const runButton = await page.$eval('#runBtn', (b) =>
       {
         const r = b.getBoundingClientRect();
@@ -182,7 +191,7 @@ export const TAKES = {
       });
       await pointTo(ctx, title, 30);
       await page.mouse.click(ctx.mouse.x, ctx.mouse.y);
-      await run([['wait', 1100], ['hold', 'ArrowRight', 1100], ['press', 'Space'], ['wait', 3000]]);
+      await run([['wait', 2300], ['hold', 'ArrowRight', 1100], ['press', 'Space'], ['wait', 2500]]);
       return { code, screen, line };
     }
   },
@@ -258,6 +267,11 @@ const clip = (id, beats, from, say = '', extra = {}) => ({ id: extra.id || id, t
 // A text screen.
 const card = (id, beats, texts, extra = {}) => ({ id, beats, texts, ...extra });
 
+// The live edit without the fort being built again (see its take).
+const LIVE_CUTS = [[0.3, 3.55], [5.2]];
+// The net match without the pauses after each hit.
+const NET_CUTS = [[0.2, 1.6], [2.6, 3.6], [4.0]];
+
 export const VIDEOS = {
   short: {
     format: 'short',
@@ -270,18 +284,21 @@ export const VIDEOS = {
       clip('ghost-squad', 4, 3.0, '', { focus: [270, 240] }),
       clip('wobbly-walker', 4, 0.3, '', { zoom: 3, focus: [240, 240] }),
       clip('racer', 4, 1.9, '', { zoom: 3, focus: [260, 240] }),
-      clip('vector-asteroids', 4, 2.5, '', { zoom: 3, focus: [300, 220] }),
-      clip('net-tanks', 4, 0.2, 'Online\nmultiplayer.', { bottom: '[No server.]', hit: 'powerup' }),
+      clip('vector-asteroids', 4, 2.5),
+      clip('net-tanks', 4, 0.2, 'Online\nmultiplayer.', { bottom: '[No server.]', hit: 'powerup', cuts: NET_CUTS }),
       {
-        id: 'live', beats: 16, take: 'live-edit', from: 0.4, say: 'Change any\ngame {live}', music: 'calm', hit: 'blip',
-        stack: [{ region: 'code', width: 330, height: 100 }, { region: 'screen' }]
+        // The GRAV line zoomed in (5x: the number is as big as the
+        // captions), the game under it. The cuts leave out the fort being
+        // built again.
+        id: 'live', beats: 16, take: 'live-edit', cuts: LIVE_CUTS, say: 'Change any\ngame {live}', music: 'calm', hit: 'blip',
+        stack: [{ region: 'line', box: [20, -26, 216, 74] }, { region: 'screen' }]
       },
       {
         id: 'blocks', beats: 10, take: 'blocks', from: 0.5, say: 'New to code?\nUse {blocks}.', hit: 'blip',
         stack: [{ region: 'workspace', left: 170, width: 800, height: 356, at: 0 }, { region: 'screen', outWidth: 624 }]
       },
       card('end', 12, [
-        { text: 'DivJS', scale: 5, y: 92, color: '#2dd4bf', cps: 12 },
+        { text: 'DivJS', scale: 5, y: 92, color: '#2dd4bf', cps: 12, cursor: true },
         { text: 'Free and\nopen source', scale: 2, y: 172, at: 0.9, cps: 30 },
         { text: 'akadjoker.github.io\n/divjs-playground', scale: 1, y: 236, at: 1.6, cps: 0, color: '#ffcb6b' }
       ], { music: 'end', hit: 'coin' })
@@ -302,17 +319,21 @@ export const VIDEOS = {
       clip('ghost-squad', 6, 2.8),
       clip('wobbly-walker', 6, 0.2),
       clip('racer', 6, 1.6),
-      clip('vector-asteroids', 6, 2.5, '', { zoom: 3, focus: [300, 220] }),
+      clip('vector-asteroids', 6, 2.5),
       card('net-card', 6, [
         { text: 'Online multiplayer.', scale: 3, y: 70, cps: 36 },
         { text: '[No server.]', scale: 3, y: 112, at: 1.1, cps: 24, cursor: true }
       ], { hit: 'powerup' }),
-      clip('net-tanks', 6, 0.2, 'Two browsers,\npeer to peer.'),
+      clip('net-tanks', 6, 0.2, 'Two browsers,\npeer to peer.', { cuts: NET_CUTS }),
       card('live-card', 6, [
         { text: 'Change any', scale: 3, y: 70, cps: 30 },
         { text: 'game {live}', scale: 3, y: 112, at: 0.6, cps: 30, cursor: true }
       ], { music: 'calm', hit: 'blip' }),
-      { id: 'live', beats: 24, take: 'live-edit', from: 0.4, ui: true, crop: [300, 100, 1600, 900] },
+      {
+        // The GRAV line with its number and comment (2.7x), the game under it.
+        id: 'live', beats: 18, take: 'live-edit', cuts: LIVE_CUTS, window: [0, 0, 1920, 1080],
+        stack: [{ region: 'line', box: [-70, -26, 620, 74], outWidth: 1700 }, { region: 'screen', outWidth: 1200 }]
+      },
       card('blocks-card', 6, [
         { text: 'New to code?', scale: 3, y: 70, cps: 30 },
         { text: 'Start with {blocks}.', scale: 3, y: 112, at: 0.8, cps: 30, cursor: true }

@@ -1,18 +1,28 @@
 {
   "short": {
-    "hook": "Remember DIV Games Studio?",
-    "bomber": "It's back, and it runs in your browser.",
-    "bad-cat": "Every game here is plain DIV code.",
-    "net-tanks": "Online multiplayer, with no server.",
-    "live": "Change any game, press run, and play it again.",
-    "blocks": "New to code? Start with blocks.",
+    "hook": {
+      "text": "Remember DIV Games Studio?",
+      "say": "Remember DIV [Games](/ɡˈAːmz/) Studio?"
+    },
+    "bomber": {
+      "text": "It's back.",
+      "say": "It is back."
+    },
+    "strike": "And it runs in your browser.",
+    "bad-cat": "Every game is plain DIV code.",
+    "net-tanks": "Online multiplayer. No server.",
+    "live": "Change any game, live. Edit a number, press run.",
+    "blocks": "New to code? Use blocks.",
     "end": {
       "text": "DivJS. Free and open source.",
       "say": "Div, J S. Free and open source."
     }
   },
   "trailer": {
-    "hook": "Remember DIV Games Studio?",
+    "hook": {
+      "text": "Remember DIV Games Studio?",
+      "say": "Remember DIV [Games](/ɡˈAːmz/) Studio?"
+    },
     "fighter": "It's back. And now it runs in your browser.",
     "bomber": "The same DIV language. Processes, frames, the lot.",
     "strike": "Every game here is plain DIV code.",
