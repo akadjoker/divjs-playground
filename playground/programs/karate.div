@@ -20,6 +20,11 @@ PROGRAM karate;
 //   bouncing balls with a shield, break planks with a timed chop);
 //   four backdrops generated in code (Fuji, harbour, temple, bamboo).
 // * No asset files: every graphic is drawn at start-up with gfx_*.
+// * Sound made by the engine: swings, hits (half and full points),
+//   blocks, jumps, somersaults, landings and falls, the referee's whistle
+//   and gong, balls and planks in the bonus rounds, and a chiptune for
+//   the title, the bouts and the bonus rounds, with win / lose / perfect
+//   / game over jingles. M turns the music off and on.
 // ---------------------------------------------------------------------
 
 GLOBAL
@@ -146,6 +151,18 @@ GLOBAL
   belt_name[6] = "WHITE", "YELLOW", "ORANGE", "GREEN", "BLUE", "BROWN", "BLACK";
   stage_name[3] = "MOUNT FUJI", "THE HARBOUR", "THE TEMPLE", "BAMBOO GROVE";
 
+  // --- Sound: every effect and song is made by the engine (no files) -------
+  music_on = 1;                    // M turns the music off and on
+  mus_want = 0;                    // looping song of the current screen (0 = none)
+  snd_k = 0;                       // variation counter (the game's rand() is left alone)
+  clock_s = -1;
+  sn_wh[2]; sn_hit[3]; sn_thump[2]; sn_crack = 0; sn_block = 0; sn_tickb = 0;
+  sn_jump = 0; sn_roll = 0; sn_land = 0; sn_floor = 0; sn_slap = 0;
+  sn_whistle = 0; sn_stab1 = 0; sn_stab2 = 0; sn_gong = 0; sn_gong2 = 0; sn_chime = 0;
+  sn_buzz = 0; sn_tense = 0; sn_tick = 0;
+  sn_boing = 0; sn_clang = 0; sn_wood = 0; sn_ouch = 0; sn_ok = 0;
+  sng_title = 0; sng_bout[1]; sng_bonus = 0; j_win = 0; j_lose = 0; j_perfect = 0; j_over = 0;
+
 // ======================================================================
 // Tables
 // ======================================================================
@@ -261,6 +278,7 @@ BEGIN
   FOR j = 0 TO NP - 1 src[b + j] = cur[b + j]; END
   WHILE (src[b + 2] - pose[p + 2] > 180) src[b + 2] -= 360; END
   WHILE (src[b + 2] - pose[p + 2] < -180) src[b + 2] += 360; END
+  IF (s < 2) snd_key(s, an_m[s], k); END
   RETURN 0;
 END
 
@@ -1010,6 +1028,7 @@ BEGIN
   IF ((dm == M_BLOCK AND zone < 2) OR (dm == M_LBLOCK AND zone == 2))
     n_blocks++;
     spark(px, py, 1);
+    snd_strike(px, 1, 0);
     popword(g_lab[10], px, py - 30);
     start_move(a, M_RECOIL);
     RETURN 0;
@@ -1019,6 +1038,7 @@ BEGIN
   IF (mv_val[m] == 2 AND (q >= 0.35 OR is_attack(dm))) val = 2; END
   award(a, val, zone, m);
   spark(px, py, 0);
+  snd_strike(px, 0, val);
   RETURN 1;
 END
 
@@ -1120,12 +1140,14 @@ END
 
 FUNCTION say(i, t);
 BEGIN
+  snd_call(i);
   bub_g = g_bub[i]; bub_t = t;
   RETURN 0;
 END
 
 FUNCTION show_banner(g, t);
 BEGIN
+  snd_banner(g);
   ban_g = g; ban_t = t;
   RETURN 0;
 END
@@ -1154,6 +1176,7 @@ BEGIN
   ai_counter = min4(8 + level * 10, 90, 90, 90);
   put_screen(0, g_bg[stage]);
   n_stages++;
+  clock_s = -1;
   RETURN 0;
 END
 
@@ -1173,6 +1196,7 @@ BEGIN
       END
       IF (sudden == 0)
         bout_t--;
+        IF (bout_t > 0 AND bout_t <= 300 AND bout_t % 60 == 0 AND bout_t / 60 != clock_s) clock_s = bout_t / 60; play_sound(sn_tick, 40, 100, 0); END
         IF (bout_t <= 0)
           bout_t = 0; say(4, 70);
           IF (f_sc[0] == f_sc[1])
@@ -1239,6 +1263,7 @@ FUNCTION play_bout();
 BEGIN
   setup_bout();
   state = 1; st_t = 0;
+  music(sng_bout[stage % 2], 1);
   WHILE (state != 9)
     bout_step();
     IF (state == 2)
@@ -1265,16 +1290,18 @@ BEGIN
   vx = side * spd; vy = 0;
   LOOP
     vy += 0.16; fx += vx; fy += vy;
-    IF (fy > GY - 10) fy = GY - 10; vy = -bv; END
+    IF (fy > GY - 10) fy = GY - 10; vy = -bv; play_sound(sn_boing, 35, 90 + vary(20), clamp((fx - 320) / 4, -80, 80)); END
     x = fx; y = fy; angle += vx * 3000;
     IF (hit == 0)
       b = 0;
       IF (fget_distance(fx, fy, sh_x, sh_y) < 21)
         hit = 1; vx = -vx * 1.4; vy = -4 - rand(0, 3); bn_ok++;
         spark(fx, fy, 1);
+        snd(sn_clang, 60, 90 + vary(20), fx); snd(sn_block, 40, 100, fx);
       ELSE
         IF (segd(fx, fy, pt_x[0], pt_y[0], pt_x[1], pt_y[1]) < 18 OR fget_distance(fx, fy, pt_x[2], pt_y[2]) < 18)
           bn_miss++; spark(fx, fy, 0);
+          snd(sn_hit[vary(4)], 75, 90, fx); snd(sn_ouch, 45, 100, fx);
           start_move(0, M_HITBODY);
           bn_alive--;
           RETURN;
@@ -1400,8 +1427,10 @@ BEGIN
         IF (pressed == 22)
           IF (pk_pow >= pk_need)
             pk_broken = pk_n; score += pk_n * 150; spark(pk_x, pk_y - 10, 0); popword(g_lab[7], pk_x, pk_y - 70);
+            snd(sn_wood, 80, 90 + vary(15), pk_x); snd(sn_thump[0], 80, 90, pk_x); snd(sn_crack, 60, 80, pk_x);
           ELSE
             spark(pk_x, pk_y - 20, 1); popword(g_lab[8], pk_x, pk_y - 70);
+            snd(sn_thump[1], 80, 100, pk_x); snd(sn_ouch, 60, 90 + vary(15), pk_x);
           END
         END
       END
@@ -1435,6 +1464,7 @@ BEGIN
   sk_vis[2] = 0;
   sk_x[0] = 250; sk_x[1] = 390;
   start_move(0, M_READY); start_move(1, M_READY);
+  music(sng_title, 1);
   t = 0;
   REPEAT
     t++;
@@ -1452,7 +1482,7 @@ BEGIN
     IF ((t / 30) % 2) text(214, 158, "ENTER / SPACE  -  ONE PLAYER VS CPU"); END
     text(214, 176, "2              -  TWO PLAYERS");
     set_color('#ffe0a0');
-    text(12, 344, "P1 ARROWS + SPACE/CTRL/Z    P2 WASD + Q    ESC quits a bout");
+    text(12, 344, "P1 ARROWS + SPACE/CTRL/Z    P2 WASD + Q    ESC quits a bout    M music");
     set_color('#d0c8b8');
     text(12, 356, "NO FIRE: walk, up jump, up-diagonal somersault, down crouch, down-back block, down-fwd low block");
     text(12, 368, "FIRE +  none front kick, fwd lunge punch, up high kick, up-fwd flying kick, up-back roundhouse,");
@@ -1461,6 +1491,7 @@ BEGIN
   UNTIL (key_pressed(_enter) OR key_pressed(_space) OR key_pressed(_1) OR key_pressed(_2))
   players = 1;
   IF (key_pressed(_2)) players = 2; END
+  play_sound(sn_ok, 60, 100, 0);
   RETURN 0;
 END
 
@@ -1502,6 +1533,200 @@ BEGIN
 END
 
 // ======================================================================
+// Sound: effects and music, all made by the engine (sfx, sfx_tone and
+// the song sequencer). Sound never changes the game: it only reads the
+// state, and its variations come from its own counter, not rand().
+// ======================================================================
+
+FUNCTION make_sounds();
+PRIVATE i;
+BEGIN
+  sn_wh[0] = sfx_tone(wave_noise, 3600, 1500, 90, 24);      // punch
+  sn_wh[1] = sfx_tone(wave_noise, 2800, 900, 140, 28);      // kick
+  sn_wh[2] = sfx_tone(wave_noise, 2200, 500, 200, 32);      // big kick, chop
+  FOR i = 0 TO 3 sn_hit[i] = sfx(sfx_hit, 80 + i); END
+  FOR i = 0 TO 2 sn_thump[i] = sfx_tone(wave_sine, 170 - i * 18, 38, 190, 90); END
+  sn_crack = sfx_tone(wave_noise, 5200, 900, 70, 55);
+  sn_block = sfx_tone(wave_square, 1400, 520, 60, 28);
+  sn_tickb = sfx_tone(wave_noise, 7000, 2600, 45, 38);
+  sn_jump = sfx_tone(wave_noise, 900, 2400, 90, 14);
+  sn_roll = sfx_tone(wave_noise, 1400, 3600, 360, 22);
+  sn_land = sfx_tone(wave_sine, 140, 60, 80, 45);
+  sn_floor = sfx_tone(wave_sine, 120, 32, 330, 95);
+  sn_slap = sfx(sfx_hit, 3);
+  // the referee and the bout
+  sn_whistle = sfx_tone(wave_square, 2800, 2650, 240, 20);
+  sn_stab1 = sfx_tone(wave_saw, 440, 880, 380, 36);
+  sn_stab2 = sfx_tone(wave_square, 660, 1320, 380, 28);
+  sn_gong = sfx_tone(wave_sine, 220, 212, 1500, 60);
+  sn_gong2 = sfx_tone(wave_triangle, 331, 318, 1400, 26);
+  sn_chime = sfx_tone(wave_sine, 1320, 1318, 520, 34);
+  sn_buzz = sfx_tone(wave_square, 190, 180, 800, 36);
+  sn_tense = sfx_tone(wave_saw, 110, 131, 900, 34);
+  sn_tick = sfx_tone(wave_square, 880, 880, 60, 26);
+  // bonus rounds and menus
+  sn_boing = sfx_tone(wave_sine, 170, 420, 120, 34);
+  sn_clang = sfx_tone(wave_triangle, 1500, 1380, 320, 34);
+  sn_wood = sfx_tone(wave_noise, 1000, 150, 360, 65);
+  sn_ouch = sfx_tone(wave_square, 420, 190, 260, 30);
+  sn_ok = sfx(sfx_coin, 7);
+
+  // title: koto-like pentatonic theme
+  sng_title = song_new(100);
+  song_track(sng_title, inst_pluck,
+    "E5 - F5 - A5 - - - B5 - C6 - B5 - A5 - | F5 - - - E5 - - - - - - - . . . . |" +
+    "A4 - B4 - C5 - - - E5 - F5 - E5 - C5 - | B4 - - - A4 - - - - - - - . . . . ", 40);
+  song_track(sng_title, inst_bass,
+    "A3 - - - - - - - E3 - - - - - - - | F3 - - - - - - - E3 - - - - - - - ", 45);
+  song_track(sng_title, inst_pad,
+    "A4 - - - - - - - - - - - - - - - | F4 - - - - - - - E4 - - - - - - - ", 20);
+  song_track(sng_title, inst_drums, "k . . . . . h . s . . . . . h . ", 26);
+  // bouts on Mount Fuji and at the temple: D minor
+  sng_bout[0] = song_new(124);
+  song_track(sng_bout[0], inst_square,
+    "D5 - . D5 F5 - E5 - D5 - A4 - - - . . | D5 - . D5 F5 - A5 - Bb5 - A5 - F5 - E5 - |" +
+    "F5 - . F5 A5 - G5 - F5 - D5 - - - . . | E5 - F5 - E5 - C5 - D5 - - - - - . . ", 26);
+  song_track(sng_bout[0], inst_bass,
+    "D3 . D3 . A3 . D3 . D3 . D3 . A3 . C4 . | Bb2 . Bb2 . F3 . Bb2 . C3 . C3 . G3 . C3 . ", 52);
+  song_track(sng_bout[0], inst_drums, "k . h . s . h . k . h k s . h . ", 36);
+  // in the harbour and the bamboo grove: E minor
+  sng_bout[1] = song_new(132);
+  song_track(sng_bout[1], inst_pluck,
+    "E5 - G5 - A5 - B5 - D6 - B5 - A5 - | G5 - E5 - D5 - E5 - - - - - . . . . |" +
+    "E5 - G5 - A5 - B5 - D6 - E6 - D6 - | B5 - A5 - G5 - A5 - B5 - - - - - - - ", 36);
+  song_track(sng_bout[1], inst_bass,
+    "E3 . E3 B3 E3 . E3 B3 E3 . E3 B3 D3 . D3 A3 | C3 . C3 G3 C3 . C3 G3 D3 . D3 A3 B2 . B2 F#3 ", 52);
+  song_track(sng_bout[1], inst_drums, "k . h h s . h . k k h . s . h h ", 36);
+  // bonus rounds: cheerful C major
+  sng_bonus = song_new(140);
+  song_track(sng_bonus, inst_square,
+    "C5 E5 G5 E5 C5 E5 G5 E5 | D5 F5 A5 F5 D5 F5 A5 F5 | E5 G5 C6 G5 E5 G5 C6 G5 | D5 - G5 - B4 - - - ", 24);
+  song_track(sng_bonus, inst_bass,
+    "C3 . G3 . C3 . G3 . | D3 . A3 . D3 . A3 . | E3 . C4 . E3 . C4 . | G3 . D4 . G3 . . . ", 50);
+  song_track(sng_bonus, inst_drums, "k . h . s . h . ", 34);
+  // jingles
+  j_win = song_new(132);
+  song_track(j_win, inst_square, "A4 . C5 . E5 . A5 - - - E5 . A5 - - - - - - - ", 36);
+  song_track(j_win, inst_bass, "A3 - - - - - - - D3 - - - E3 - A3 - - - - - - - ", 52);
+  song_track(j_win, inst_drums, "k . . . k . . . s . . . k . s . k . . . . . . . ", 40);
+  j_lose = song_new(100);
+  song_track(j_lose, inst_triangle, "E5 - - D5 - - C5 - - B4 - - - - A4 - - - - - - - ", 42);
+  song_track(j_lose, inst_bass, "A3 - - - - - F3 - - - - - E3 - - - A2 - - - - - - - ", 50);
+  j_perfect = song_new(160);
+  song_track(j_perfect, inst_square, "C5 E5 G5 C6 E5 G5 C6 E6 G6 - - - - - . . ", 32);
+  song_track(j_perfect, inst_bass, "C4 - - - G3 - - - C4 - - - - - . . ", 50);
+  j_over = song_new(90);
+  song_track(j_over, inst_triangle, "C5 - - B4 - - Bb4 - - A4 - - - - - - ", 42);
+  song_track(j_over, inst_bass, "F3 - - - - - E3 - - - - - A2 - - - ", 50);
+  music_volume(40);
+  RETURN 0;
+END
+
+// A number 0..n-1 that changes on every call (no rand(): the game's
+// random numbers stay the same with and without sound).
+FUNCTION vary(n);
+BEGIN
+  snd_k = (snd_k * 73 + 19) % 1009;
+  RETURN snd_k % n;
+END
+
+// Plays s at screen x px (panned), quieter on the title.
+FUNCTION snd(s, vol, pitch, px);
+BEGIN
+  IF (state == 0) vol = vol * 35 / 100; END
+  play_sound(s, vol, pitch, clamp((px - 320) / 4, -80, 80));
+  RETURN 0;
+END
+
+// Music: sng loops (lp 1) or plays once (a jingle). M mutes all of it.
+FUNCTION music(sng, lp);
+BEGIN
+  IF (lp)
+    IF (mus_want == sng AND song_playing() == sng) RETURN 0; END
+    mus_want = sng;
+  ELSE
+    mus_want = 0;
+  END
+  IF (music_on) song_play(sng, lp); END
+  RETURN 0;
+END
+
+// Key k of fighter s's move starts: swings, jumps, landings, falls.
+FUNCTION snd_key(s, m, k);
+BEGIN
+  IF (is_attack(m) AND k == mv_hit[m])
+    IF (m == M_PUNCH OR m == M_LPUNCH) snd(sn_wh[0], 60, 90 + vary(20), sk_x[s]); RETURN 0; END
+    IF (m == M_ROUND OR m == M_BKICK OR m == M_FLYK OR m == M_HKICK) snd(sn_wh[2], 62, 88 + vary(20), sk_x[s]); RETURN 0; END
+    snd(sn_wh[1], 60, 90 + vary(20), sk_x[s]);
+    RETURN 0;
+  END
+  IF (m == M_CHOP AND k == 1) snd(sn_wh[2], 70, 80, sk_x[s]); END
+  IF ((m == M_JUMP OR m == M_FLYK) AND k == 1) snd(sn_jump, 40, 90 + vary(20), sk_x[s]); END
+  IF ((m == M_SOMF OR m == M_SOMB) AND k == 1) snd(sn_roll, 45, 90 + vary(20), sk_x[s]); END
+  IF ((m == M_JUMP AND k == 2) OR ((m == M_SOMF OR m == M_SOMB) AND k == 3) OR (m == M_FLYK AND k == 4))
+    snd(sn_land, 45, 90 + vary(20), sk_x[s]);
+  END
+  IF (m == M_FALL AND k == 2) snd(sn_floor, 85, 90 + vary(20), sk_x[s]); snd(sn_slap, 45, 60 + vary(15), sk_x[s]); END
+  RETURN 0;
+END
+
+// A strike lands: blocked, a half point or a full point.
+FUNCTION snd_strike(px, blk, val);
+BEGIN
+  IF (blk)
+    snd(sn_block, 60, 90 + vary(20), px); snd(sn_tickb, 55, 90 + vary(20), px);
+    RETURN 0;
+  END
+  snd(sn_hit[vary(4)], 80 + val * 5, 115 - val * 20 + vary(12), px);
+  snd(sn_thump[vary(3)], 55 + val * 20, 92 + vary(16), px);
+  IF (val == 2) snd(sn_crack, 70, 90 + vary(20), px); END
+  RETURN 0;
+END
+
+// The referee's calls (the speech bubble i): whistle, gong, chimes.
+FUNCTION snd_call(i);
+BEGIN
+  IF (state == 0) RETURN 0; END
+  IF (i == 0) play_sound(sn_stab1, 60, 100, 0); play_sound(sn_stab2, 50, 100, 0); play_sound(sn_gong, 40, 150, 0); END
+  IF (i == 1 OR i == 4) play_sound(sn_whistle, 50, 100, 0); play_sound(sn_whistle, 40, 106, 0); END
+  IF (i == 2) play_sound(sn_chime, 55, 100, 0); END
+  IF (i == 3) play_sound(sn_chime, 55, 100, 0); play_sound(sn_chime, 45, 150, 0); play_sound(sn_gong, 60, 100, 0); END
+  IF (i == 4) play_sound(sn_buzz, 45, 100, 0); END
+  IF (i == 5) play_sound(sn_tense, 55, 100, 0); END
+  IF (i == 6 OR i == 7) play_sound(sn_gong, 70, 90, 0); play_sound(sn_gong2, 60, 90, 0); END
+  IF (i == 8) play_sound(sn_gong, 45, 70, 0); play_sound(sn_gong2, 35, 70, 0); END
+  IF (i == 9) play_sound(sn_tense, 45, 80, 0); END
+  RETURN 0;
+END
+
+// Banners: results and bonus rounds.
+FUNCTION snd_banner(g);
+BEGIN
+  IF (g == g_lab[1] OR g == g_lab[3] OR g == g_lab[4]) music(j_win, 0); END
+  IF (g == g_lab[2]) music(j_lose, 0); END
+  IF (g == g_lab[5]) music(sng_bonus, 1); END
+  IF (g == g_lab[6]) music(j_perfect, 0); END
+  IF (g == g_lab[0]) music(j_over, 0); END
+  RETURN 0;
+END
+
+// M: music off / on, on every screen.
+PROCESS music_key();
+BEGIN
+  LOOP
+    IF (key_pressed(_m))
+      music_on = 1 - music_on;
+      IF (music_on)
+        IF (mus_want) song_play(mus_want); END
+      ELSE
+        song_stop();
+      END
+    END
+    FRAME;
+  END
+END
+
+// ======================================================================
 // Main
 // ======================================================================
 
@@ -1513,6 +1738,7 @@ BEGIN
   FOR i = 0 TO 20 rand(0, 99); END
   init_moves();
   make_graphics();
+  make_sounds();
   // one backdrop per frame (each is a few thousand drawing calls)
   FOR i = 0 TO 3
     g_bg[i] = new_graphic(640, 400);
@@ -1532,6 +1758,7 @@ BEGIN
   END
   bubble(); banner(); digit(0); digit(1);
   dot(0, 0); dot(0, 1); dot(1, 0); dot(1, 1);
+  music_key();
   LOOP
     logo_view();
     title();

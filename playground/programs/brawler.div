@@ -21,8 +21,15 @@ PROGRAM brawler;
 //   side, knife guys throw knives from range, thugs pick up bats, hurt
 //   enemies back off. Each stage ends with a boss with its own moves.
 //
+// * Sound made by the engine: swings, punches and kicks that climb with the
+//   combo, bat bonks, knife stabs, whip cracks, grabs, throws, bodies
+//   hitting the floor, breaking crates, glass and metal, pick-ups, the
+//   boss's roar and slam, and a chiptune per stage theme, the boss, the
+//   title, plus stage / clear / game over jingles.
+//
 // Controls: P1 arrows + Z/Ctrl punch, X/Alt jump, C kick, Z+X back elbow.
 //           P2 (press Q to join) WASD + Q punch, E jump, R kick.
+//           M music off / on.
 
 GLOBAL
   SW = 640; SH = 400;
@@ -147,6 +154,16 @@ GLOBAL
   g_sky = 0; g_far = 0; g_mid = 0; g_street = 0; g_logo = 0; g_go = 0; g_clear = 0; g_over = 0;
   g_stg = 0; gen_i = 0;
   p2x = 0; p2y = 0; np_x = 0; np_y = 0; np_k = -1; ne_x = 0; ne_y = 0; ne_st = 0; ne_d = 9999; hp1 = 0; p1x = 0; p1y = 0; p1st = 0; p1h = 0; p1w = -1; e_hp = 0; state = 0;   // mirrors for the tests
+  // ---- sound: every effect and song is made by the engine (no files)
+  music_on = 1; mus_want = 0;     // M turns the music off and on
+  snd_k = 0;                      // variation counter (the game's rand() is left alone)
+  snd_n = 0;                      // impacts played this frame (at most 3)
+  s_wh[3]; s_hit[3]; s_thump[2]; s_crack = 0; s_bonk = 0; s_stab = 0; s_whip = 0;
+  s_ugh[1]; s_die[2]; sx_jump = 0; s_land = 0; s_floor = 0; sx_grab = 0; s_knife = 0;
+  s_wood = 0; s_glass = 0; s_metal = 0; s_crash = 0; s_boom = 0; s_bite = 0; s_heal = 0;
+  s_coin = 0; sx_pick = 0; s_lift = 0; s_roar = 0; s_charge = 0; s_go = 0; s_tick = 0;
+  s_join = 0; s_start = 0; s_lost = 0;
+  sng_title = 0; sng_stage[2]; sng_boss = 0; j_stage = 0; j_clear = 0; j_over = 0;
 
 // =====================================================================
 // Small helpers
@@ -690,6 +707,7 @@ BEGIN
   IF (f_team[t] == 0 AND god) dmg = 0; END
   IF (f_ty[t] == 6 AND kd == 0 AND f_rage[t]) dmg = dmg * 7 / 10; END
   f_hp[t] = f_hp[t] - dmg; f_flash[t] = 6;
+  snd_hit(t, m, dmg, a);
   burst(f_x[t] - dir * 8, f_y[t] - f_h[t] - 50 * tp_s[f_ty[t]] / 100, 6, 0);
   stop_t = mv_stop[m];
   IF (f_team[a] == 0)
@@ -704,7 +722,7 @@ BEGIN
   // being grabbed or grabbing ends when hit (except by the one who holds you)
   IF (f_st[t] == S_GRAB AND f_part[t] >= 0) set_state(f_part[t], S_HURT, C_HURT); f_part[t] = -1; END
   IF (f_st[t] == S_HELD AND f_part[t] != a) IF (f_part[t] >= 0) set_state(f_part[t], S_IDLE, C_IDLE); END END
-  IF (f_hp[t] <= 0) kd = 1; f_hp[t] = 0; END
+  IF (f_hp[t] <= 0) kd = 1; f_hp[t] = 0; snd_down(t); END
   // bruisers shrug off light blows, the boss too unless raging
   IF (kd == 0 AND (f_ty[t] == 4 OR f_ty[t] == 6))
     f_armor[t]++;
@@ -765,6 +783,7 @@ END
 FUNCTION hit_prop(t, d);
 BEGIN
   br_hp[t] = br_hp[t] - d; br_shk[t] = 8; stop_t = 3;
+  snd_prop(t);
   burst(br_x[t], br_y[t] - 20, 5, 1);
   IF (br_hp[t] <= 0)
     br_on[t] = 0; n_breaks++; burst(br_x[t], br_y[t] - 20, 14, 1); shake = fmax(shake, 3);
@@ -818,10 +837,10 @@ PRIVATE i;
 BEGIN
   FROM i = 0 TO 23;
     IF (it_on[i] AND it_st[i] == 0 AND abs(it_x[i] - f_x[s]) < 26 AND abs(it_y[i] - f_y[s]) < 14 AND (f_wpn[s] < 0 OR it_k[i] <= 1 OR it_k[i] == 5))
-      IF (it_k[i] == 0) f_hp[s] = fmin(f_mhp[s], f_hp[s] + 35); it_on[i] = 0; END   // apple
-      IF (it_k[i] == 1) f_hp[s] = f_mhp[s]; it_on[i] = 0; END                        // roast chicken
-      IF (it_k[i] == 5) add_score(s, 1000); it_on[i] = 0; END                        // cash
-      IF (it_on[i]) it_st[i] = 1; it_own[i] = s; f_wpn[s] = i; END                   // a weapon
+      IF (it_k[i] == 0) f_hp[s] = fmin(f_mhp[s], f_hp[s] + 35); it_on[i] = 0; snd(s_bite, 60, 110, f_x[s]); snd(s_heal, 40, 120, f_x[s]); END   // apple
+      IF (it_k[i] == 1) f_hp[s] = f_mhp[s]; it_on[i] = 0; snd(s_bite, 60, 90, f_x[s]); snd(s_heal, 60, 100, f_x[s]); END                        // roast chicken
+      IF (it_k[i] == 5) add_score(s, 1000); it_on[i] = 0; snd(s_coin, 60, 100, f_x[s]); END                        // cash
+      IF (it_on[i]) it_st[i] = 1; it_own[i] = s; f_wpn[s] = i; snd(sx_pick, 55, 90 + vary(20), f_x[s]); END                   // a weapon
       n_picks++; set_state(s, S_PICK, C_PICK);
       RETURN 1;
     END
@@ -831,6 +850,7 @@ BEGIN
       IF (br_on[i] AND br_k[i] == 2 AND abs(br_x[i] - f_x[s]) < 34 AND abs(br_y[i] - f_y[s]) < 14)
         br_on[i] = 0; f_wpn[s] = spawn_item(4, f_x[s], f_y[s], 0);
         IF (f_wpn[s] >= 0) it_st[f_wpn[s]] = 1; it_own[f_wpn[s]] = s; END
+        snd(s_lift, 55, 100, f_x[s]);
         n_picks++; set_state(s, S_PICK, C_PICK);
         RETURN 1;
       END
@@ -863,6 +883,7 @@ BEGIN
     w = -1; IF (f_wpn[s] >= 0) w = it_k[f_wpn[s]]; END
     IF (jp AND w != 4)
       set_state(s, S_JUMP, C_JUMP); f_vh[s] = 6.4; f_vx[s] = mx * 2.6; f_vy[s] = my * 1.2; f_jk[s] = 0;
+      snd(sx_jump, 40, 90 + vary(20), f_x[s]);
       IF (mx) f_face[s] = mx; END
       RETURN 0;
     END
@@ -887,6 +908,7 @@ BEGIN
             dx = (f_x[e] - f_x[s]) * f_face[s];
             IF (dx > 0 AND dx < 34 AND abs(f_y[e] - f_y[s]) < 10)
               set_state(s, S_GRAB, C_GRAB); f_part[s] = e; f_knee[s] = 0; n_grabs++;
+              snd(sx_grab, 65, 95 + vary(10), f_x[e]);
               set_state(e, S_HELD, C_HELD); f_part[e] = s; drop_weapon(e);
               IF (f_ai[e] == 1) f_ai[e] = 0; END
               RETURN 0;
@@ -902,6 +924,7 @@ BEGIN
   END
   IF (st == S_JUMP AND pp AND f_jk[s] == 0 AND f_h[s] > 4)                  // jump kick
     f_jk[s] = 1; f_clip[s] = C_JKICK; f_mid[s] = f_mid[s] + 1;
+    swing(s, 4);
   END
   IF (st == S_GRAB)
     e = f_part[s];
@@ -929,6 +952,8 @@ BEGIN
       f_x[s] = f_x[s] + f_vx[s]; f_y[s] = f_y[s] + f_vy[s];
     CASE S_ATK
       m = f_move[s];
+      IF (t == fmax(1, mv_a0[m] - 2)) swing(s, m); END
+      IF (m == 14 AND t >= 8 AND t < 56 AND t % 12 == 0) snd(s_wh[2], 45, 75 + vary(10), f_x[s]); END
       IF (m <= 3 AND t < 5) f_x[s] = f_x[s] + f_face[s] * 0.7; END
       IF (m == 13 AND t >= 10 AND t < 56) f_x[s] = f_x[s] + f_face[s] * (5 + f_rage[s]); END
       IF (m == 14 AND t >= 8 AND t < 56)
@@ -943,6 +968,7 @@ BEGIN
           f_face[e] = -dir; f_bounce[e] = 0; f_part[e] = -1; f_x[e] = f_x[s] + dir * 6;
           IF (dir != f_face[s]) f_face[s] = dir; END
           f_part[s] = -1; n_throws++; add_score(s, 200); shake = 4;
+          snd(s_wh[2], 70, 80, f_x[s]); snd(sx_grab, 50, 80, f_x[s]);
         END
         f_vx[s] = 0;
       END
@@ -958,16 +984,17 @@ BEGIN
       IF (m == 9 AND t == 4)                             // throw a knife
         i = f_wpn[s];
         IF (i < 0) i = spawn_item(3, f_x[s], f_y[s], 40); END
-        IF (i >= 0) throw_item(s, i, f_face[s] * 7, 0); it_life[i] = 70; END
+        IF (i >= 0) throw_item(s, i, f_face[s] * 7, 0); it_life[i] = 70; snd(s_knife, 50, 90 + vary(20), f_x[s]); END
         IF (f_team[s] == 0) n_knife++; ELSE n_ekthrow++; END
       END
-      IF (m == 16 AND t == 10 AND f_wpn[s] >= 0) throw_item(s, f_wpn[s], f_face[s] * 6, 2.5); n_barrel++; END
+      IF (m == 16 AND t == 10 AND f_wpn[s] >= 0) throw_item(s, f_wpn[s], f_face[s] * 6, 2.5); n_barrel++; snd(s_wh[2], 70, 70, f_x[s]); END
       IF (m == 17)                                       // the boss's leap and slam
-        IF (t == 1) f_vh[s] = 8.5; f_vx[s] = 0; IF (f_tgt[s] >= 0) f_vx[s] = (f_x[f_tgt[s]] - f_x[s]) / 42.0; END END
+        IF (t == 1) f_vh[s] = 8.5; f_vx[s] = 0; IF (f_tgt[s] >= 0) f_vx[s] = (f_x[f_tgt[s]] - f_x[s]) / 42.0; END snd(s_roar, 45, 120, f_x[s]); snd(sx_jump, 60, 60, f_x[s]); END
         IF (f_vh[s] > -50 AND (f_h[s] > 0 OR t == 1))
           f_h[s] = f_h[s] + f_vh[s]; f_vh[s] = f_vh[s] - 0.4; f_x[s] = f_x[s] + f_vx[s];
           IF (f_h[s] <= 0)
             f_h[s] = 0; f_vh[s] = -99; shake = 12; stop_t = 6; burst(f_x[s], f_y[s], 16, 2);
+            snd(s_boom, 85, 80, f_x[s]); snd(s_floor, 90, 70, f_x[s]);
             FROM e = 0 TO 1; IF (f_on[e] AND hittable(e) AND abs(f_x[e] - f_x[s]) < 90 AND abs(f_y[e] - f_y[s]) < 40 AND f_h[e] < 10)
               apply_hit(e, 17, sgn(f_x[e] - f_x[s]), s); END END
           END
@@ -976,7 +1003,7 @@ BEGIN
       IF (m != 17 AND t >= mv_a0[m] AND t <= mv_a1[m] AND m != 6 AND m != 9 AND m != 16 AND m != 5)
         IF (hit_scan(s, m) > 0 AND f_team[s] == 0) f_chain[s] = 1;
           IF (m == 8 AND f_wpn[s] >= 0) it_dur[f_wpn[s]]--; n_bat++;
-            IF (it_dur[f_wpn[s]] <= 0) burst(hand_x(s), f_y[s] - 40, 10, 1); it_on[f_wpn[s]] = 0; f_wpn[s] = -1; END
+            IF (it_dur[f_wpn[s]] <= 0) burst(hand_x(s), f_y[s] - 40, 10, 1); it_on[f_wpn[s]] = 0; f_wpn[s] = -1; snd(s_wood, 70, 120, f_x[s]); END
           END
         END
       END
@@ -994,7 +1021,7 @@ BEGIN
     CASE S_JUMP
       f_x[s] = f_x[s] + f_vx[s]; f_y[s] = f_y[s] + f_vy[s]; f_h[s] = f_h[s] + f_vh[s]; f_vh[s] = f_vh[s] - 0.38;
       IF (f_jk[s] == 1 AND f_h[s] > 3) f_move[s] = 4; f_face[s] = f_face[s]; hit_scan(s, 4); END
-      IF (f_h[s] <= 0) f_h[s] = 0; set_state(s, S_PICK, C_PICK); f_t[s] = 6; f_vx[s] = 0; f_vy[s] = 0; END
+      IF (f_h[s] <= 0) f_h[s] = 0; set_state(s, S_PICK, C_PICK); f_t[s] = 6; f_vx[s] = 0; f_vy[s] = 0; snd(s_land, 45, 90 + vary(20), f_x[s]); END
     CASE S_HURT
       f_x[s] = f_x[s] + f_vx[s]; f_vx[s] = f_vx[s] * 0.8;
       IF (t >= 18) set_state(s, S_IDLE, C_IDLE); END
@@ -1012,6 +1039,7 @@ BEGIN
         f_h[s] = 0; burst(f_x[s] - f_face[s] * 30, f_y[s], 5, 2);
         IF (f_bounce[s] == 0)
           f_bounce[s] = 1; f_vh[s] = 2.4; f_vx[s] = f_vx[s] * 0.5; shake = fmax(shake, 3);
+          IF (snd_n < 4) snd_n++; snd(s_floor, 70 + f_thrown[s] * 25, 85 + vary(25) - (f_ty[s] == 6) * 20, f_x[s]); IF (f_thrown[s]) snd(s_crash, 40, 130, f_x[s]); END END
           IF (f_thrown[s]) f_hp[s] = f_hp[s] - 20; shake = 7; stop_t = 5; IF (f_hp[s] < 0) f_hp[s] = 0; END END
           f_thrown[s] = 0;
         ELSE
@@ -1212,7 +1240,10 @@ BEGIN
         END
         IF (it_h[i] <= 0)
           it_h[i] = 0; it_st[i] = 0; it_harm[i] = 0; it_life[i] = 900;
-          IF (it_k[i] == 4 AND it_own[i] >= 0) burst(it_x[i], it_y[i] - 14, 16, 1); shake = fmax(shake, 3); it_on[i] = 0; END
+          IF (it_k[i] == 4 AND it_own[i] >= 0) burst(it_x[i], it_y[i] - 14, 16, 1); shake = fmax(shake, 3); it_on[i] = 0; snd(s_crash, 70, 100, it_x[i]); snd(s_wood, 60, 80, it_x[i]);
+          ELSE
+            IF (it_k[i] == 3) snd(s_metal, 30, 200, it_x[i]); ELSE snd(s_land, 30, 150, it_x[i]); END
+          END
         END
         IF (it_x[i] < cam - 60 OR it_x[i] > cam + 700) it_on[i] = 0; END
       END
@@ -1318,6 +1349,7 @@ BEGIN
   spawn_fighter(s, 6, 1, cam + 700, (BT + BB) / 2);
   f_hp[s] = 240 + stage * 60; f_mhp[s] = f_hp[s]; f_side[s] = 1; f_face[s] = -1; f_ai[s] = 1;
   boss_slot = s; boss_mhp = f_mhp[s];
+  music(sng_boss, 1); snd(s_roar, 70, 100, cam + 600);
 END
 
 FUNCTION director();
@@ -1359,6 +1391,7 @@ BEGIN
   boss_hp = 0; IF (boss_slot >= 0) IF (f_on[boss_slot]) boss_hp = f_hp[boss_slot]; END END
   IF (boss_slot >= 0 AND boss_hp > 0 AND boss_hp < boss_mhp / 2 AND f_rage[boss_slot] == 0)
     f_rage[boss_slot] = 1; waves_left = 1;                // enraged: calls for help once
+    snd(s_roar, 80, 90, f_x[boss_slot]);
   END
   IF (give >= 0) spawn_item(give, f_x[0], f_y[0], 4); give = -1; END
   // test hook: jump to a zone
@@ -1386,11 +1419,11 @@ BEGIN
     IF (waves_left > 0 AND n_alive <= 1 + (zi == nz)) spawn_wave(); END
     IF (waves_left <= 0 AND n_alive == 0)
       locked = 0; zones_cleared++;
-      IF (zi == nz) stage_clear = 1; ELSE go_t = 200; banner(g_go, 560, 150, 200, 1); END
+      IF (zi == nz) stage_clear = 1; ELSE go_t = 200; banner(g_go, 560, 150, 200, 1); play_sound(s_go, 50, 100, 60); END
       zi++;
     END
   END
-  IF (go_t > 0) go_t--; END
+  IF (go_t > 0) go_t--; IF (go_t == 188) play_sound(s_go, 50, 134, 60); END END
   // scroll planes, with screen shake
   IF (shake > 0) shake = shake - 0.5; END
   rcx = int(cam + rand(-10, 10) * shake * 0.1); rcy = 4 + int(rand(-10, 10) * shake * 0.04);
@@ -1407,6 +1440,7 @@ BEGIN
     IF (p == 0 OR in2)
       IF (f_on[p] == 0 OR f_st[p] == S_DEAD)
         IF (f_on[p] AND f_st[p] == S_DEAD AND f_t[p] >= 59) f_on[p] = 0; lost_lives++; drop_weapon(p);
+          play_sound(s_tick, 40, 60, 0);
           IF (p == 0) lives1--; resp1 = 60; ELSE lives2--; resp2 = 60; END
         END
       END
@@ -1416,7 +1450,7 @@ BEGIN
       END
     END
   END
-  IF (in2 == 0 AND (key_pressed(_q) OR key_pressed(_e))) in2 = 1; lives2 = 3; sc2 = 0; spawn_player(1); END   // player 2 joins in
+  IF (in2 == 0 AND (key_pressed(_q) OR key_pressed(_e))) in2 = 1; lives2 = 3; sc2 = 0; spawn_player(1); play_sound(s_join, 60, 100, 40); END   // player 2 joins in
 END
 
 FUNCTION bar(bx, by, w, v, mx, c);
@@ -1478,6 +1512,216 @@ BEGIN
 END
 
 // =====================================================================
+// Sound: effects and music, all made by the engine (sfx, sfx_tone and
+// the song sequencer). Sound never changes the game: it only reads the
+// state, and its variations come from its own counter, not rand().
+// =====================================================================
+FUNCTION make_sounds();
+PRIVATE i;
+BEGIN
+  // swings: light (jab), medium (cross, elbow), heavy (uppercut, kick, bat), whip
+  s_wh[0] = sfx_tone(wave_noise, 3600, 1600, 80, 24);
+  s_wh[1] = sfx_tone(wave_noise, 3000, 1000, 120, 28);
+  s_wh[2] = sfx_tone(wave_noise, 2200, 500, 180, 32);
+  s_wh[3] = sfx_tone(wave_noise, 5000, 2600, 150, 26);
+  FROM i = 0 TO 3; s_hit[i] = sfx(sfx_hit, 60 + i); END
+  FROM i = 0 TO 2; s_thump[i] = sfx_tone(wave_sine, 170 - i * 18, 38, 190, 90); END
+  s_crack = sfx_tone(wave_noise, 5200, 900, 70, 55);
+  s_bonk = sfx_tone(wave_triangle, 440, 170, 130, 60);
+  s_stab = sfx_tone(wave_noise, 7500, 2800, 110, 40);
+  s_whip = sfx_tone(wave_noise, 9000, 2200, 60, 60);
+  s_ugh[0] = sfx_tone(wave_square, 260, 170, 150, 28);
+  s_ugh[1] = sfx_tone(wave_square, 220, 140, 180, 28);
+  FROM i = 0 TO 2; s_die[i] = sfx_tone(wave_saw, 620 - i * 90, 140, 650, 26); END
+  sx_jump = sfx_tone(wave_noise, 900, 2400, 90, 14);
+  s_land = sfx_tone(wave_sine, 140, 60, 80, 45);
+  s_floor = sfx_tone(wave_sine, 120, 32, 330, 95);
+  sx_grab = sfx_tone(wave_noise, 900, 450, 80, 45);
+  s_knife = sfx_tone(wave_sine, 2600, 1700, 260, 20);
+  s_wood = sfx_tone(wave_noise, 900, 140, 300, 60);
+  s_glass = sfx_tone(wave_noise, 6200, 1500, 320, 42);
+  s_metal = sfx_tone(wave_triangle, 1250, 1180, 380, 28);
+  s_crash = sfx(sfx_explosion, 21);
+  s_boom = sfx(sfx_explosion, 5);
+  s_bite = sfx_tone(wave_noise, 1500, 600, 70, 45);
+  s_heal = sfx(sfx_powerup, 3);
+  s_coin = sfx(sfx_coin, 4);
+  sx_pick = sfx_tone(wave_triangle, 300, 620, 70, 30);
+  s_lift = sfx_tone(wave_square, 150, 260, 200, 24);
+  s_roar = sfx_tone(wave_saw, 150, 85, 900, 42);
+  s_charge = sfx_tone(wave_noise, 400, 1300, 700, 34);
+  s_go = sfx_tone(wave_square, 880, 880, 120, 28);
+  s_tick = sfx_tone(wave_square, 700, 700, 60, 26);
+  s_join = sfx(sfx_coin, 9);
+  s_start = sfx(sfx_powerup, 11);
+  s_lost = sfx_tone(wave_triangle, 620, 140, 800, 40);
+
+  // title: a moody E minor synth theme
+  sng_title = song_new(118);
+  song_track(sng_title, inst_saw,
+    "E5 - - - B4 - - - D5 - - - E5 - G5 - | F#5 - - - D5 - - - A4 - - - - - - - |" +
+    "E5 - - - B4 - - - D5 - - - E5 - G5 - | A5 - - - G5 - F#5 - E5 - - - - - - - ", 20);
+  song_track(sng_title, inst_bass,
+    "E3 . E3 E4 . E3 E3 . E3 . E3 E4 . E3 D4 . | D3 . D3 D4 . D3 D3 . D3 . D3 D4 . D3 A3 . |" +
+    "C3 . C3 C4 . C3 C3 . C3 . C3 C4 . C3 G3 . | B2 . B2 B3 . B2 B2 . B2 . B2 B3 . D3 F#3 . ", 55);
+  song_track(sng_title, inst_pad,
+    "E4 - - - - - - - - - - - - - - - | D4 - - - - - - - - - - - - - - - |" +
+    "C4 - - - - - - - - - - - - - - - | B3 - - - - - - - - - - - - - - - ", 22);
+  song_track(sng_title, inst_drums, "k . h . s . h k . k h . s . h h ", 36);
+  // downtown at night: funky A minor
+  sng_stage[0] = song_new(136);
+  song_track(sng_stage[0], inst_square,
+    "A4 - C5 - . A4 C5 D5 . . E5 - D5 - C5 - | A4 - C5 - . A4 C5 D5 E5 - G5 - E5 - D5 - |" +
+    "A4 - C5 - . A4 C5 D5 . . E5 - D5 - C5 - | F5 - E5 - D5 - C5 - B4 - - - G#4 - - - ", 30);
+  song_track(sng_stage[0], inst_bass,
+    "A3 . A3 . A4 . G3 . A3 . A3 . A4 . C4 . | F3 . F3 . F4 . E3 . E3 . E3 . E4 . G#3 . ", 58);
+  song_track(sng_stage[0], inst_drums, "k . h . s . h k . k h . s . h h ", 44);
+  // the docks: heavy D minor
+  sng_stage[1] = song_new(124);
+  song_track(sng_stage[1], inst_square,
+    "D5 - - - F5 - - - E5 - - - C5 - - - | D5 - - - A4 - - - - - - - . . . . |" +
+    "D5 - - - F5 - - - G5 - - - A5 - - - | Bb5 - - - A5 - - - F5 - - - E5 - - - ", 28);
+  song_track(sng_stage[1], inst_bass,
+    "D3 . . D3 . . D3 . D3 . . D3 . . C3 . | D3 . . D3 . . D3 . D3 . . D3 . . A2 . |" +
+    "Bb2 . . Bb2 . . Bb2 . Bb2 . . Bb2 . . C3 . | A2 . . A2 . . A2 . A2 . . A2 . . A2 . ", 60);
+  song_track(sng_stage[1], inst_drums, "k . . k s . . . k . k . s . . h ", 46);
+  // the subway: fast E minor
+  sng_stage[2] = song_new(150);
+  song_track(sng_stage[2], inst_saw,
+    "E5 D5 E5 . B4 . E5 . D5 E5 G5 . E5 . D5 . | C5 B4 C5 . G4 . C5 . B4 C5 E5 . C5 . B4 . |" +
+    "A4 G4 A4 . E4 . A4 . G4 A4 C5 . A4 . G4 . | B4 - - - D5 - - - F#5 - - - B5 - - - ", 20);
+  song_track(sng_stage[2], inst_bass,
+    "E3 . E4 . E3 . E4 . E3 . E4 . E3 . E4 . | C3 . C4 . C3 . C4 . C3 . C4 . C3 . C4 . |" +
+    "A2 . A3 . A2 . A3 . A2 . A3 . A2 . A3 . | B2 . B3 . B2 . B3 . B2 . B3 . B2 . B3 . ", 55);
+  song_track(sng_stage[2], inst_drums, "k . h h s . h h k k h h s . h h ", 42);
+  // the boss: chromatic menace
+  sng_boss = song_new(158);
+  song_track(sng_boss, inst_square,
+    "E4 F4 E4 . E4 F4 G4 . E4 F4 E4 . Bb4 - A4 - | E4 F4 E4 . E4 F4 G4 . A4 G4 F4 . E4 - D#4 - ", 30);
+  song_track(sng_boss, inst_bass, "E3 E3 . E3 E3 . E3 . E3 E3 . E3 F3 . F3 . ", 60);
+  song_track(sng_boss, inst_pad, "E4 - - - - - - - - - - - - - - - | F4 - - - - - - - - - - - - - - - ", 18);
+  song_track(sng_boss, inst_drums, "k h s h k k s h k h s h k k s s ", 48);
+  // jingles
+  j_stage = song_new(140);
+  song_track(j_stage, inst_square, "A4 . C5 . E5 . A5 - - - G5 . A5 - - - - - ", 36);
+  song_track(j_stage, inst_bass, "A3 - - - - - - - E3 - - - A3 - - - - - ", 55);
+  song_track(j_stage, inst_drums, "k . . . k . . . s . . . k . s . k . ", 46);
+  j_clear = song_new(150);
+  song_track(j_clear, inst_square, "C5 . E5 . G5 . C6 . E6 - - - D6 . E6 - - - - - - - ", 34);
+  song_track(j_clear, inst_bass, "C4 - - - - - - - G3 - - - - - - - C4 - - - - - - - ", 55);
+  song_track(j_clear, inst_drums, "k . h . s . h . k . h . s . k k s - - - . . . . ", 42);
+  j_over = song_new(90);
+  song_track(j_over, inst_triangle, "E5 - - D5 - - C5 - - B4 - - - - A4 - - - - - - - ", 42);
+  song_track(j_over, inst_bass, "A3 - - - - - F3 - - - - - E3 - - - A2 - - - - - - - ", 50);
+  music_volume(40);
+END
+
+// A number 0..n-1 that changes on every call (no rand(): the game's
+// random numbers stay the same with and without sound)
+FUNCTION vary(n);
+BEGIN
+  snd_k = (snd_k * 73 + 19) % 1009;
+  RETURN snd_k % n;
+END
+
+// Plays s at world x wx, panned by where it is on screen
+FUNCTION snd(s, vol, pitch, wx);
+BEGIN
+  play_sound(s, vol, pitch, clamp((wx - cam - 320) / 4, -80, 80));
+END
+
+// Music: sng loops (lp 1) or plays once (a jingle); M mutes all of it
+FUNCTION music(sng, lp);
+BEGIN
+  IF (lp)
+    IF (mus_want == sng AND song_playing() == sng) RETURN 0; END
+    mus_want = sng;
+  ELSE
+    mus_want = 0;
+  END
+  IF (music_on) song_play(sng, lp); END
+END
+
+FUNCTION music_stop();
+BEGIN
+  mus_want = 0; song_stop();
+END
+
+// Called once a frame by the screens: M turns the music off and on
+FUNCTION music_keys();
+BEGIN
+  snd_n = 0;
+  IF (key_pressed(_m))
+    music_on = 1 - music_on;
+    IF (music_on) IF (mus_want) song_play(mus_want); END ELSE song_stop(); END
+  END
+END
+
+// The looping song of this stage: the boss's once the boss is out
+FUNCTION stage_music();
+BEGIN
+  IF (boss_slot >= 0) music(sng_boss, 1); ELSE music(sng_stage[theme], 1); END
+END
+
+// Fighter s swings move m (the whoosh comes just before the blow)
+FUNCTION swing(s, m);
+PRIVATE v;
+BEGIN
+  v = 55; IF (f_team[s]) v = 42; END
+  IF (m == 0 OR m == 15) snd(s_wh[0], v, 90 + vary(20), f_x[s]); END
+  IF (m == 1 OR m == 7 OR m == 10) snd(s_wh[1], v, 90 + vary(20), f_x[s]); END
+  IF (m == 2 OR m == 3 OR m == 4 OR m == 8 OR m == 12) snd(s_wh[2], v + 5, 88 + vary(20), f_x[s]); END
+  IF (m == 11) snd(s_wh[3], v, 95 + vary(10), f_x[s]); END
+  IF (m == 13) snd(s_charge, 55, 100, f_x[s]); snd(s_roar, 30, 130, f_x[s]); END
+  IF (m == 14) snd(s_wh[2], 50, 80, f_x[s]); END
+END
+
+// Move m of attacker a hits fighter t for dmg (at most 3 impacts a frame)
+FUNCTION snd_hit(t, m, dmg, a);
+PRIVATE px, w;
+BEGIN
+  IF (snd_n >= 3) RETURN 0; END
+  snd_n++; px = f_x[t];
+  w = 0; IF (dmg >= 10) w = 1; END IF (dmg >= 14 OR mv_kd[m]) w = 2; END
+  IF (m == 8) snd(s_bonk, 75, 90 + vary(20), px); snd(s_thump[vary(3)], 70, 100, px); RETURN 0; END
+  IF (m == 9 OR m == 10) snd(s_stab, 70, 90 + vary(20), px); snd(s_hit[vary(4)], 40, 140, px);
+  ELSE
+    IF (m == 11) snd(s_whip, 75, 90 + vary(20), px);
+    ELSE
+      IF (m == 16 OR m == 17) snd(s_crash, 60, 110, px); END
+      // the combo climbs a little in pitch
+      snd(s_hit[vary(4)], 65 + w * 12, 118 - w * 20 + vary(12) + fmin(combo_n, 6) * 3, px);
+      IF (w >= 1) snd(s_thump[vary(3)], 55 + w * 18, 92 + vary(16), px); END
+      IF (w == 2) snd(s_crack, 60, 90 + vary(20), px); END
+    END
+  END
+  IF (f_team[t] == 0) snd(s_ugh[vary(2)], 55, 90 + vary(20) + t * 25, px); END
+END
+
+// Fighter t is beaten
+FUNCTION snd_down(t);
+BEGIN
+  IF (f_team[t] == 0) snd(s_lost, 60, 100, f_x[t]); RETURN 0; END
+  IF (f_ty[t] == 6) snd(s_boom, 80, 70, f_x[t]); snd(s_roar, 60, 80, f_x[t]); RETURN 0; END
+  snd(s_die[vary(3)], 45, 85 + vary(30) + (f_ty[t] == 5) * 30 - (f_ty[t] == 4) * 25, f_x[t]);
+END
+
+// A prop takes a blow (broken when br_hp is gone)
+FUNCTION snd_prop(t);
+PRIVATE k;
+BEGIN
+  k = br_k[t];
+  IF (br_hp[t] > 0)
+    IF (k == 0 OR k == 2) snd(s_bonk, 55, 70 + vary(20), br_x[t]); ELSE snd(s_metal, 50, 80 + vary(20), br_x[t]); END
+    RETURN 0;
+  END
+  IF (k == 1) snd(s_glass, 70, 90 + vary(20), br_x[t]); snd(s_metal, 45, 70, br_x[t]); END
+  IF (k == 0 OR k == 2) snd(s_wood, 75, 90 + vary(20), br_x[t]); END
+  IF (k == 3 OR k == 4) snd(s_metal, 60, 60 + vary(15), br_x[t]); snd(s_wood, 50, 60, br_x[t]); END
+  snd(s_thump[vary(3)], 50, 100, br_x[t]);
+END
+
+// =====================================================================
 // Screens and the game loop
 // =====================================================================
 FUNCTION title_screen();
@@ -1487,18 +1731,20 @@ BEGIN
   screen_color('#0c081a');
   b1 = banner(g_logo, 330, 90, -1, 0);
   poser(0, 0, 230, 290, 0); poser(2, 1, 400, 290, 1); poser(4, 0, 480, 296, 1);
+  music(sng_title, 1);
   REPEAT
-    t++;
+    t++; music_keys();
     set_color('#303048'); draw_rect(0, 296, 640, 104);
     set_color('#ffffff'); text(150, 318, "ARROWS move   Z/CTRL punch (combo)   X/ALT jump   C kick");
     text(150, 332, "Z+X back elbow   walk into a dazed enemy to grab: Z knee, back+Z throw");
     text(150, 346, "Z over an item picks it up: food, bats, knives, barrels");
-    text(150, 360, "PLAYER 2: WASD  Q punch  E jump  R kick  (Q joins any time)");
+    text(150, 360, "PLAYER 2: WASD  Q punch  E jump  R kick  (Q joins any time)   M music");
     IF ((t / 30) % 2 == 0) set_color('#ffd040'); text(250, 160, "PRESS ENTER OR SPACE"); END
     set_color('#8080a0'); text(270, 176, "HI-SCORE " + hisc);
     FRAME;
   UNTIL (key_pressed(_enter) OR key_pressed(_space) OR key_pressed(_z))
   in2 = key(_q);
+  play_sound(s_start, 60, 100, 0);
   screen_color('#000000');
 END
 
@@ -1515,27 +1761,36 @@ FUNCTION play_stage();
 PRIVATE t, b;
 BEGIN
   banner(banner_g(300, 60, "STAGE " + stage, 44, 255, 255, 255), 320, 150, 120, 0);
+  music(j_stage, 0); t = 0;
   LOOP
+    music_keys();
+    IF (t < 130) t++; IF (t == 130) stage_music(); END END
     director(); players();
     draw_hud();
     // everyone is out of lives: continue?
     IF (f_on[0] == 0 AND lives1 <= 0 AND (in2 == 0 OR (f_on[1] == 0 AND lives2 <= 0)))
       cont_t++;
+      IF (cont_t == 1) music_stop(); END
+      IF (cont_t % 60 == 1) play_sound(s_tick, 45, 100 - (cont_t > 360) * 20, 0); END
       draw_rect(200, 150, 240, 60, 'rgba(0,0,0,0.6)');
       set_color('#ffd040'); text(270, 164, "CONTINUE?  " + (9 - cont_t / 60));
       set_color('#ffffff'); text(244, 186, "PRESS ENTER / SPACE");
       IF (key_pressed(_enter) OR key_pressed(_space))
         lives1 = 3; sc1 = 0; resp1 = 1; cont_t = 0; IF (in2) lives2 = 3; resp2 = 1; END
+        play_sound(s_join, 60, 100, 0); stage_music();
       END
       IF (cont_t >= 600)
         b = banner(g_over, 320, 170, -1, 0);
-        FROM t = 1 TO 200; draw_hud(); FRAME; END
+        music(j_over, 0);
+        FROM t = 1 TO 200; music_keys(); draw_hud(); FRAME; END
         game_on = 0; RETURN 0;
       END
     END
     IF (stage_clear)
       b = banner(g_clear, 320, 150, -1, 0);
+      music(j_clear, 0);
       FROM t = 1 TO 200;
+        music_keys();
         IF (t == 1) FROM b = 0 TO 1; IF (f_on[b]) set_state(b, S_PICK, C_WIN); add_score(b, f_hp[b] * 50); END END END
         FROM b = 0 TO 1; IF (f_on[b]) f_t[b] = 0; f_clip[b] = C_WIN; f_inv[b] = 20; END END
         director(); draw_hud();
@@ -1553,7 +1808,7 @@ END
 BEGIN
   set_mode(640, 400); set_fps(60, 0);
   rand_seed(hsh(get_time() * 1000 + 7)); FROM gen_i = 0 TO 4; rand(0, 9); END
-  init_types(); make_graphics();
+  init_types(); make_graphics(); make_sounds();
   // render every frame of every fighter type, a few per tick
   gen_i = 0;
   WHILE (gen_i < NT * NF)
