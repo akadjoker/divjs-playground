@@ -36,7 +36,9 @@ export async function checkVideo(file, sheetDir = dirname(file))
   const seconds = duration ? Number(duration[1]) * 3600 + Number(duration[2]) * 60 + Number(duration[3]) : 0;
   const sheet = join(sheetDir, `${basename(file, '.mp4')}-sheet.png`);
   const tall = video && Number(video[4]) > Number(video[3]);
-  await ffmpeg(['-i', file, '-vf', `fps=1/2.5,scale=${tall ? 270 : 480}:-2:flags=neighbor,tile=${tall ? '8x2' : '6x6'}:padding=4:color=white`, '-frames:v', '1', sheet]);
+  const cols = tall ? 8 : 6;
+  const rows = Math.max(1, Math.ceil(seconds / 2.5 / cols));
+  await ffmpeg(['-i', file, '-vf', `fps=1/2.5,scale=${tall ? 270 : 480}:-2:flags=neighbor,tile=${cols}x${rows}:padding=4:color=white`, '-frames:v', '1', sheet]);
   return {
     file,
     bytes: (await stat(file)).size,

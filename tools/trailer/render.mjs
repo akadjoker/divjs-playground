@@ -301,7 +301,8 @@ async function renderSegment(seg, plan, takesDir, file)
     const [cx, cy, cw, ch] = layer.crop;
     const [x, y, w, h] = layer.rect;
     const scaler = layer.pixelArt ? 'neighbor' : 'lanczos';
-    filters.push(`[${n}:v]${pick}crop=${cw}:${ch}:${cx}:${cy},scale=${w}:${h}:flags=${scaler},setsar=1[l${n}]`);
+    const thicken = seg.thicken ? 'dilation,' : '';
+    filters.push(`[${n}:v]${pick}crop=${cw}:${ch}:${cx}:${cy},${thicken}scale=${w}:${h}:flags=${scaler},setsar=1[l${n}]`);
     let out = `o${n}`;
     filters.push(`[${last}][l${n}]overlay=${x}:${y}:eof_action=repeat[${out}]`);
     if (layer.border)
