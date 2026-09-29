@@ -13,7 +13,8 @@
     "build:blockly": "node tools/build-blockly.mjs",
     "capture": "node tools/capture.mjs",
     "itch": "node tools/itch.mjs",
-    "trailer": "node tools/trailer/index.mjs"
+    "trailer": "node tools/trailer/index.mjs",
+    "tutorial": "node tools/tutorial/index.mjs"
   },
   "dependencies": {
     "divjs": "github:akadjoker/divjs#9a9dd250ea27485fb9bfcb2f13304e94518c0d2b"

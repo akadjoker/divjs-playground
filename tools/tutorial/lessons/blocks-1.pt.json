@@ -1,0 +1,20 @@
+{
+  "language": "pt",
+  "cards": {
+    "intro": { "kicker": "DivJS Blocos · Lição 1", "title": "Faz aparecer uma forma" },
+    "outro": { "kicker": "A seguir: Lição 2", "title": "Move-a com as setas" }
+  },
+  "lines": {
+    "intro": "Nesta lição, vais fazer aparecer a tua primeira forma: um círculo azul-turquesa, mesmo no meio do ecrã do jogo.",
+    "tour": "A lição começa com dois blocos: {start}quando o jogo começa, e {sprite}definir sprite player.",
+    "looks": "Um sprite precisa de um aspeto. Abre a categoria {click}Aparência.",
+    "drag-look": "Arrasta {grab}parecer um círculo para dentro de definir sprite player. {snap}Encaixa no sítio.",
+    "program": "O player já parece um círculo, mas só aparece quando o jogo o cria. Abre {click}Programa.",
+    "drag-create": "Arrasta {grab}criar sprite player em x 160, y 120 para dentro de quando o jogo começa. {snap}Encaixa perfeitamente.",
+    "xy": "O ecrã do jogo tem {w}320 píxeis de largura e {h}240 de altura. {so}Por isso, x {x}160, y {y}120 é mesmo o meio.",
+    "run": "Agora carrega em {click}Executar.",
+    "result": "E aí está: {circle}o teu círculo azul-turquesa, no meio do ecrã.",
+    "code": "Aqui está o código. {code}Este é o verdadeiro código DIV que os teus blocos fizeram: {process}o player, com o seu círculo, {create}e a linha que o cria em 160, 120.",
+    "outro": "Muito bem! {next}Na lição dois, vais mover o teu círculo com as setas do teclado."
+  }
+}
