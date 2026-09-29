@@ -1,0 +1,22 @@
+{
+  "language": "en",
+  "cards": {
+    "intro": { "kicker": "DivJS Blocks · Lesson 4", "title": "Avoid the enemy" },
+    "outro": { "kicker": "Next: Lesson 5", "title": "Free play" }
+  },
+  "lines": {
+    "intro": "In this lesson, you'll add an enemy that bounces around the screen. If it touches you, your score goes back to zero.",
+    "recap": "The player and the coin are folded up. {enemy}Our new sprite is define sprite enemy.",
+    "create": "From {click}Program, drag {grab}create sprite under the coin's. {pick}Pick enemy, {x}and put it in a corner, at 300, 20.",
+    "look": "From {click}Looks, {grab}look like a circle goes into define sprite enemy. {box}Make it a box, size 18, and {red}red.",
+    "direction": "Also from {click}Looks, {grab}point in direction, with {num}40, to fly on a slant.",
+    "fly": "Then {click}forever: {motion}move forward 2 steps, and {bounce}bounce off the edges.",
+    "hit": "Inside the forever, {click}an if, with {sensing}touching sprite player.",
+    "reset": "When it hits you, from {click}Variables, {grab}set score to 0, and {sound}play sound hit.",
+    "back": "And from {click}Motion, {grab}go to x 300, y 20, {x}so the enemy starts again from its corner.",
+    "run": "Press {click}Run, {game}click the game, and play.",
+    "playing": "Catch the coins, and keep away from the red box, or your score drops to zero.",
+    "code": "In the code, {bounce}moving forward became advance, and bounce became four IFs, one for each edge of the screen.",
+    "outro": "Well done! {next}In lesson five, it's free play: make your own game."
+  }
+}

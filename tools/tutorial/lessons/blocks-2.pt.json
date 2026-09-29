@@ -1,0 +1,59 @@
+{
+  "language": "pt",
+  "cards": {
+    "intro": {
+      "kicker": "DivJS Blocks · Lição 2",
+      "title": "Mexe-o com as setas"
+    },
+    "outro": {
+      "kicker": "A seguir: Lição 3",
+      "title": "Apanha a moeda"
+    }
+  },
+  "lines": {
+    "intro": "Nesta lição, vais mexer o teu círculo com as teclas das setas.",
+    "recap": {
+      "text": "Começamos onde a lição um acabou: {player}o player é um círculo, no meio do jogo.",
+      "say": "Começamos onde a lição um acabou: o pleier é um círculo, no meio do jogo."
+    },
+    "forever": {
+      "text": "Clica na categoria {click}Controlo, e arrasta {grab}para sempre, para debaixo de parece um círculo. {frame}Tudo o que está dentro de para sempre corre de novo, em cada fotograma.",
+      "say": "Clica na categoria: Controlo, e arrasta para sempre, para debaixo de parece um círculo. Tudo o que está dentro de para sempre corre de novo, em cada fotograma."
+    },
+    "if": {
+      "text": "Outra vez na categoria {click}Controlo, arrasta {grab}o bloco se então, para dentro do para sempre.",
+      "say": "Outra vez na categoria: Controlo, arrasta o bloco, se então, para dentro do para sempre."
+    },
+    "key": {
+      "text": "Na categoria {click}Sensores, arrasta {grab}tecla seta para a direita carregada, para o espaço do bloco se então.",
+      "say": "Na categoria Sensores, arrasta, tecla seta para a direita carregada, para o espaço do bloco, se então."
+    },
+    "move": {
+      "text": "Depois, na categoria {click}Movimento, arrasta {grab}adiciona a x, para dentro do bloco se então, e escreve {num}3 no número.",
+      "say": "Depois, na categoria Movimento, arrasta, adiciona a xis, para dentro do bloco, se então, e escreve três no número."
+    },
+    "meaning": {
+      "text": "Assim, se {key}a tecla da seta para a direita estiver carregada, {x}o x fica maior 3, e o círculo anda para a direita.",
+      "say": "Assim, se a tecla da seta para a direita estiver carregada, o xis fica maior três, e o círculo anda para a direita."
+    },
+    "left": {
+      "text": "Para a esquerda é quase igual. {copy}Copia o se com Control C e Control V, põe a cópia por baixo, escolhe seta para a esquerda, e escreve menos 3.",
+      "say": "Para a esquerda é quase igual. Copia o se com contról cê, e contról vê, põe a cópia por baixo, escolhe seta para a esquerda, e escreve menos três."
+    },
+    "up": {
+      "text": "Para cima e para baixo, muda o y. Arrasta outro bloco se para debaixo dos outros, põe lá tecla carregada, e escolhe seta para cima. Depois junta adiciona a y, com menos 3 no número.",
+      "say": "Para cima e para baixo, muda o ípsilon. Arrasta outro bloco se, para debaixo dos outros, põe lá tecla carregada, e escolhe seta para cima. Depois junta, adiciona a ípsilon, com menos três no número."
+    },
+    "down": {
+      "text": "No jogo, o y cresce para baixo, por isso menos 3 vai para cima. {copy}Mais uma cópia para a seta para baixo, com 3 no número.",
+      "say": "No jogo, o ípsilon cresce para baixo, por isso menos três vai para cima. Mais uma cópia para a seta para baixo, com três no número."
+    },
+    "run": "Agora clica no botão {click}Jogar, e {game}clica no jogo, para ele receber as teclas.",
+    "playing": "As setas do teclado mexem o teu círculo pelo jogo.",
+    "code": {
+      "text": "No código, {if}cada se ficou um IF com um teste de tecla, dentro do LOOP que corre em cada fotograma.",
+      "say": "No código, cada se ficou um íf, com um teste de tecla, dentro do lúp, que corre em cada fotograma."
+    },
+    "outro": "Bom trabalho! {next}Na lição três, vais apanhar uma moeda e contar pontos."
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "language": "en",
+  "cards": {
+    "intro": {
+      "kicker": "DivJS Blocks · Lesson 2",
+      "title": "Move it with the arrow keys"
+    },
+    "outro": {
+      "kicker": "Next: Lesson 3",
+      "title": "Catch the coin"
+    }
+  },
+  "lines": {
+    "intro": "In this lesson, you'll make your circle move with the arrow keys.",
+    "recap": "We start where lesson one ended: {player}the player is a teal circle, in the middle of the screen.",
+    "forever": "Open {click}Control, and drag {grab}forever under look like a circle. {frame}Everything inside forever runs again, every frame.",
+    "if": "From {click}Control again, drag {grab}if then into the forever loop.",
+    "key": "From {click}Sensing, drag {grab}key right arrow pressed into the slot of the if.",
+    "move": "Then from {click}Motion, drag {grab}change x by, inside the if, and make it {num}3.",
+    "meaning": "So, if {key}the right arrow key is pressed, {x}x grows by 3, and the circle moves right.",
+    "left": "Left is almost the same. {copy}Copy the if with control C and control V, put the copy underneath, pick left arrow, and type minus 3.",
+    "up": "Up and down change y instead. Drag another if under the others, put key pressed in it, and pick up arrow. Then add change y by, with minus 3.",
+    "down": "In the game, y grows downwards, so minus 3 goes up. {copy}One more copy for down arrow, with 3.",
+    "run": "Now press {click}Run, and {game}click the game, so it gets the keys.",
+    "playing": "The arrow keys move your circle around the screen.",
+    "code": "In the code, {if}each if became an IF with a key test, inside the LOOP that runs every frame.",
+    "outro": "Great work! {next}In lesson three, you'll catch a coin and keep score."
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "language": "pt",
+  "cards": {
+    "intro": {
+      "kicker": "DivJS Blocks · Lição 4",
+      "title": "Foge do inimigo"
+    },
+    "outro": {
+      "kicker": "A seguir: Lição 5",
+      "title": "Jogo livre"
+    }
+  },
+  "lines": {
+    "intro": "Nesta lição, vais juntar um inimigo que ressalta pelo jogo. Se te tocar, os pontos voltam a zero.",
+    "recap": {
+      "text": "O player e a moeda estão fechados. {enemy}A personagem nova é define a personagem enemy.",
+      "say": "O pleier e a moeda estão fechados. A personagem nova é define a personagem énemi."
+    },
+    "create": {
+      "text": "Na categoria {click}Programa, arrasta {grab}cria a personagem para debaixo da da moeda. {pick}Na lista, escolhe enemy, {x}e põe-no num canto, em 300, 20.",
+      "say": "Na categoria Programa, arrasta, cria a personagem, para debaixo da da moeda. Na lista, escolhe o énemi, e põe-no num canto, em trezentos, vinte."
+    },
+    "look": {
+      "text": "Na categoria {click}Aparência, {grab}parece um círculo vai para dentro de define a personagem enemy. {box}Faz dele um quadrado, tamanho 18, e cor {red}vermelho.",
+      "say": "Na categoria: Aparência, parece um círculo, vai para dentro de define a personagem énemi. Faz dele um quadrado, tamanho dezoito, e cor vermelho."
+    },
+    "direction": {
+      "text": "Também em {click}Aparência, {grab}aponta na direção, com {num}40, para voar na diagonal.",
+      "say": "Também em: Aparência, aponta na direção, com quarenta, para voar na diagonal."
+    },
+    "fly": {
+      "text": "Depois {click}para sempre: {motion}anda 2 passos em frente, e {bounce}ressalta nas bordas.",
+      "say": "Depois, para sempre: anda dois passos em frente, e ressalta nas bordas."
+    },
+    "hit": {
+      "text": "Ainda dentro do para sempre, junta {click}um bloco se então, com {sensing}a tocar na personagem player.",
+      "say": "Ainda dentro do para sempre, junta um bloco, se então, com a tocar na personagem pleier."
+    },
+    "reset": {
+      "text": "Quando o inimigo te toca, em {click}Variáveis, arrasta {grab}muda score para 0, e {sound}toca o som pancada.",
+      "say": "Quando o inimigo te toca, em Variáveis, arrasta muda scór para zero, e toca o som pancada."
+    },
+    "back": {
+      "text": "E em {click}Movimento, {grab}vai para x 300, y 20, {x}para o inimigo voltar ao seu canto.",
+      "say": "E em Movimento, vai para xis trezentos, ípsilon vinte, para o inimigo voltar ao seu canto."
+    },
+    "run": "Clica no botão {click}Jogar, {game}clica no jogo, e joga.",
+    "playing": "Apanha as moedas, e foge do quadrado vermelho, ou os pontos voltam a zero.",
+    "code": {
+      "text": "No código, {bounce}andar em frente ficou advance, e ressaltar ficou quatro IF, um para cada borda do jogo.",
+      "say": "No código, andar em frente ficou advãnce, e ressaltar ficou quatro íf, um para cada borda do jogo."
+    },
+    "outro": "Muito bem! {next}Na lição cinco, é jogo livre: faz o teu próprio jogo."
+  }
+}

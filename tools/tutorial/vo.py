@@ -46,7 +46,7 @@ def plain(spoken):
     return re.sub(r'\[([^\]]+)\]\(/[^)]*/\)', r'\1', spoken)
 
 
-def trim(audio, rate, threshold=0.004, pad=0.06):
+def trim(audio, rate, threshold=0.004, pad=0.12):
     """Cuts the silence before and after the speech (keeps `pad` s)."""
     loud = np.where(np.abs(audio) > threshold)[0]
     if len(loud) == 0:
@@ -174,7 +174,10 @@ def main():
             for w in s.words or []:
                 for part in words(w.word):
                     heard_words.append((part, float(w.start), float(w.end)))
-        score = max(difflib.SequenceMatcher(None, words(t), words(heard)).ratio() for t in (shown, plain(spoken)))
+        # Word by word, or letter by letter without spaces (a transcription
+        # that joins words, "SoundCoin", is not a mistake of the voice).
+        score = max(max(difflib.SequenceMatcher(None, words(t), words(heard)).ratio(),
+                        difflib.SequenceMatcher(None, ''.join(words(t)), ''.join(words(heard))).ratio()) for t in (shown, plain(spoken)))
 
         # The written words (as the subtitles show them) and the cues.
         tokens = []
@@ -193,6 +196,7 @@ def main():
             'seconds': round(seconds, 3),
             'heard': heard,
             'match': round(score, 3),
+            'match_words': round(max(difflib.SequenceMatcher(None, words(t), words(heard)).ratio() for t in (shown, plain(spoken))), 3),
             'words': [{'w': t, 'start': round(s, 3), 'end': round(e, 3)} for t, (s, e) in zip(tokens, times)],
             'cues': {name: round(times[i][0], 3) if i < len(times) else round(seconds, 3) for name, i in cues.items()},
             'key': key

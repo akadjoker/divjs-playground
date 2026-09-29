@@ -1,0 +1,57 @@
+{
+  "language": "pt",
+  "cards": {
+    "intro": {
+      "kicker": "DivJS Blocks · Lição 3",
+      "title": "Apanha a moeda"
+    },
+    "outro": {
+      "kicker": "A seguir: Lição 4",
+      "title": "Foge do inimigo"
+    }
+  },
+  "lines": {
+    "intro": "Nesta lição, vais juntar uma moeda para apanhar, e contar pontos.",
+    "recap": {
+      "text": "O player já se mexe com as setas, e os blocos dele estão fechados aqui. {coin}E há uma personagem nova: define a personagem coin, ainda vazia.",
+      "say": "O pleier já se mexe com as setas, e os blocos dele estão fechados aqui. E há uma personagem nova: define a personagem côin, ainda vazia."
+    },
+    "create": {
+      "text": "Primeiro, na categoria {click}Programa, arrasta {grab}cria a personagem para debaixo do primeiro. {pick}Escolhe coin na lista, {x}e põe-na em 60, 60.",
+      "say": "Primeiro, na categoria Programa, arrasta, cria a personagem, para debaixo do primeiro. Escolhe côin na lista, e põe-na em sessenta, sessenta."
+    },
+    "look": {
+      "text": "Na categoria {click}Aparência, arrasta {grab}parece um círculo para dentro de define a personagem coin. Muda o {size}tamanho para 14, e a cor para {colour}amarelo.",
+      "say": "Na categoria: Aparência, arrasta parece um círculo, para dentro de define a personagem côin. Muda o tamanho para catorze, e a cor para amarelo."
+    },
+    "random": "Em {click}Movimento, {grab}vai para um sítio ao acaso põe a moeda num sítio novo.",
+    "loop": {
+      "text": "Depois, na categoria {click}Controlo, arrasta um para sempre, {if}e põe um bloco se lá dentro.",
+      "say": "Depois, na categoria: Controlo, arrasta um para sempre, e põe um bloco se, lá dentro."
+    },
+    "touching": {
+      "text": "Em {click}Sensores, {grab}a tocar na personagem vai para dentro do bloco se então. {player}Escolhe player, na lista.",
+      "say": "Em Sensores, a tocar na personagem, vai para dentro do bloco, se então. Escolhe pleier, na lista."
+    },
+    "score": {
+      "text": "Quando o player toca na moeda: em {click}Variáveis, {grab}adiciona 1 a score.",
+      "say": "Quando o pleier toca na moeda: em Variáveis, adiciona um a scór."
+    },
+    "sound": {
+      "text": "Na categoria {click}Som, arrasta o bloco {grab}toca o som moeda.",
+      "say": "Na categoria Som, arrasta o bloco, toca o som moeda."
+    },
+    "jump": "E em {click}Movimento, {grab}vai para um sítio ao acaso outra vez, para a moeda saltar para outro lado.",
+    "show": {
+      "text": "Por fim, mostra os pontos. Em {click}Controlo, {forever}um para sempre no fim de quando o jogo começa, {show}com mostra a variável score lá dentro.",
+      "say": "Por fim, mostra os pontos. Em Controlo, um para sempre no fim de quando o jogo começa, com mostra a variável scór, lá dentro."
+    },
+    "run": "Clica no botão {click}Jogar, {game}clica no jogo, e vai apanhar a moeda.",
+    "playing": "Cada moeda que apanhas soma um ponto, e a moeda salta para longe.",
+    "code": {
+      "text": "No código, {coin}a moeda é um PROCESS só dela, e {touch}a tocar ficou um teste de colisão.",
+      "say": "No código, a moeda é um prócess só dela, e a tocar ficou um teste de colisão."
+    },
+    "outro": "Boa! {next}Na lição quatro, vais fugir de um inimigo que ressalta pelo jogo."
+  }
+}

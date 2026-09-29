@@ -1,0 +1,29 @@
+{
+  "language": "pt",
+  "cards": {
+    "intro": {
+      "kicker": "DivJS Blocks · Lição 5",
+      "title": "Jogo livre"
+    },
+    "outro": {
+      "kicker": "DivJS Blocks",
+      "title": "Agora faz o teu jogo!"
+    }
+  },
+  "lines": {
+    "intro": "A lição cinco é jogo livre: faz o teu próprio jogo, com todos os blocos.",
+    "start": "Começa só com {start}quando o jogo começa. O resto é contigo.",
+    "solution": "Sem ideias? {click}Mostra-me a solução carrega um exemplo: {ship}uma nave que vira, voa, e dispara contra rochas.",
+    "ship": "A nave vira e voa com as setas, e dispara com a tecla de espaço.",
+    "shot": "Cada disparo anda quarenta passos, e depois apaga-se.",
+    "rock": "As rochas andam à deriva, ressaltam, e explodem quando um tiro lhes toca.",
+    "run": "Clica no botão {click}Jogar, {game}clica no jogo, e voa.",
+    "playing": "Tens de acertar nas cinco rochas para ganhar.",
+    "tips": "Cada bloco tem uma dica: {hover}deixa o rato parado em cima dele para leres o que faz.",
+    "playground": {
+      "text": "E {link}Abrir no playground leva o código DIV dos teus blocos para o editor de texto, para continuares em código a sério.",
+      "say": "E Abrir no plêigraund leva o código dív dos teus blocos para o editor de texto, para continuares em código a sério."
+    },
+    "outro": "E assim acabam as lições. {next}Diverte-te a fazer os teus próprios jogos!"
+  }
+}

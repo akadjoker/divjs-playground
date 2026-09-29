@@ -1,0 +1,20 @@
+{
+  "language": "en",
+  "cards": {
+    "intro": { "kicker": "DivJS Blocks · Lesson 5", "title": "Free play" },
+    "outro": { "kicker": "DivJS Blocks", "title": "Now make your own game!" }
+  },
+  "lines": {
+    "intro": "Lesson five is free play: make your own game, with every block.",
+    "start": "It starts with just {start}when the game starts. The rest is up to you.",
+    "solution": "Stuck for ideas? {click}Show me the solution loads an example: {ship}a ship that turns, flies, and fires at rocks.",
+    "ship": "The ship turns and flies with the arrow keys, and fires a shot with space.",
+    "shot": "Each shot flies forty steps, then deletes itself.",
+    "rock": "The rocks drift and bounce, and explode when a shot touches them.",
+    "run": "Press {click}Run, {game}click the game, and fly.",
+    "playing": "Hit all five rocks to win.",
+    "tips": "Every block has a tip: {hover}hold the mouse over it to read what it does.",
+    "playground": "And {link}Open in the playground takes the DIV code of your blocks to the text editor, to go on in real code.",
+    "outro": "That's all the lessons. {next}Have fun making your own games!"
+  }
+}

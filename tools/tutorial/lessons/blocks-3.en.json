@@ -1,0 +1,30 @@
+{
+  "language": "en",
+  "cards": {
+    "intro": {
+      "kicker": "DivJS Blocks · Lesson 3",
+      "title": "Catch the coin"
+    },
+    "outro": {
+      "kicker": "Next: Lesson 4",
+      "title": "Avoid the enemy"
+    }
+  },
+  "lines": {
+    "intro": "In this lesson, you'll add a coin to catch, and keep score.",
+    "recap": "The player moves with the arrow keys, its blocks folded up here. {coin}And there's a new sprite: define sprite coin, still empty.",
+    "create": "First, from {click}Program, drag {grab}create sprite under create sprite player. {pick}Pick coin in its list, {x}and put it at 60, 60.",
+    "look": "From {click}Looks, drag {grab}look like a circle into define sprite coin. Make it {size}size 14, and {colour}yellow.",
+    "random": "From {click}Motion, {grab}go to a random place puts the coin somewhere new.",
+    "loop": "Then, from {click}Control, a forever loop, {if}with an if inside it.",
+    "touching": "From {click}Sensing, {grab}touching sprite goes in the if. {player}Pick player in its list.",
+    "score": "When the player touches the coin, from {click}Variables, {grab}change score by 1.",
+    "sound": "From {click}Sound, {grab}play sound coin.",
+    "jump": "And from {click}Motion, {grab}go to a random place again, so the coin jumps somewhere else.",
+    "show": "Last, show the score. From {click}Control, {forever}a forever at the end of when the game starts, {show}with show variable score inside it.",
+    "run": "Press {click}Run, {game}click the game, and go and catch the coin.",
+    "playing": "Every coin you catch adds one to your score, and the coin jumps away.",
+    "code": "In the code, {coin}the coin is a PROCESS of its own, and {touch}touching became a collision test.",
+    "outro": "Nice! {next}In lesson four, you'll dodge an enemy that bounces around."
+  }
+}
