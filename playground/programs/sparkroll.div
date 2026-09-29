@@ -86,14 +86,13 @@ GLOBAL
 
   // ---- test telemetry (read by tests/browser.mjs-style harnesses)
   loops_done = 0; springs_used = 0; enemies_popped = 0; hits_taken = 0;
-  scattered = 0; regrabbed = 0; boosts_used = 0; ang_min_loop = 0;
+  scattered = 0; regrabbed = 0; boosts_used = 0;
 
   // ---- graphics
   g_kip[23]; g_ball[1]; g_spark[3]; g_walker[3]; g_flyer[3];
   g_spring[3]; g_boost[1]; g_check[1]; g_goal[1]; g_crate = 0;
   g_boom[3]; g_dust = 0; g_boss[3]; g_bomb = 0;
-  g_sky[1]; g_far[1]; g_mid[1]; g_title = 0; g_hud = 0; g_card = 0; g_panel = 0;
-  g_life = 0;
+  g_sky[1]; g_far[1]; g_mid[1]; g_title = 0; g_hud = 0;
   // terrain colours per zone: 10 colours x rgb
   zc[59];
 
@@ -113,8 +112,6 @@ GLOBAL
   skid_t = 0; loop_last = -1;
   ST_LOAD = 7;
   g_zcard[1]; g_res = 0; g_end = 0;
-  tally_t = 0; tallying = 0;
-  g_tkip = 0;
 
 // =====================================================================
 // Small helpers
@@ -345,6 +342,20 @@ BEGIN
   RETURN 0;
 END
 
+// A trench below a jump: fall short and a spring at its far end
+// throws you back up
+FUNCTION trench(n, depth);
+PRIVATE x0;
+BEGIN
+  x0 = bx * 8;
+  bh += depth;
+  lv_flat(n);
+  bh -= depth;
+  ob_add(K_SPRING, x0 + n * 8 - 40, bh + depth, 12);
+  sparks_row(x0 + 40, 4, 24, 26);
+  RETURN 0;
+END
+
 // A loop on flat ground; returns its centre x
 FUNCTION lv_loop();
 PRIVATE x0;
@@ -504,7 +515,7 @@ BEGIN
   sparks_row(p + 100, 6, 44, 26);
 
   p = lv_px(); lv_flat(8); lv_ramp(12, 56);
-  p = lv_px(); lv_gap(30);
+  p = lv_px(); trench(30, 170);
   sparks_arc(p + 10, bh - 140, 7, 220, 60);
   bh += 30;
   p = lv_px(); lv_flat(44);
@@ -606,7 +617,7 @@ BEGIN
 
   p = lv_px(); lv_slope(40, 110);
   p = lv_px(); lv_flat(6); lv_ramp(12, 60);
-  p = lv_px(); lv_gap(32);
+  p = lv_px(); trench(32, 170);
   sparks_arc(p + 10, bh - 150, 7, 230, 60);
   bh += 20;
   p = lv_px(); lv_flat(40);
@@ -1413,7 +1424,7 @@ BEGIN
   top = lv_bottom - 40;
   FOR i = 0 TO CHW STEP 8
     h = ground_h(x0 + i);
-    IF (h < top) top = h; END
+    IF (h < top AND h > -90000) top = h; END
   END
   top = top - 110;
   FOR j = 0 TO nloops - 1
@@ -1803,7 +1814,7 @@ BEGIN
       facing = 1;
     END
   END
-  IF (ysp < 0 AND ysp > -4 AND abs(xsp) >= 0.125) xsp -= xsp * 0.03125; END
+  IF (ysp < 0 AND ysp > -4 AND abs(xsp) >= 0.125) xsp -= xsp * 0.0078125; END
   hx += xsp;
   hy += ysp;
   IF (hurt) ysp += 0.1875; ELSE ysp += GRV; END
@@ -1887,7 +1898,6 @@ BEGIN
   kj = key(_space) OR key(_z) OR key(_x);
   kjp = key_pressed(_space) OR key_pressed(_z) OR key_pressed(_x);
   IF (frozen OR goal_hit) kl = 0; kr = 0; kd = 0; kj = 0; kjp = 0; END
-  IF (goal_hit AND onground) kr = 0; END
   IF (onground) kip_ground(); ELSE kip_air(); END
   loop_layers();
   IF (invuln > 0) invuln--; END
@@ -1915,6 +1925,7 @@ BEGIN
   END
   scattered += n;
   sparks = 0;
+  play_sound(s_hit, 60, 100, 0);
   hud_dirty = 1;
   play_sound(s_scatter, 70, 100, 0);
   hurt = 1; onground = 0; ball = 0; rolling = 0; crouch = 0; charging = 0; jumped = 0;
