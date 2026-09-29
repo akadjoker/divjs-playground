@@ -619,13 +619,14 @@ END
 FUNCTION works_b();
 PRIVATE p, cx;
 BEGIN
+  p = lv_px(); lv_flat(16);
   p = lv_px(); lv_gap(14);
-  blk(p + 24, bh - 10, 64, 18);
-  ob_add(K_SPARK, p + 56, bh - 40, 0);
-  p = lv_px(); lv_flat(8);
+  blk(p + 22, bh + 6, 68, 18);
+  ob_add(K_SPARK, p + 56, bh - 30, 0);
+  p = lv_px(); lv_flat(10);
   p = lv_px(); lv_gap(14);
-  blk(p + 24, bh - 30, 64, 18);
-  ob_add(K_SPARK, p + 56, bh - 60, 0);
+  blk(p + 22, bh + 6, 68, 18);
+  ob_add(K_SPARK, p + 56, bh - 30, 0);
 
   p = lv_px(); lv_flat(34);
   on_ground(K_SPRING, p + 60, 8, 12);
@@ -1304,6 +1305,7 @@ BEGIN
   h = ground_h(wx);
   IF (h >= GAP) RETURN 0; END
   sy = int(h) - top;
+  IF (sy < 0) sy = 0; END
   gfx_rect(g, gx, sy, 2, hgt - sy, zcol(9, 0), zcol(9, 1), zcol(9, 2));
   IF (zone == 0)
     gfx_rect(g, gx, sy + 7, 2, 28, zcol(2, 0), zcol(2, 1), zcol(2, 2));
@@ -2000,14 +2002,17 @@ BEGIN
   cam_lead += (clamp(vx * 18, -130, 130) - cam_lead) * 0.06;
   tx = hx - SW * 0.5 + cam_lead;
   ty = hy - SH * 0.56;
+  IF (arena_on) ty = ground_h(lock_x1 + 240) - SH + 44; END
   cam_x += (tx - cam_x) * 0.2;
   IF (onground) cam_y += (ty - cam_y) * 0.2; ELSE cam_y += (ty - cam_y) * 0.12; END
   sx = hx - cam_x;
   IF (sx < 110) cam_x = hx - 110; END
   IF (sx > SW - 110) cam_x = hx - SW + 110; END
   sy = hy - cam_y;
-  IF (sy < 70) cam_y = hy - 70; END
-  IF (sy > SH - 60) cam_y = hy - SH + 60; END
+  IF (NOT arena_on)
+    IF (sy < 70) cam_y = hy - 70; END
+    IF (sy > SH - 60) cam_y = hy - SH + 60; END
+  END
   IF (arena_on)
     cam_x += (lock_x1 - cam_x) * 0.1;
     IF (abs(cam_x - lock_x1) < 1) cam_x = lock_x1; END
@@ -2348,7 +2353,7 @@ BEGIN
   LOOP
     IF (my_gen != gen) BREAK; END
     IF (far_away(x, y)) ob_s[i] = 0; BREAK; END
-    IF (ob_p[i] == 0 AND NOT dead AND abs(hx - x) < 20 AND abs(hy - y) < 44)
+    IF (ob_p[i] == 0 AND NOT dead AND hx > x - 16 AND abs(hy - y) < 240)
       ob_p[i] = 1;
       cp_x = x; cp_y = ground_h(x) - 19; cp_time = frames;
       play_sound(s_check, 70, 100, 0);
@@ -2451,7 +2456,7 @@ BEGIN
   ctype = c_scroll; z = 8;
   boss_hp = 8; boss_state = 0;
   gy = ground_h(lock_x1 + 240);
-  x = lock_x2 + 80; y = gy - 150;
+  x = lock_x2 + 80; y = gy - 120;
   dir = -1;
   hud_dirty = 1;
   LOOP
@@ -2460,7 +2465,7 @@ BEGIN
     IF (boss_state == 0)
       // flies in
       x += (lock_x2 - 110 - x) * 0.04;
-      y = gy - 150 + sin(t * 4000) * 6;
+      y = gy - 120 + sin(t * 4000) * 6;
       IF (t > 100) boss_state = 1; t = 0; END
     END
     IF (boss_state == 1)
@@ -2468,14 +2473,14 @@ BEGIN
       x += dir * (1.6 + (8 - boss_hp) * 0.2);
       IF (x < lock_x1 + 70) dir = 1; END
       IF (x > lock_x2 - 70) dir = -1; END
-      y += (gy - 140 + sin(t * 4000) * 8 - y) * 0.1;
+      y += (gy - 112 + sin(t * 4000) * 8 - y) * 0.1;
       IF (t % 110 == 60) bomb(x, y + 30, dir * 1.5); END
       IF (t > 330) boss_state = 2; t = 0; tx = hx; END
     END
     IF (boss_state == 2)
       // the dive: down low towards where Kip was, then back up
       x += (tx - x) * 0.03;
-      IF (t < 70) y += (gy - 62 - y) * 0.08; ELSE y += (gy - 140 - y) * 0.06; END
+      IF (t < 70) y += (gy - 58 - y) * 0.08; ELSE y += (gy - 112 - y) * 0.06; END
       IF (t > 130) boss_state = 1; t = 0; END
     END
     IF (boss_state == 3)
@@ -2491,7 +2496,7 @@ BEGIN
     k = (t / 3) % 2;
     IF (flash > 0 AND (flash / 3) % 2 == 0) k += 2; END
     graph = g_boss[k];
-    IF (dir > 0) flags = 1; ELSE flags = 0; END
+    IF (dir < 0) flags = 1; ELSE flags = 0; END
     // Kip against the pod
     IF (boss_state < 3 AND NOT dead AND abs(hx - x) < 44 + wr AND abs(hy - (y + 10)) < 26 + hr)
       IF (kip_attacking() AND flash == 0)
