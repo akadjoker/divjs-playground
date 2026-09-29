@@ -259,22 +259,4 @@ below is the `LICENSE` file of the package:
    See the License for the specific language governing permissions and
    limitations under the License.
 ```
-
-## Files whose licence is not confirmed yet
-
-These are in the repository but their origin and terms have not been checked.
-They are **not** covered by DivJS's MIT licence; do not redistribute them in a
-commercial product until their terms are confirmed.
-
-| Path | What it is | Origin |
-|---|---|---|
-| `assets/div-support/*.fpg`, `*.fnt` | Graphics and fonts used by the DIV tutorials | DIV Games Studio tutorial files |
-| `assets/*.png` (`001.png`, `003.png`, `006.png`, `wabbit_alpha.png`) | Sprites used by examples and the bunnymark demo | Not recorded |
-
-The procedural games in `playground/programs/` do not load any of the asset
-files: they generate their graphics in code. The engine's 6x8 system font,
-which every exported game embeds, was drawn for DivJS and is covered by its
-MIT licence.
-
-Whether the tutorial files above come from that GPL-3.0 source release has
-not been checked; until it is, treat them as not covered by DivJS's licence.
+ 
