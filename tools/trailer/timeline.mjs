@@ -295,7 +295,7 @@ export const VIDEOS = {
         // The GRAV line zoomed in (5x: the number is as big as the
         // captions), the game under it. The cuts leave out the fort being
         // built again.
-        id: 'live', beats: 12, take: 'live-edit', cuts: LIVE_CUTS, say: 'Change any\ngame {live}', music: 'calm', hit: 'blip',
+        id: 'live', beats: 12, take: 'live-edit', cuts: LIVE_CUTS, say: 'Change any\ngame {live}', name: NAMES['chicken-cannon'], music: 'calm', hit: 'blip',
         stack: [{ region: 'line', box: [20, -26, 216, 74] }, { region: 'screen' }]
       },
       {
@@ -319,7 +319,7 @@ export const VIDEOS = {
       clip('fighter', 8, 0.5, 'It\'s back.\n\nAnd it runs in\nyour {browser}.', { music: 'main', hit: 'hit' }),
       clip('bomber', 8, 1.6, 'The same DIV\nlanguage:\nprocesses, FRAME,\nthe lot.'),
       clip('strike', 6, 2.6, 'Every game here\nis plain {DIV code}.'),
-      clip('bad-cat', 6, 1.8, 'Read it.\nChange it.\nMake your own.'),
+      clip('bad-cat', 6, 1.2, 'Read it.\nChange it.\nMake your own.'),
       clip('chicken-cannon', 6, 1.2, '', { focus: [380, 240] }),
       clip('ghost-squad', 6, 2.8),
       clip('wobbly-walker', 6, 0.2),
@@ -335,9 +335,9 @@ export const VIDEOS = {
         { text: 'game {live}', scale: 3, y: 112, at: 0.6, cps: 30, cursor: true }
       ], { music: 'calm', hit: 'blip' }),
       {
-        // The GRAV line with its number and comment (2.7x), the game under it.
+        // The GRAV line with its neighbours and comments (3x), the game under it.
         id: 'live', beats: 12, take: 'live-edit', cuts: LIVE_CUTS, window: [0, 0, 1920, 1080],
-        stack: [{ region: 'line', box: [-70, -26, 620, 74], outWidth: 1700 }, { region: 'screen', outWidth: 1200 }]
+        stack: [{ region: 'line', box: [10, -26, 560, 74], outWidth: 1700 }, { region: 'screen', outWidth: 1100 }]
       },
       card('blocks-card', 6, [
         { text: 'New to code?', scale: 3, y: 70, cps: 30 },
@@ -349,7 +349,7 @@ export const VIDEOS = {
         stack: [
           { region: 'workspace', box: [177, 20, 800, 690], place: [48, 104, 1000] },
           { region: 'screen', place: [1090, 48, 800] },
-          { region: 'code', box: [0, 40, 504, 250], place: [1090, 666, 800] }
+          { region: 'code', box: [0, 14, 504, 250], place: [1090, 666, 800] }
         ]
       },
       card('games-card', 6, [
