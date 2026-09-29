@@ -1078,6 +1078,93 @@ try
     assert(blocksLink === '../blocks/', `the playground's Blocks link is ${blocksLink}`);
   });
 
+  // EN | PT: the switch translates the page, the toolbox, the blocks and
+  // the lesson, and leaves the blocks, their places, the code and the
+  // running game as they were. The choice is kept; ?lang= overrides it.
+  await check('blocks: the language switch (EN | PT)', async () =>
+  {
+    const { STRINGS } = await import('../blocks/i18n.js');
+    const context = await browser.newContext();
+    const { page, problems } = await openBlocks(context);
+    const snapshot = () => page.evaluate(() =>
+    {
+      const ws = window.divBlocks.workspace();
+      return {
+        code: window.divBlocks.getCode(),
+        shown: document.getElementById('code').textContent,
+        // Every block, and where each stack sits (blocks inside a stack
+        // move with the width of the words before them).
+        blocks: ws.getAllBlocks(false).map((b) => `${b.id} ${b.type} ${b.getParent()?.id ?? '-'}`).sort().join('\n'),
+        stacks: ws.getTopBlocks(false).map((b) =>
+        {
+          const xy = b.getRelativeToSurfaceXY();
+          return `${b.id} ${Math.round(xy.x)},${Math.round(xy.y)}`;
+        }).sort().join('\n'),
+        running: window.divBlocks.getState()?.running ?? false,
+        processes: window.divBlocks.getState()?.vm.processManager.getAll().length ?? 0
+      };
+    });
+    const texts = () => page.evaluate(() =>
+    {
+      const ws = window.divBlocks.workspace();
+      const repeat = ws.getBlocksByType('div_repeat', false)[0];
+      return {
+        lang: document.documentElement.lang,
+        categories: [...document.querySelectorAll('.blocklyToolboxCategoryLabel')].map((n) => n.textContent),
+        title: document.getElementById('lessonTitle').textContent,
+        run: document.getElementById('runBtn').textContent,
+        status: document.getElementById('status').textContent,
+        block: repeat ? repeat.toString() : '',
+        pressed: document.querySelector('#langSwitch [aria-pressed="true"]').dataset.lang
+      };
+    });
+    await page.click('#lessonNav button[data-index="4"]');
+    await page.click('#solutionBtn');
+    await page.click('#runBtn');
+    await page.waitForTimeout(600);
+    const en = await texts();
+    const before = await snapshot();
+    await page.click('#langSwitch button[data-lang="pt"]');
+    await page.waitForTimeout(300);
+    const pt = await texts();
+    const after = await snapshot();
+    await page.reload();
+    await page.waitForFunction(() => window.divBlocks);
+    await page.waitForTimeout(300);
+    const reloaded = await texts();
+    const reloadedCode = await page.evaluate(() => window.divBlocks.getCode());
+    await page.goto(`${BASE}/blocks/?lang=en`);
+    await page.waitForFunction(() => window.divBlocks);
+    await page.waitForTimeout(300);
+    const forced = await texts();
+    await page.click('#langSwitch button[data-lang="pt"]');
+    await page.waitForTimeout(300);
+    const address = page.url();
+    await page.click('#langSwitch button[data-lang="en"]');
+    await page.waitForTimeout(300);
+    const back = await texts();
+    const backCode = await page.evaluate(() => window.divBlocks.getCode());
+    await context.close();
+    assert(problems.length === 0, problems.join('\n'));
+    assert(en.lang === 'en' && en.pressed === 'en' && en.run === STRINGS.en.RUN, `English at first: ${JSON.stringify(en)}`);
+    assert(pt.lang === 'pt-PT' && pt.pressed === 'pt', `lang ${pt.lang}, pressed ${pt.pressed}`);
+    assert(pt.categories.join() === 'Programa,Aparência,Movimento,Controlo,Sensores,Operadores,Variáveis,Som', `categories: ${pt.categories.join()}`);
+    assert(pt.block.startsWith('repete ') && pt.block.includes(' vezes'), `repeat block: ${pt.block}`);
+    assert(pt.title === `5. ${STRINGS.pt.LESSON_FREE_TITLE}`, `title "${pt.title}"`);
+    assert(pt.run === STRINGS.pt.RUN && pt.status === STRINGS.pt.STATUS_RUNNING, `run "${pt.run}", status "${pt.status}"`);
+    assert(before.running && after.running && after.processes >= before.processes - 3, 'the game should keep running');
+    assert(after.code === before.code && after.shown === before.shown, 'the code changed with the language');
+    assert(after.blocks === before.blocks, `the blocks changed:\n${before.blocks}\n---\n${after.blocks}`);
+    assert(after.stacks === before.stacks, `the stacks moved:\n${before.stacks}\n---\n${after.stacks}`);
+    assert(reloaded.lang === 'pt-PT' && reloaded.title === pt.title, `after a reload: ${reloaded.lang} "${reloaded.title}"`);
+    assert(reloadedCode === before.code, 'the code changed after the reload');
+    assert(forced.lang === 'en' && forced.run === STRINGS.en.RUN && forced.categories[0] === 'Program', `?lang=en: ${JSON.stringify(forced)}`);
+    assert(address.endsWith('?lang=pt'), `the address after switching is ${address}`);
+    assert(back.lang === 'en' && back.title === `5. ${STRINGS.en.LESSON_FREE_TITLE}` && back.block.startsWith('repeat '), `back to English: ${JSON.stringify(back)}`);
+    assert(back.categories.join() === 'Program,Looks,Motion,Control,Sensing,Operators,Variables,Sound', `categories: ${back.categories.join()}`);
+    assert(backCode === before.code, 'the code changed after switching back');
+  });
+
   await check('blocks: phone width stacks the page without sideways scrolling', async () =>
   {
     const { page, problems } = await openBlocks(null, { width: 390, height: 844 });

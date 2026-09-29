@@ -14,39 +14,48 @@
     <header class="topbar">
       <div class="brand">
         <h1>DivJS Blocks</h1>
-        <span>Snap blocks together, see the real DIV code</span>
+        <span data-i18n="TAGLINE">Snap blocks together, see the real DIV code</span>
       </div>
       <div class="actions">
-        <button id="runBtn" class="primary" title="Run the game">▶ Run</button>
-        <button id="stopBtn" title="Stop the game">■ Stop</button>
+        <button id="runBtn" class="primary" title="Run the game" data-i18n="RUN" data-i18n-title="RUN_TITLE">▶ Run</button>
+        <button id="stopBtn" title="Stop the game" data-i18n="STOP" data-i18n-title="STOP_TITLE">■ Stop</button>
         <a id="openLink" class="link-btn" href="../playground/" target="_blank" rel="noopener"
-          title="Open this DIV code in the text playground, to go on in real code">Open in the playground</a>
+          title="Open this DIV code in the text playground, to go on in real code"
+          data-i18n="OPEN_PLAYGROUND" data-i18n-title="OPEN_PLAYGROUND_TITLE">Open in the playground</a>
         <span class="actions-gap" aria-hidden="true"></span>
-        <a class="link-btn" href="../playground/" title="The DivJS Playground: write DIV code as text">⌨ Playground</a>
-        <a class="link-btn" href="https://github.com/akadjoker/divjs" target="_blank" rel="noopener" title="DivJS on GitHub - a star helps!">★ GitHub</a>
+        <a class="link-btn" href="../playground/" title="The DivJS Playground: write DIV code as text"
+          data-i18n-title="PLAYGROUND_TITLE">⌨ Playground</a>
+        <a class="link-btn" href="https://github.com/akadjoker/divjs" target="_blank" rel="noopener" title="DivJS on GitHub - a star helps!"
+          data-i18n-title="GITHUB_TITLE">★ GitHub</a>
+        <div id="langSwitch" class="lang-switch" role="group" aria-label="Language" data-i18n-aria-label="LANGUAGE">
+          <button type="button" data-lang="en" lang="en" title="English" aria-pressed="true">EN</button>
+          <button type="button" data-lang="pt" lang="pt-PT" title="Português" aria-pressed="false">PT</button>
+        </div>
       </div>
     </header>
 
     <section class="lesson" aria-labelledby="lessonTitle">
       <div class="lesson-head">
-        <nav id="lessonNav" class="lesson-nav" aria-label="Lessons"></nav>
-        <h2 id="lessonTitle">Loading…</h2>
+        <nav id="lessonNav" class="lesson-nav" aria-label="Lessons" data-i18n-aria-label="LESSONS"></nav>
+        <h2 id="lessonTitle" data-i18n="LOADING">Loading…</h2>
       </div>
       <p id="lessonGoal" class="lesson-goal"></p>
       <ol id="lessonHints" class="lesson-hints"></ol>
       <div class="lesson-actions">
-        <button id="solutionBtn" title="Replace your blocks with a working solution">Show me the solution</button>
-        <button id="restartBtn" title="Go back to this lesson's starting blocks">Start again</button>
-        <button id="nextBtn" class="primary">Next lesson ▶</button>
+        <button id="solutionBtn" title="Replace your blocks with a working solution"
+          data-i18n="SOLUTION" data-i18n-title="SOLUTION_TITLE">Show me the solution</button>
+        <button id="restartBtn" title="Go back to this lesson's starting blocks"
+          data-i18n="RESTART" data-i18n-title="RESTART_TITLE">Start again</button>
+        <button id="nextBtn" class="primary" data-i18n="NEXT">Next lesson ▶</button>
       </div>
     </section>
 
-    <main id="workspace" class="workspace" aria-label="Blocks"></main>
+    <main id="workspace" class="workspace" aria-label="Blocks" data-i18n-aria-label="BLOCKS"></main>
 
     <aside class="run-col">
-      <section class="screen-pane" aria-label="Game">
+      <section class="screen-pane" aria-label="Game" data-i18n-aria-label="GAME">
         <div id="screen" class="screen">
-          <canvas id="game" tabindex="0" width="320" height="240" aria-label="Game screen"></canvas>
+          <canvas id="game" tabindex="0" width="320" height="240" aria-label="Game screen" data-i18n-aria-label="GAME_SCREEN"></canvas>
         </div>
         <div class="statusbar">
           <span id="status">Stopped</span>
@@ -56,7 +65,7 @@
       </section>
 
       <section class="code-pane" aria-labelledby="codeTitle">
-        <h2 id="codeTitle">DIV code <span>made from your blocks (read-only)</span></h2>
+        <h2 id="codeTitle"><span data-i18n="CODE_TITLE">DIV code</span> <small data-i18n="CODE_NOTE">made from your blocks (read-only)</small></h2>
         <pre id="code" class="code" tabindex="0"></pre>
       </section>
     </aside>

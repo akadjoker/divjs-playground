@@ -28,6 +28,7 @@
 import * as Blockly from './vendor/blockly.js';
 import { KEYWORD_NAMES, BUILTIN_CONSTANTS, PROCESS_FIELD_NAMES, VM, CanvasEngineRuntime } from '../engine/divjs.js';
 import { PALETTE, SCREEN_WIDTH, SCREEN_HEIGHT } from './blocks.js';
+import { t } from './i18n.js';
 
 // Operator precedence, tightest first, matching the DIV parser (C-like:
 // unary, * / %, + -, < <= > >=, == !=, AND, OR).
@@ -227,7 +228,7 @@ function spriteIdentifier(block, fieldName)
   const id = state().sprites.get(raw);
   if (!id)
   {
-    warn(block, `There is no sprite called "${raw}": add a "define sprite ${raw}" block.`);
+    warn(block, t('WARN_NO_SPRITE', { name: raw }));
     return null;
   }
   return id;
@@ -646,7 +647,8 @@ function isHat(block)
 // Generates the DIV program for a workspace.
 // Returns { code, warnings: [{ id, text }] } - warnings name blocks that
 // could not be used as they are (a second "when the game starts", a sprite
-// name used twice, a sprite that does not exist).
+// name used twice, a sprite that does not exist), in the page's language.
+// The code itself is the same in every language.
 export function generateDiv(workspace)
 {
   const gen = divGenerator;
@@ -670,7 +672,7 @@ export function generateDiv(workspace)
   {
     if (!isHat(loose) && !loose.isShadow())
     {
-      warn(loose, 'These blocks are not inside "when the game starts" or a "define sprite", so they do nothing yet.');
+      warn(loose, t('WARN_LOOSE'));
     }
   }
   s.usesBounce = workspace.getAllBlocks(false).some((b) => b.type === 'div_bounce' && b.isEnabled());
@@ -682,7 +684,7 @@ export function generateDiv(workspace)
     const raw = hat.getFieldValue('NAME');
     if (s.sprites.has(raw))
     {
-      warn(hat, `There is already a sprite called "${raw}": give this one another name.`);
+      warn(hat, t('WARN_SAME_SPRITE', { name: raw }));
       continue;
     }
     const id = names.take(raw);
@@ -698,7 +700,7 @@ export function generateDiv(workspace)
   const mains = tops.filter((b) => b.type === 'div_start');
   for (const extra of mains.slice(1))
   {
-    warn(extra, 'Only one "when the game starts" block is used: put all its blocks under the first one.');
+    warn(extra, t('WARN_TWO_STARTS'));
   }
 
   const processes = [];

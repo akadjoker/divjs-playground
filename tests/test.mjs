@@ -344,6 +344,108 @@ for (const name of readdirSync(programsDir)) {
 		}
 		report('blocks: names', problems, 'awkward names compile');
 	}
+
+	// English and Portuguese (blocks/i18n.js): the same keys, the same
+	// placeholders, every block and lesson finds its words, and the code
+	// the blocks make does not depend on the language.
+	{
+		const { STRINGS, LANGUAGES, setLanguage } = await import('../blocks/i18n.js');
+		const placeholders = (text) => [...String(text).matchAll(/%\d+|\{\w+\}/g)].map((m) => m[0]).sort().join(' ');
+		for (const language of LANGUAGES.filter((l) => l !== 'en'))
+		{
+			const problems = [];
+			const en = STRINGS.en;
+			const other = STRINGS[language];
+			for (const key of Object.keys(en))
+			{
+				if (!(key in other))
+				{
+					problems.push(`missing ${key}`);
+				}
+				else if (Array.isArray(en[key]) !== Array.isArray(other[key]))
+				{
+					problems.push(`${key}: not the same kind of value`);
+				}
+				else if (Array.isArray(en[key]) ? other[key].some((line) => !line.trim()) : !other[key].trim())
+				{
+					problems.push(`${key}: empty`);
+				}
+				else if (!Array.isArray(en[key]) && placeholders(en[key]) !== placeholders(other[key]))
+				{
+					problems.push(`${key}: placeholders "${placeholders(other[key])}", English has "${placeholders(en[key])}"`);
+				}
+			}
+			for (const key of Object.keys(other))
+			{
+				if (!(key in en))
+				{
+					problems.push(`${key} is not in English`);
+				}
+			}
+			report(`blocks: ${language} strings match English`, problems, `${Object.keys(other).length} keys`);
+		}
+
+		// Every block's label, dropdowns and tooltip, and every lesson's
+		// texts, resolve in every language (no %{BKY_...} or key left over).
+		for (const language of LANGUAGES)
+		{
+			const problems = [];
+			setLanguage(language);
+			const ws = new Blockly.Workspace();
+			try
+			{
+				for (const type of BLOCK_TYPES)
+				{
+					const block = ws.newBlock(type);
+					const options = block.inputList.flatMap((input) => input.fieldRow)
+						.filter((field) => field instanceof Blockly.FieldDropdown && !(field instanceof Blockly.FieldVariable))
+						.flatMap((field) => field.getOptions(false).map(([label]) => (typeof label === 'string' ? label : label.alt)));
+					const texts = [block.toString(), String(block.tooltip), ...options];
+					if (texts.some((text) => /BKY_|%\{/.test(text)))
+					{
+						problems.push(`${type}: ${texts.find((text) => /BKY_|%\{/.test(text))}`);
+					}
+				}
+			}
+			finally
+			{
+				ws.dispose();
+			}
+			for (const lesson of LESSONS)
+			{
+				if (!lesson.title || lesson.title.startsWith('LESSON_') || !lesson.goal || lesson.goal.startsWith('LESSON_')
+					|| !Array.isArray(lesson.hints) || lesson.hints.length === 0)
+				{
+					problems.push(`lesson ${lesson.id} has no texts`);
+				}
+			}
+			report(`blocks: every text in ${language}`, problems, `${BLOCK_TYPES.length} blocks, ${LESSONS.length} lessons`);
+		}
+
+		// The same DIV code, byte for byte, in every language.
+		{
+			const problems = [];
+			let count = 0;
+			for (const lesson of LESSONS)
+			{
+				for (const which of ['start', 'solution'])
+				{
+					const codes = LANGUAGES.map((language) =>
+					{
+						setLanguage(language);
+						return generate(lesson[which]).code;
+					});
+					count += 1;
+					if (codes.some((code) => code !== codes[0]))
+					{
+						problems.push(`${lesson.id} ${which}`);
+					}
+				}
+			}
+			setLanguage('en');
+			report('blocks: code is the same in every language', problems, `${count} workspaces in ${LANGUAGES.join(', ')}`);
+		}
+	}
 }
 
 console.log(`\nSummary: ${ok} ok, ${fail} failed`);
