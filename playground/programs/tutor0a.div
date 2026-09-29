@@ -12,8 +12,8 @@ END
 
 PROCESS ship()
 BEGIN
-    graph=1; x=160; y=500;    // Selects graphic and coordinates
-    size=200;
+    graph=1; x=160; y=180;    // Selects graphic and coordinates (bottom of
+                              // the 320x200 screen)
 
     LOOP                      // Enters an infinite loop
         x=mouse.x;            // Puts ship on x mouse's coordinate
@@ -32,7 +32,6 @@ END
 PROCESS shot(x,y)
 BEGIN
     graph=3;    // Selects graphic
-    size=200;
     REPEAT      // Repeated loop
         y-=16;  // Moves upwards 16 points
         FRAME;  // Shows next image

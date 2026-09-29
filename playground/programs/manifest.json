@@ -1,6 +1,39 @@
 {
   "programs": [
     {
+      "id": "start1-player",
+      "title": "Step 1: the player",
+      "category": "start",
+      "file": "start1-player.div",
+      "width": 320,
+      "height": 240,
+      "clearColor": "#0b1020",
+      "description": "Your first DIV program: a ship drawn in code, moved with the arrow keys. Explains processes, graph, x, y and FRAME.",
+      "controls": "Arrow keys move the ship"
+    },
+    {
+      "id": "start2-shots",
+      "title": "Step 2: shooting",
+      "category": "start",
+      "file": "start2-shots.div",
+      "width": 320,
+      "height": 240,
+      "clearColor": "#0b1020",
+      "description": "Step 1 plus shots: each shot is a process of its own that flies up and ends by itself. Adds key_pressed and a sound.",
+      "controls": "Arrow keys move, Space fires"
+    },
+    {
+      "id": "start3-enemies",
+      "title": "Step 3: enemies",
+      "category": "start",
+      "file": "start3-enemies.div",
+      "width": 320,
+      "height": 240,
+      "clearColor": "#0b1020",
+      "description": "Step 2 plus falling enemies: collision, signal, a score on screen, explosions and game over.",
+      "controls": "Arrow keys move, Space fires, Enter restarts after game over"
+    },
+    {
       "id": "tutor0a",
       "title": "Tutorial 0a: ship and shots",
       "category": "tutorials",
@@ -573,6 +606,10 @@
     }
   ],
   "categories": [
+    {
+      "id": "start",
+      "title": "Start here"
+    },
     {
       "id": "tutorials",
       "title": "DIV tutorials"

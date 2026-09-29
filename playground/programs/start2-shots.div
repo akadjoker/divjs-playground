@@ -1,0 +1,74 @@
+PROGRAM start_2_shots;
+
+// START HERE - STEP 2: SHOOTING
+//
+// Step 1's ship, now firing. Every shot is a process too: the player
+// creates one with shot(x, y) each time Space is pressed, and the shot
+// moves up by itself until it leaves the screen - then its process ends
+// and it disappears. Many processes of the same type can run at once.
+
+GLOBAL
+  g_ship;               // graphics
+  g_shot;
+  snd_shot;             // a sound, made by the engine (no file needed)
+
+PROCESS player();
+BEGIN
+  graph = g_ship;
+  x = 160;
+  y = 200;
+
+  LOOP
+    IF (key(_left))  x = x - 3; END
+    IF (key(_right)) x = x + 3; END
+    IF (key(_up))    y = y - 3; END
+    IF (key(_down))  y = y + 3; END
+    IF (x < 12)  x = 12;  END
+    IF (x > 308) x = 308; END
+    IF (y < 12)  y = 12;  END
+    IF (y > 228) y = 228; END
+
+    // key_pressed() is 1 only in the frame the key goes down: one shot
+    // per press. (With key() you would fire every frame while it is held.)
+    IF (key_pressed(_space))
+      shot(x, y - 14);          // a new shot just above the nose
+      play_sound(snd_shot, 60); // volume 60%
+    END
+
+    FRAME;
+  END
+END
+
+// A shot: starts where the player tells it, flies up, and ends when it
+// is off the top of the screen.
+PROCESS shot(x, y);
+BEGIN
+  graph = g_shot;
+  REPEAT
+    y = y - 6;
+    FRAME;
+  UNTIL (y < -10)       // leaving the loop ends the process
+END
+
+BEGIN
+  set_mode(320, 240);
+  set_fps(60, 0);
+
+  g_ship = new_graphic(24, 24);
+  gfx_rect(g_ship, 10, 0, 4, 10, 140, 210, 255);
+  gfx_rect(g_ship, 5, 8, 14, 12, 70, 140, 255);
+  gfx_rect(g_ship, 0, 13, 5, 10, 230, 90, 90);
+  gfx_rect(g_ship, 19, 13, 5, 10, 230, 90, 90);
+
+  g_shot = new_graphic(4, 10);
+  gfx_rect(g_shot, 0, 0, 4, 10, 255, 240, 120);
+
+  snd_shot = sfx(sfx_laser);
+
+  player();
+  write(0, 160, 8, 1, "Arrows move, Space fires");
+
+  LOOP
+    FRAME;
+  END
+END

@@ -7,7 +7,7 @@ BEGIN
         // If a random number between 0 and 100 is minor than 30, then creates
         // an "enemy" type process on top of screen
         IF (rand(0,100)<30)
-            enemy(rand(0,800),rand(-4,4),rand(6,12));
+            enemy(rand(0,320),rand(-2,2),rand(2,5));
         END
         FRAME;        // Shows next image
     END
@@ -19,7 +19,8 @@ END
 
 PROCESS ship()
 BEGIN
-    graph=1; x=160; y=480;    // Selects graphic and it's coordinates
+    graph=1; x=160; y=180;    // Selects graphic and its coordinates (bottom
+                              // of the 320x200 screen)
 
     LOOP
         x=mouse.x;            // Puts ship on x mouse coordinate
@@ -61,7 +62,7 @@ BEGIN
       y+=inc_y;         // Same thing with y coordinate
       FRAME;
     // Repeats until it gets out of screen or collides with a shot
-    UNTIL (y>600 OR collision(TYPE shot));
+    UNTIL (y>220 OR collision(TYPE shot));
 
     FROM graph=5 TO 10; // Prints an explosion on enemy's position
         FRAME;          // (explosion's graphics range from the 5th to the 10th)

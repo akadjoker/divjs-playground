@@ -1,0 +1,58 @@
+PROGRAM start_1_player;
+
+// START HERE - STEP 1: THE PLAYER
+//
+// In DIV, everything that moves on the screen is a PROCESS: a small
+// program of its own, with its own x, y and graph (the picture it shows).
+// A process runs until it reaches FRAME; then the screen is drawn, and on
+// the next frame the process carries on from where it stopped.
+//
+// This program has one process, the player's ship, and moves it with the
+// arrow keys. Try changing the numbers and press Run (Ctrl+Enter).
+
+GLOBAL
+  g_ship;               // the code of the ship's graphic
+
+// The player's ship
+PROCESS player();
+BEGIN
+  graph = g_ship;       // what the process looks like
+  x = 160;              // where it starts: the middle...
+  y = 200;              // ...near the bottom of the 320x240 screen
+
+  LOOP                  // repeat for ever:
+    IF (key(_left))  x = x - 3; END     // key() is 1 while a key is held
+    IF (key(_right)) x = x + 3; END
+    IF (key(_up))    y = y - 3; END     // y grows downwards on the screen
+    IF (key(_down))  y = y + 3; END
+
+    // Stay on the screen
+    IF (x < 12)  x = 12;  END
+    IF (x > 308) x = 308; END
+    IF (y < 12)  y = 12;  END
+    IF (y > 228) y = 228; END
+
+    FRAME;              // show this frame; continue here on the next one
+  END
+END
+
+// The program starts here
+BEGIN
+  set_mode(320, 240);   // screen size
+  set_fps(60, 0);       // 60 frames a second
+
+  // Draw the ship: a new 24x24 graphic, painted with rectangles.
+  g_ship = new_graphic(24, 24);
+  gfx_rect(g_ship, 10, 0, 4, 10, 140, 210, 255);    // nose
+  gfx_rect(g_ship, 5, 8, 14, 12, 70, 140, 255);     // body
+  gfx_rect(g_ship, 0, 13, 5, 10, 230, 90, 90);      // left wing
+  gfx_rect(g_ship, 19, 13, 5, 10, 230, 90, 90);     // right wing
+
+  player();             // create the player process
+
+  write(0, 160, 8, 1, "Arrow keys move the ship");
+
+  LOOP                  // the main program just waits
+    FRAME;
+  END
+END
