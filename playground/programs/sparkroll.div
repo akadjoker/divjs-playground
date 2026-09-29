@@ -1,0 +1,3083 @@
+PROGRAM sparkroll;
+
+// ---------------------------------------------------------------------
+// SPARKROLL - Kip the pangolin races across the islands to win the
+// sparks back from Baron Rust, a scrap-metal crow in a flying pod.
+//
+// A momentum platformer. Kip's physics are written here, frame by
+// frame (no physics engine): speed builds up along the ground, slopes
+// speed him up or hold him back, he curls into a spinning ball to roll
+// and jump, and a charge dash (hold DOWN, tap JUMP, let go of DOWN)
+// shoots him off from a standstill.
+//
+// The ground is a height map (a height every 8 pixels) plus solid
+// blocks and loops. Everything asks one question, solid(x, y), and
+// Kip feels his way along with sensors, like the classic 16-bit games:
+// two "feet" probe towards the ground and two probe sideways for walls.
+// The direction the sensors point turns with the ground: floor mode,
+// right wall, ceiling, left wall - that is how he runs round a loop.
+// The loop's ring has two halves: on the way in only the right half is
+// solid, after the top only the left one, so Kip can run in through the
+// open side and out the other.
+//
+// All graphics are drawn with new_graphic + gfx_*, all sounds and the
+// music are made by the engine's synthesiser.
+// ---------------------------------------------------------------------
+
+GLOBAL
+  SW = 480; SH = 270;                  // screen
+  GAP = 99999;                         // "no ground here"
+  RIN = 100; ROUT = 124;               // loop ring radii
+  RIN2 = 10000; ROUT2 = 15376;
+
+  // ---- per-frame physics constants (60 fps, pixels)
+  ACC = 0.046875; DEC = 0.5; FRC = 0.046875; TOP = 6.0;
+  SLP = 0.125; SLP_UP = 0.078125; SLP_DOWN = 0.3125;
+  RFRC = 0.0234375; RDEC = 0.125;
+  AIR = 0.09375; GRV = 0.21875; JMP = 6.5; MAXG = 16.0;
+
+  // probe directions: 0 down, 1 right, 2 up, 3 left (screen)
+  pdx[3] = 0, 1, 0, -1;
+  pdy[3] = 1, 0, -1, 0;
+
+  // ---- the level
+  gh[4000];                            // ground height every 8 px (GAP = hole)
+  nnodes = 0; lv_w = 0; lv_bottom = 0; lv_top = 0;
+  bx = 0; bh = 0.0;                    // builder cursor: node, height
+  blx1[63]; bly1[63]; blx2[63]; bly2[63]; nblk = 0;
+  bb[1023]; bbn[127];                  // blocks per 512-px bucket (8 each)
+  lcx[3]; lcy[3]; nloops = 0;          // loops (centre of the ring)
+  layer = 0;                           // 0: loop entry side solid, 1: exit side
+  zone = 0;                            // 0 Coral Coast, 1 Rivet Works
+  arena_x = 0; arena_on = 0; lock_x1 = 0; lock_x2 = 0;
+  goal_x = 0; start_x = 0; start_y = 0; cp_x = 0; cp_y = 0;
+
+  // ---- objects (spawned near the camera)
+  ob_k[511]; ob_x[511]; ob_y[511]; ob_p[511]; ob_s[511]; nobj = 0;
+  K_SPARK = 1; K_WALKER = 2; K_FLYER = 3; K_SPRING = 4; K_BOOST = 5;
+  K_CHECK = 6; K_GOAL = 7; K_CRATE = 8;
+
+  // ---- chunks of painted ground
+  CHW = 512;
+  ch_alive[127];
+
+  // ---- Kip
+  hx = 0.0; hy = 0.0; xsp = 0.0; ysp = 0.0; gsp = 0.0; ga = 0.0;
+  onground = 0; ball = 0; rolling = 0; hmode = 0; facing = 1;
+  hr = 19; wr = 9; ctrl_lock = 0; invuln = 0; hurt = 0; dead = 0;
+  crouch = 0; charging = 0; rev = 0.0; jumped = 0; sprung = 0;
+  spr_ang = 0.0; spin_ang = 0.0; anim = 0.0; dead_t = 0; boost_t = 0;
+  kl = 0; kr = 0; kd = 0; kj = 0; kjp = 0;
+  chain = 0;                           // enemies popped in one jump
+  kip_id = 0;
+
+  // ---- camera
+  cam_x = 0.0; cam_y = 0.0; cam_lead = 0.0;
+
+  // ---- game
+  ST_TITLE = 0; ST_CARD = 1; ST_PLAY = 2; ST_CLEAR = 3; ST_DEAD = 4;
+  ST_OVER = 5; ST_WIN = 6;
+  gstate = 0; st_t = 0;
+  score = 0; lives = 3; sparks = 0; next_life = 100; frames = 0;
+  hud_dirty = 1; boss_hp = 0; boss_state = 0; boss_id = 0;
+  bonus_time = 0; bonus_spark = 0;
+  pop_x = 0; pop_y = 0; pop_t = 0; pop_s = "";
+  fps_min = 999; fps_now = 0;          // for the tests
+
+  // ---- test telemetry (read by tests/browser.mjs-style harnesses)
+  loops_done = 0; springs_used = 0; enemies_popped = 0; hits_taken = 0;
+  scattered = 0; regrabbed = 0; boosts_used = 0;
+
+  // ---- graphics
+  g_kip[23]; g_ball[1]; g_spark[3]; g_walker[3]; g_flyer[3];
+  g_spring[3]; g_boost[1]; g_check[1]; g_goal[1]; g_crate = 0;
+  g_boom[3]; g_dust = 0; g_boss[3]; g_bomb = 0;
+  g_sky[1]; g_far[1]; g_mid[1]; g_title = 0; g_hud = 0;
+  // terrain colours per zone: 10 colours x rgb
+  zc[59];
+
+  // ---- sound
+  s_jump = 0; s_spin = 0; s_charge = 0; s_dash = 0; s_spark = 0; s_scatter = 0;
+  s_spring = 0; s_boost = 0; s_hit = 0; s_pop = 0; s_goal = 0; s_check = 0;
+  s_die = 0; s_bosshit = 0; s_boom = 0; s_bomb = 0; s_life = 0; s_skid = 0;
+  s_start = 0; s_tally = 0;
+  mus_title = 0; mus_coast = 0; mus_works = 0; mus_boss = 0; mus_clear = 0;
+  mus_over = 0; mus_win = 0; mus_now = 0;
+  spark_pan = 0;
+
+
+  // ---- flow
+  gen = 0;                             // world generation: old processes quit
+  goal_hit = 0; frozen = 0; boss_beaten = 0; cp_time = 0;
+  skid_t = 0; loop_last = -1;
+  ST_LOAD = 7;
+  g_zcard[1]; g_res = 0; g_end = 0;
+
+// =====================================================================
+// Small helpers
+// =====================================================================
+
+// a / b as a real division (DIV divides whole numbers as integers)
+FUNCTION fdiv(a, b);
+BEGIN
+  IF (b == 0) RETURN 0; END
+  RETURN a * (1.0 / (b + 0.0000001));
+END
+
+// Angle wrapped into 0..360000
+FUNCTION norm_ang(a);
+BEGIN
+  WHILE (a < 0) a += 360000; END
+  WHILE (a >= 360000) a -= 360000; END
+  RETURN a;
+END
+
+// Difference b - a wrapped into -180000..180000
+FUNCTION ang_diff(a, b);
+PRIVATE d;
+BEGIN
+  d = b - a;
+  WHILE (d > 180000) d -= 360000; END
+  WHILE (d < -180000) d += 360000; END
+  RETURN d;
+END
+
+// Sensor mode of a ground angle: 0 floor, 1 right wall, 2 ceiling, 3 left wall
+FUNCTION mode_of(a);
+BEGIN
+  RETURN int((norm_ang(a) + 45000) * 0.0000111111111) % 4;
+END
+
+FUNCTION sgn(v);
+BEGIN
+  IF (v > 0) RETURN 1; END
+  IF (v < 0) RETURN -1; END
+  RETURN 0;
+END
+
+// Terrain colour k (0..9) of the current zone, component c (0 r, 1 g, 2 b)
+FUNCTION zcol(k, c);
+BEGIN
+  RETURN zc[zone * 30 + k * 3 + c];
+END
+
+FUNCTION set_zc(zn, k, r, g, b);
+BEGIN
+  zc[zn * 30 + k * 3] = r; zc[zn * 30 + k * 3 + 1] = g; zc[zn * 30 + k * 3 + 2] = b;
+  RETURN 0;
+END
+
+FUNCTION add_score(n);
+BEGIN
+  score += n;
+  hud_dirty = 1;
+  RETURN 0;
+END
+
+FUNCTION music(s);
+BEGIN
+  IF (mus_now != s) mus_now = s; song_play(s); END
+  RETURN 0;
+END
+
+// =====================================================================
+// Collision: the ground, blocks and loops, and the sensors
+// =====================================================================
+
+// Height of the ground surface at x (GAP over a hole). Outside the
+// level it is a wall.
+FUNCTION ground_h(px);
+PRIVATE i, a, b;
+BEGIN
+  IF (px < 0 OR px >= lv_w - 8) RETURN -99999; END
+  i = int(px * 0.125);
+  a = gh[i];
+  b = gh[i + 1];
+  IF (a >= GAP) RETURN GAP; END
+  IF (b >= GAP) RETURN a; END
+  RETURN a + (b - a) * (px * 0.125 - i);
+END
+
+// 1 when the point (px, py) is inside something solid
+FUNCTION solid(px, py);
+PRIVATE k, j, b, dx, dy, d2;
+BEGIN
+  IF (py >= ground_h(px)) RETURN 1; END
+  IF (px < 0) RETURN 1; END
+  k = int(px * 0.001953125);             // / 512
+  FOR j = 0 TO bbn[k] - 1
+    b = bb[k * 8 + j];
+    IF (px >= blx1[b] AND px < blx2[b] AND py >= bly1[b] AND py < bly2[b]) RETURN 1; END
+  END
+  FOR j = 0 TO nloops - 1
+    dx = px - lcx[j];
+    IF (dx > -ROUT AND dx < ROUT)
+      dy = py - lcy[j];
+      d2 = dx * dx + dy * dy;
+      IF (d2 >= RIN2 AND d2 <= ROUT2)
+        IF (dy < -40) RETURN 1; END
+        IF (layer == 0 AND dx >= 0) RETURN 1; END
+        IF (layer == 1 AND dx < 0) RETURN 1; END
+      END
+    END
+  END
+  RETURN 0;
+END
+
+// A sensor: from (px, py) looking in direction dir, the distance to the
+// surface of the solid ahead (up to maxd). Negative when the point is
+// already inside (up to 24 deep). 99 when nothing is found, -99 when
+// it is buried deeper. Steps of 4 px, then halving to 1/16 px.
+FUNCTION probe(px, py, dir, maxd);
+PRIVATE dx, dy, k, lo, hi, mid, n, found;
+BEGIN
+  dx = pdx[dir];
+  dy = pdy[dir];
+  IF (solid(px, py))
+    k = 0;
+    found = 0;
+    WHILE (k < 24)
+      k += 4;
+      IF (NOT solid(px - dx * k, py - dy * k)) found = 1; BREAK; END
+    END
+    IF (NOT found) RETURN -99; END
+    lo = -k;
+    hi = 4 - k;
+  ELSE
+    k = 0;
+    found = 0;
+    WHILE (k < maxd)
+      k += 4;
+      IF (solid(px + dx * k, py + dy * k)) found = 1; BREAK; END
+    END
+    IF (NOT found) RETURN 99; END
+    lo = k - 4;
+    hi = k;
+  END
+  FOR n = 0 TO 5
+    mid = (lo + hi) * 0.5;
+    IF (solid(px + dx * mid, py + dy * mid)) hi = mid; ELSE lo = mid; END
+  END
+  RETURN (lo + hi) * 0.5;
+END
+
+// Ground angle of the surface at the contact point (px, py), felt all
+// round it: the free directions average to the surface normal. -1 when
+// the point is a corner (mostly free) or buried (mostly solid).
+FUNCTION surf_angle(px, py);
+PRIVATE k, a, sx, sy, nfree;
+BEGIN
+  sx = 0; sy = 0; nfree = 0;
+  FOR k = 0 TO 15
+    a = k * 22500;
+    IF (NOT solid(px + cos(a) * 3, py - sin(a) * 3))
+      sx += cos(a); sy += sin(a);
+      nfree++;
+    END
+  END
+  IF (nfree < 6 OR nfree > 10) RETURN -1; END
+  RETURN norm_ang(atan2(sy, sx) - 90000);
+END
+
+// =====================================================================
+// Level builder: the height map is drawn with segments
+// =====================================================================
+
+FUNCTION lv_flat(n);
+PRIVATE i;
+BEGIN
+  FOR i = 1 TO n
+    gh[bx] = bh;
+    bx++;
+  END
+  RETURN 0;
+END
+
+// Smooth slope: dh pixels down (positive) or up (negative) over n nodes
+FUNCTION lv_slope(n, dh);
+PRIVATE i, t, h0;
+BEGIN
+  h0 = bh;
+  FOR i = 1 TO n
+    t = fdiv(i, n);
+    gh[bx] = h0 + dh * t * t * (3 - 2 * t);
+    bx++;
+  END
+  bh = h0 + dh;
+  RETURN 0;
+END
+
+// Bumps (amp > 0) or a half-pipe valley (amp < 0), back to the same height
+FUNCTION lv_hills(n, amp, waves);
+PRIVATE i, t;
+BEGIN
+  FOR i = 1 TO n
+    t = fdiv(i, n);
+    gh[bx] = bh - amp * (1 - cos(t * 360000 * waves)) * 0.5;
+    bx++;
+  END
+  RETURN 0;
+END
+
+FUNCTION lv_gap(n);
+PRIVATE i;
+BEGIN
+  FOR i = 1 TO n
+    gh[bx] = GAP;
+    bx++;
+  END
+  RETURN 0;
+END
+
+// A launch ramp: a curve rising `rise` pixels that ends steep, then
+// the ground drops back to the base height
+FUNCTION lv_ramp(n, rise);
+PRIVATE i, t;
+BEGIN
+  FOR i = 1 TO n
+    t = fdiv(i, n);
+    gh[bx] = bh - rise * (1 - cos(t * 62000)) * 1.884;
+    bx++;
+  END
+  RETURN 0;
+END
+
+// A trench below a jump: fall short and a spring at its far end
+// throws you back up
+FUNCTION trench(n, depth);
+PRIVATE x0;
+BEGIN
+  x0 = bx * 8;
+  bh += depth;
+  lv_flat(n);
+  bh -= depth;
+  ob_add(K_SPRING, x0 + n * 8 - 40, bh + depth, 12);
+  sparks_row(x0 + 40, 4, 24, 26);
+  RETURN 0;
+END
+
+// A loop on flat ground; returns its centre x
+FUNCTION lv_loop();
+PRIVATE x0;
+BEGIN
+  x0 = bx * 8;
+  lcx[nloops] = x0 + 40 + ROUT;
+  lcy[nloops] = bh - RIN;
+  nloops++;
+  lv_flat((ROUT * 2 + 80) / 8);
+  RETURN x0 + 40 + ROUT;
+END
+
+// Current builder position in pixels
+FUNCTION lv_px();
+BEGIN
+  RETURN bx * 8;
+END
+
+// A solid block (x, y top-left)
+FUNCTION blk(x0, y0, w, h);
+PRIVATE k, k0, k1;
+BEGIN
+  blx1[nblk] = x0; bly1[nblk] = y0; blx2[nblk] = x0 + w; bly2[nblk] = y0 + h;
+  k0 = x0 / CHW;
+  k1 = (x0 + w) / CHW;
+  FOR k = k0 TO k1
+    IF (bbn[k] < 8)
+      bb[k * 8 + bbn[k]] = nblk;
+      bbn[k]++;
+    END
+  END
+  nblk++;
+  RETURN nblk - 1;
+END
+
+FUNCTION ob_add(k, x0, y0, p);
+BEGIN
+  ob_k[nobj] = k; ob_x[nobj] = x0; ob_y[nobj] = y0; ob_p[nobj] = p; ob_s[nobj] = 0;
+  nobj++;
+  RETURN nobj - 1;
+END
+
+// A row of n sparks, `above` pixels over the ground
+FUNCTION sparks_row(x0, n, step, above);
+PRIVATE i, gy;
+BEGIN
+  FOR i = 0 TO n - 1
+    gy = ground_h(x0 + i * step);
+    IF (gy < GAP) ob_add(K_SPARK, x0 + i * step, gy - above, 0); END
+  END
+  RETURN 0;
+END
+
+// Sparks along an arc from (x0, y0) spanning w pixels, hgt high
+FUNCTION sparks_arc(x0, y0, n, w, hgt);
+PRIVATE i, t;
+BEGIN
+  FOR i = 0 TO n - 1
+    t = fdiv(i, n - 1);
+    ob_add(K_SPARK, x0 + w * t, y0 - hgt * sin(t * 180000), 0);
+  END
+  RETURN 0;
+END
+
+// A circle of sparks round a point
+FUNCTION sparks_ring(cx, cy, r, n, a0, a1);
+PRIVATE i, a;
+BEGIN
+  FOR i = 0 TO n - 1
+    a = a0 + (a1 - a0) * fdiv(i, n - 1);
+    ob_add(K_SPARK, cx + cos(a) * r, cy - sin(a) * r, 0);
+  END
+  RETURN 0;
+END
+
+// Something standing on the ground at x (its centre `up` px above it)
+FUNCTION on_ground(k, x0, up, p);
+BEGIN
+  RETURN ob_add(k, x0, ground_h(x0) - up, p);
+END
+
+// =====================================================================
+// The two zones
+// =====================================================================
+
+FUNCTION level_reset();
+PRIVATE i;
+BEGIN
+  FOR i = 0 TO 3999 gh[i] = GAP; END
+  FOR i = 0 TO 127 bbn[i] = 0; ch_alive[i] = 0; END
+  nblk = 0; nloops = 0; nobj = 0;
+  bx = 0; bh = 640;
+  lv_w = 31000;                        // until level_finish knows
+  arena_x = 0; arena_on = 0; goal_x = 0;
+  RETURN 0;
+END
+
+// Level height range and width, once the map is complete
+FUNCTION level_finish();
+PRIVATE i, lo, hi;
+BEGIN
+  lv_w = bx * 8;
+  nnodes = bx;
+  lo = 99999; hi = -99999;
+  FOR i = 0 TO bx - 1
+    IF (gh[i] < GAP)
+      IF (gh[i] < lo) lo = gh[i]; END
+      IF (gh[i] > hi) hi = gh[i]; END
+    END
+  END
+  lv_top = lo - 400;
+  lv_bottom = int(hi) + 150;
+  RETURN 0;
+END
+
+// Coral Coast, first half
+FUNCTION coast_a();
+PRIVATE p, cx;
+BEGIN
+  bx = 0; bh = 640;
+  lv_flat(56);
+  start_x = 100; start_y = bh - 19;
+  sparks_row(220, 5, 28, 34);
+
+  p = lv_px(); lv_hills(64, 22, 2);
+  sparks_row(p + 96, 3, 32, 30);
+  sparks_row(p + 352, 3, 32, 30);
+  on_ground(K_WALKER, p + 256, 12, 0);
+
+  p = lv_px(); lv_slope(40, 96);
+  sparks_row(p + 40, 5, 50, 28);
+
+  p = lv_px(); lv_flat(28);
+  on_ground(K_SPRING, p + 80, 8, 10);
+  blk(p + 140, bh - 150, 180, 22);
+  sparks_row(p + 70, 1, 1, 70);
+  ob_add(K_SPARK, p + 170, bh - 168, 0);
+  ob_add(K_SPARK, p + 200, bh - 168, 0);
+  ob_add(K_SPARK, p + 230, bh - 168, 0);
+  ob_add(K_SPARK, p + 260, bh - 168, 0);
+  ob_add(K_CRATE, p + 296, bh - 166, 0);
+  on_ground(K_WALKER, p + 190, 12, 0);
+
+  p = lv_px(); lv_slope(30, -64);
+  p = lv_px(); lv_flat(18);
+  on_ground(K_BOOST, p + 60, 4, 1);
+  sparks_row(p + 96, 3, 16, 26);
+
+  cx = lv_loop();
+  sparks_ring(cx, lcy[nloops - 1], RIN - 32, 11, -50000, 230000);
+
+  p = lv_px(); lv_flat(32);
+  sparks_row(p + 40, 6, 30, 28);
+  ob_add(K_FLYER, p + 210, bh - 76, 0);
+
+  p = lv_px(); lv_slope(64, 190);
+  sparks_row(p + 100, 6, 44, 26);
+
+  p = lv_px(); lv_flat(8); lv_ramp(12, 56);
+  p = lv_px(); trench(30, 170);
+  sparks_arc(p + 10, bh - 140, 7, 220, 60);
+  bh += 30;
+  p = lv_px(); lv_flat(44);
+  on_ground(K_CHECK, p + 200, 24, 0);
+  sparks_row(p + 60, 4, 26, 30);
+  on_ground(K_WALKER, p + 300, 12, 0);
+  RETURN 0;
+END
+
+// Coral Coast, second half
+FUNCTION coast_b();
+PRIVATE p, cx;
+BEGIN
+  p = lv_px(); lv_hills(56, -70, 1);
+  on_ground(K_WALKER, p + 150, 12, 0);
+  on_ground(K_WALKER, p + 300, 12, 0);
+  sparks_row(p + 180, 4, 24, 26);
+
+  p = lv_px(); lv_flat(16);
+  p = lv_px(); lv_slope(40, -110);
+  sparks_row(p + 60, 4, 50, 26);
+
+  p = lv_px(); lv_flat(26);
+  on_ground(K_SPRING, p + 56, 8, 12);
+  blk(p + 110, bh - 250, 260, 22);
+  ob_add(K_SPARK, p + 140, bh - 268, 0);
+  ob_add(K_SPARK, p + 170, bh - 268, 0);
+  ob_add(K_SPARK, p + 200, bh - 268, 0);
+  ob_add(K_SPARK, p + 230, bh - 268, 0);
+  ob_add(K_SPARK, p + 260, bh - 268, 0);
+  ob_add(K_CRATE, p + 330, bh - 266, 0);
+  on_ground(K_WALKER, p + 150, 12, 0);
+
+  p = lv_px(); lv_gap(18);
+  blk(p + 36, bh - 16, 72, 20);
+  sparks_arc(p + 4, bh - 46, 5, 136, 40);
+
+  p = lv_px(); lv_flat(28);
+  on_ground(K_BOOST, p + 150, 4, 1);
+
+  p = lv_px(); lv_slope(50, 150);
+  sparks_row(p + 60, 5, 60, 26);
+
+  p = lv_px(); lv_flat(10);
+  on_ground(K_BOOST, p + 40, 4, 1);
+  cx = lv_loop();
+  sparks_ring(cx, lcy[nloops - 1], RIN - 32, 11, -50000, 230000);
+
+  p = lv_px(); lv_flat(40);
+  ob_add(K_FLYER, p + 120, bh - 64, 0);
+  ob_add(K_FLYER, p + 270, bh - 96, 0);
+  sparks_row(p + 20, 8, 28, 28);
+
+  p = lv_px(); lv_hills(80, 30, 3);
+  on_ground(K_WALKER, p + 213, 12, 0);
+  on_ground(K_WALKER, p + 427, 12, 0);
+  sparks_row(p + 90, 3, 20, 30);
+  sparks_row(p + 520, 3, 20, 30);
+
+  p = lv_px(); lv_slope(24, 40);
+  p = lv_px(); lv_flat(70);
+  goal_x = p + 260;
+  on_ground(K_GOAL, goal_x, 40, 0);
+  sparks_row(p + 60, 5, 26, 28);
+  blk(p + 520, bh - 400, 40, 400);
+  RETURN 0;
+END
+
+// Rivet Works, first half
+FUNCTION works_a();
+PRIVATE p, cx;
+BEGIN
+  bx = 0; bh = 640;
+  lv_flat(50);
+  start_x = 100; start_y = bh - 19;
+  sparks_row(200, 5, 28, 30);
+
+  p = lv_px(); lv_slope(24, -40);
+  p = lv_px(); lv_flat(46);
+  blk(p + 120, bh - 40, 44, 40);
+  blk(p + 164, bh - 84, 44, 84);
+  ob_add(K_SPARK, p + 142, bh - 64, 0);
+  ob_add(K_SPARK, p + 186, bh - 108, 0);
+  ob_add(K_SPARK, p + 186, bh - 134, 0);
+  on_ground(K_WALKER, p + 300, 12, 0);
+
+  p = lv_px(); lv_slope(56, 170);
+  sparks_row(p + 50, 6, 60, 26);
+  on_ground(K_WALKER, p + 260, 12, 0);
+
+  p = lv_px(); lv_flat(14);
+  on_ground(K_BOOST, p + 50, 4, 1);
+  cx = lv_loop();
+  sparks_ring(cx, lcy[nloops - 1], RIN - 32, 11, -50000, 230000);
+
+  p = lv_px(); lv_flat(28);
+  sparks_row(p + 30, 5, 28, 28);
+  ob_add(K_FLYER, p + 190, bh - 70, 0);
+
+  p = lv_px(); lv_slope(40, 110);
+  p = lv_px(); lv_flat(6); lv_ramp(12, 60);
+  p = lv_px(); trench(32, 170);
+  sparks_arc(p + 10, bh - 150, 7, 230, 60);
+  bh += 20;
+  p = lv_px(); lv_flat(40);
+  on_ground(K_CHECK, p + 180, 24, 0);
+  sparks_row(p + 40, 4, 26, 28);
+  RETURN 0;
+END
+
+// Rivet Works, second half and the boss arena
+FUNCTION works_b();
+PRIVATE p, cx;
+BEGIN
+  p = lv_px(); lv_flat(16);
+  p = lv_px(); lv_gap(14);
+  blk(p + 22, bh + 6, 68, 18);
+  ob_add(K_SPARK, p + 56, bh - 30, 0);
+  p = lv_px(); lv_flat(10);
+  p = lv_px(); lv_gap(14);
+  blk(p + 22, bh + 6, 68, 18);
+  ob_add(K_SPARK, p + 56, bh - 30, 0);
+
+  p = lv_px(); lv_flat(34);
+  on_ground(K_SPRING, p + 60, 8, 12);
+  blk(p + 100, bh - 240, 150, 22);
+  blk(p + 250, bh - 240, 22, 90);
+  ob_add(K_SPARK, p + 130, bh - 258, 0);
+  ob_add(K_SPARK, p + 160, bh - 258, 0);
+  ob_add(K_SPARK, p + 190, bh - 258, 0);
+  ob_add(K_CRATE, p + 222, bh - 256, 0);
+  on_ground(K_WALKER, p + 190, 12, 0);
+
+  p = lv_px(); lv_hills(64, -60, 1);
+  on_ground(K_WALKER, p + 170, 12, 0);
+  on_ground(K_WALKER, p + 350, 12, 0);
+  sparks_row(p + 220, 4, 24, 26);
+
+  p = lv_px(); lv_flat(20);
+  p = lv_px(); lv_slope(40, -90);
+  ob_add(K_FLYER, p + 200, bh - 180, 0);
+  p = lv_px(); lv_flat(20);
+  sparks_row(p + 20, 5, 28, 28);
+  p = lv_px(); lv_slope(50, 130);
+  sparks_row(p + 80, 5, 50, 26);
+  p = lv_px(); lv_flat(12);
+  on_ground(K_BOOST, p + 40, 4, 1);
+  cx = lv_loop();
+  sparks_ring(cx, lcy[nloops - 1], RIN - 32, 11, -50000, 230000);
+
+  p = lv_px(); lv_flat(34);
+  sparks_row(p + 30, 6, 30, 28);
+  ob_add(K_FLYER, p + 200, bh - 80, 0);
+
+  // the boss arena: one screen wide
+  p = lv_px(); lv_flat(60);
+  arena_x = p;
+  sparks_row(p + 40, 3, 24, 26);
+  sparks_row(p + 380, 3, 24, 26);
+  p = lv_px(); lv_flat(64);
+  goal_x = p + 260;
+  on_ground(K_GOAL, goal_x, 40, 0);
+  blk(p + 470, bh - 400, 40, 400);
+  RETURN 0;
+END
+
+// =====================================================================
+// Graphics, all drawn in code
+// =====================================================================
+
+// Filled ellipse
+FUNCTION ell(g, cx, cy, rx, ry, r, gg, b);
+PRIVATE dy, half;
+BEGIN
+  FOR dy = -ry TO ry
+    half = rx * sqrt(ry * ry - dy * dy) * (1.0 / (ry + 0.0001));
+    gfx_rect(g, cx - half, cy + dy, half * 2 + 1, 1, r, gg, b);
+  END
+  RETURN 0;
+END
+
+// Filled triangle (lines from the first corner to the opposite side)
+FUNCTION tri(g, x1, y1, x2, y2, x3, y3, r, gg, b);
+PRIVATE i, n;
+BEGIN
+  n = (abs(x3 - x2) + abs(y3 - y2) + 1) * 2;
+  FOR i = 0 TO n
+    gfx_line(g, x1, y1, x2 + (x3 - x2) * fdiv(i, n), y2 + (y3 - y2) * fdiv(i, n), r, gg, b);
+  END
+  RETURN 0;
+END
+
+// A thick line: a row of small circles
+FUNCTION thick(g, x1, y1, x2, y2, rad, r, gg, b);
+PRIVATE i, n;
+BEGIN
+  n = int(sqrt((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1))) + 1;
+  FOR i = 0 TO n
+    gfx_circle(g, x1 + (x2 - x1) * fdiv(i, n), y1 + (y2 - y1) * fdiv(i, n), rad, r, gg, b);
+  END
+  RETURN 0;
+END
+
+// Text with a dark outline
+FUNCTION otext(g, x0, y0, s, r, gg, b, sz);
+BEGIN
+  gfx_text(g, x0 - 1, y0, s, 20, 16, 30, sz);
+  gfx_text(g, x0 + 1, y0, s, 20, 16, 30, sz);
+  gfx_text(g, x0, y0 - 1, s, 20, 16, 30, sz);
+  gfx_text(g, x0, y0 + 2, s, 20, 16, 30, sz);
+  gfx_text(g, x0 + 2, y0 + 2, s, 20, 16, 30, sz);
+  gfx_text(g, x0, y0, s, r, gg, b, sz);
+  RETURN 0;
+END
+
+// Kip the pangolin, 48 x 48, centre (24, 24), facing right, feet on
+// row 43. kind: 0 stand, 1 run, 2 fast run, 3 crouch, 4 hurt, 5 spring,
+// 6 dead, 7 skid. ph: animation phase 0..3.
+FUNCTION make_kip(kind, ph);
+PRIVATE g, by, a, fx1, fx2, l1, l2, wob, row, col, cx, cy, tx, ty, lean;
+BEGIN
+  g = new_graphic(48, 48);
+  gfx_fill_rgba(g, 0, 0, 0, 0);
+  by = 0; lean = 0;
+  IF (kind == 3) by = 6; END
+  IF (kind == 1) lean = 1; END
+  IF (kind == 2) lean = 2; END
+  IF (kind == 7) lean = -2; END
+  a = ph * 90000;
+  wob = sin(a) * 1.5;
+
+  // tail
+  IF (kind == 2)
+    gfx_circle(g, 9, 31, 5, 150, 80, 34);
+    gfx_circle(g, 4, 31 + wob, 4, 150, 80, 34);
+    gfx_circle(g, 1, 31 + wob, 2, 184, 102, 44);
+  ELSE
+    IF (kind == 4 OR kind == 5 OR kind == 6)
+      gfx_circle(g, 10, 34, 5, 150, 80, 34);
+      gfx_circle(g, 6, 39, 4, 150, 80, 34);
+      gfx_circle(g, 4, 43, 2, 184, 102, 44);
+    ELSE
+      gfx_circle(g, 11, 34 + by, 6, 150, 80, 34);
+      gfx_circle(g, 6, 38 + by + wob, 5, 150, 80, 34);
+      gfx_circle(g, 3, 41 + by + wob, 3, 184, 102, 44);
+      gfx_circle(g, 11, 33 + by, 4, 184, 102, 44);
+    END
+  END
+
+  // legs
+  IF (kind == 0 OR kind == 3)
+    gfx_rect(g, 16, 35 + by, 5, 8 - by, 110, 58, 28);
+    gfx_rect(g, 26, 35 + by, 5, 8 - by, 110, 58, 28);
+    gfx_rect(g, 14, 41, 8, 2, 90, 46, 22);
+    gfx_rect(g, 25, 41, 9, 2, 90, 46, 22);
+  END
+  IF (kind == 1 OR kind == 7)
+    fx1 = 19 + cos(a) * 7;
+    fx2 = 28 - cos(a) * 7;
+    l1 = 0; l2 = 0;
+    IF (sin(a) > 0) l1 = sin(a) * 4; ELSE l2 = -sin(a) * 4; END
+    IF (kind == 7) fx1 = 30; fx2 = 36; l1 = 0; l2 = 0; END
+    thick(g, 19 + lean, 34, fx1, 40 - l1, 2, 110, 58, 28);
+    thick(g, 26 + lean, 34, fx2, 40 - l2, 2, 110, 58, 28);
+    gfx_rect(g, fx1 - 3, 41 - l1, 7, 2, 90, 46, 22);
+    gfx_rect(g, fx2 - 3, 41 - l2, 7, 2, 90, 46, 22);
+  END
+  IF (kind == 2)
+    gfx_circle(g, 24, 38, 6, 110, 58, 28);
+    gfx_circle(g, 24, 38, 4, 150, 90, 50);
+    gfx_circle_outline(g, 24, 38, 6, 90, 46, 22);
+    gfx_rect(g, 24 + cos(a) * 5 - 3, 38 - sin(a) * 5, 6, 2, 90, 46, 22);
+    gfx_rect(g, 24 - cos(a) * 5 - 3, 38 + sin(a) * 5, 6, 2, 90, 46, 22);
+  END
+  IF (kind == 4 OR kind == 5 OR kind == 6)
+    thick(g, 18, 34, 12, 41, 2, 110, 58, 28);
+    thick(g, 27, 34, 33, 41, 2, 110, 58, 28);
+  END
+
+  // body with its scales
+  gfx_circle(g, 21 + lean, 27 + by, 12, 110, 56, 24);
+  gfx_circle(g, 21 + lean, 27 + by, 11, 184, 102, 44);
+  FOR row = 0 TO 3
+    FOR col = 0 TO 4
+      cx = 11 + col * 5 + (row % 2) * 2 + lean;
+      cy = 18 + row * 5 + by;
+      tx = cx - 21 - lean; ty = cy - 27 - by;
+      IF (tx * tx + ty * ty < 80)
+        gfx_circle(g, cx, cy + 1, 3, 120, 62, 28);
+        gfx_circle(g, cx, cy, 3, 196, 114, 50);
+        gfx_pixel(g, cx - 1, cy - 1, 232, 160, 82);
+      END
+    END
+  END
+  // belly
+  gfx_circle(g, 27 + lean, 31 + by, 6, 240, 206, 160);
+  gfx_circle(g, 24 + lean, 34 + by, 5, 240, 206, 160);
+
+  // arm
+  IF (kind == 4 OR kind == 5)
+    thick(g, 29, 27 + by, 33, 17, 1, 200, 160, 120);
+  ELSE
+    IF (kind == 1)
+      thick(g, 29 + lean, 28, 31 + lean - cos(a) * 4, 32 + sin(a) * 1, 1, 200, 160, 120);
+    ELSE
+      thick(g, 29 + lean, 28 + by, 33 + lean, 31 + by, 1, 200, 160, 120);
+    END
+  END
+
+  // head: a small skull, long snout, cap of scales
+  gfx_circle(g, 32 + lean, 19 + by, 7, 240, 206, 160);
+  gfx_circle(g, 38 + lean, 21 + by, 4, 240, 206, 160);
+  gfx_circle(g, 42 + lean, 22 + by, 2, 240, 206, 160);
+  gfx_rect(g, 43 + lean, 21 + by, 2, 2, 70, 40, 34);
+  gfx_circle(g, 29 + lean, 15 + by, 5, 184, 102, 44);
+  gfx_circle(g, 31 + lean, 17 + by, 4, 240, 206, 160);
+  gfx_pixel(g, 27 + lean, 13 + by, 120, 62, 28);
+  gfx_pixel(g, 29 + lean, 12 + by, 120, 62, 28);
+  gfx_circle(g, 28 + lean, 20 + by, 2, 200, 160, 120);
+  IF (kind == 6)
+    gfx_line(g, 32 + lean, 16 + by, 36 + lean, 20 + by, 20, 20, 30);
+    gfx_line(g, 36 + lean, 16 + by, 32 + lean, 20 + by, 20, 20, 30);
+  ELSE
+    IF (kind == 4)
+      gfx_rect(g, 32 + lean, 17 + by, 4, 2, 20, 20, 30);
+    ELSE
+      gfx_circle(g, 34 + lean, 18 + by, 2, 20, 20, 30);
+      gfx_pixel(g, 35 + lean, 17 + by, 255, 255, 255);
+    END
+  END
+
+  // scarf: a teal band with a tail that flaps behind
+  gfx_rect(g, 25 + lean, 24 + by, 9, 3, 40, 196, 186);
+  IF (kind == 2)
+    gfx_rect(g, 13, 22 + wob, 13, 3, 40, 196, 186);
+    gfx_rect(g, 3, 21 - wob, 11, 3, 28, 160, 150);
+  ELSE
+    IF (kind == 0 OR kind == 3)
+      gfx_rect(g, 20 + lean, 25 + by, 6, 3, 40, 196, 186);
+      gfx_rect(g, 18 + lean, 27 + by, 4, 5, 28, 160, 150);
+    ELSE
+      gfx_rect(g, 17 + lean, 23 + by + wob, 9, 3, 40, 196, 186);
+      gfx_rect(g, 10 + lean, 22 + by - wob, 8, 3, 28, 160, 150);
+    END
+  END
+  RETURN g;
+END
+
+// Kip curled up: a spinning ball of scales, 36 x 36 (radius 15)
+FUNCTION make_ball(kind);
+PRIVATE g, i, a, cx, cy, rr;
+BEGIN
+  g = new_graphic(36, 36);
+  gfx_fill_rgba(g, 0, 0, 0, 0);
+  gfx_circle(g, 18, 18, 15, 110, 56, 24);
+  gfx_circle(g, 18, 18, 14, 184, 102, 44);
+  FOR rr = 0 TO 1
+    FOR i = 0 TO 9 - rr * 4
+      a = i * fdiv(360000, 10 - rr * 4) + rr * 20000;
+      cx = 18 + cos(a) * (11 - rr * 6);
+      cy = 18 - sin(a) * (11 - rr * 6);
+      gfx_circle(g, cx - cos(a) * 1, cy + sin(a) * 1, 3, 120, 62, 28);
+      gfx_circle(g, cx, cy, 3, 200, 116, 50);
+      gfx_pixel(g, cx, cy - 1, 236, 166, 88);
+    END
+  END
+  gfx_circle(g, 18, 18, 3, 150, 80, 34);
+  // a glimpse of the belly and the scarf, so the spin shows
+  FOR i = 0 TO 3
+    a = 200000 + i * 14000;
+    gfx_circle(g, 18 + cos(a) * 12, 18 - sin(a) * 12, 2, 240, 206, 160);
+  END
+  gfx_circle(g, 18 + cos(40000) * 11, 18 - sin(40000) * 11, 3, 40, 196, 186);
+  IF (kind == 1)
+    gfx_circle_outline(g, 18, 18, 16, 255, 240, 200);
+    gfx_circle_outline(g, 18, 18, 17, 255, 200, 120);
+  END
+  RETURN g;
+END
+
+// A spark: a glowing orb with a turning four-point star (4 frames)
+FUNCTION make_spark(f);
+PRIVATE g, i, a;
+BEGIN
+  g = new_graphic(18, 18);
+  gfx_fill_rgba(g, 0, 0, 0, 0);
+  gfx_circle(g, 9, 9, 7, 70, 170, 255);
+  gfx_circle(g, 9, 9, 6, 130, 220, 255);
+  gfx_circle(g, 9, 9, 4, 255, 240, 150);
+  gfx_circle(g, 9, 9, 2, 255, 255, 255);
+  FOR i = 0 TO 3
+    a = i * 90000 + f * 22500;
+    gfx_line(g, 9, 9, 9 + cos(a) * 8, 9 - sin(a) * 8, 255, 255, 255);
+  END
+  gfx_pixel(g, 6, 6, 255, 255, 255);
+  RETURN g;
+END
+
+// Walkers: a robot crab on the coast, a bolt beetle in the works
+FUNCTION make_walker(z0, f);
+PRIVATE g, i, lx;
+BEGIN
+  g = new_graphic(38, 28);
+  gfx_fill_rgba(g, 0, 0, 0, 0);
+  IF (z0 == 0)
+    FOR i = 0 TO 2
+      lx = 9 + i * 4;
+      IF (f == 1) lx += 2; END
+      gfx_line(g, lx, 19, lx - 5, 27, 150, 50, 30);
+      gfx_line(g, 38 - lx, 19, 43 - lx, 27, 150, 50, 30);
+    END
+    gfx_circle(g, 19, 15, 11, 180, 60, 40);
+    gfx_circle(g, 19, 15, 10, 232, 96, 56);
+    gfx_rect(g, 8, 15, 23, 6, 232, 96, 56);
+    gfx_rect(g, 8, 18, 23, 3, 150, 150, 165);
+    gfx_pixel(g, 12, 19, 60, 60, 70); gfx_pixel(g, 19, 19, 60, 60, 70); gfx_pixel(g, 26, 19, 60, 60, 70);
+    gfx_circle(g, 15, 10, 3, 255, 150, 110);
+    // claws
+    gfx_circle(g, 4, 11 + f, 4, 240, 110, 60);
+    gfx_circle(g, 34, 11 - f, 4, 240, 110, 60);
+    gfx_line(g, 1, 10 + f, 5, 12 + f, 150, 50, 30);
+    gfx_line(g, 37, 10 - f, 33, 12 - f, 150, 50, 30);
+    // eyes on stalks
+    gfx_rect(g, 14, 1, 2, 6, 150, 150, 165);
+    gfx_rect(g, 23, 1, 2, 6, 150, 150, 165);
+    gfx_circle(g, 15, 2, 2, 255, 255, 255);
+    gfx_circle(g, 24, 2, 2, 255, 255, 255);
+    gfx_pixel(g, 15, 2, 20, 20, 20);
+    gfx_pixel(g, 24, 2, 20, 20, 20);
+  ELSE
+    gfx_circle(g, 11, 23, 4, 30, 30, 40);
+    gfx_circle(g, 27, 23, 4, 30, 30, 40);
+    gfx_line(g, 11 - 3 + f * 6, 20, 11 + 3 - f * 6, 26, 120, 120, 140);
+    gfx_line(g, 27 - 3 + f * 6, 20, 27 + 3 - f * 6, 26, 120, 120, 140);
+    gfx_circle(g, 19, 15, 12, 40, 50, 90);
+    gfx_circle(g, 19, 15, 11, 70, 90, 160);
+    gfx_rect(g, 7, 15, 25, 5, 70, 90, 160);
+    gfx_rect(g, 17, 4, 4, 17, 250, 200, 40);
+    gfx_rect(g, 9, 9, 3, 10, 250, 200, 40);
+    gfx_rect(g, 27, 9, 3, 10, 250, 200, 40);
+    gfx_circle(g, 32, 14, 4, 50, 60, 100);
+    gfx_circle(g, 34, 13, 2, 255, 90, 60);
+    gfx_line(g, 31, 10, 36, 2, 180, 180, 200);
+    gfx_circle(g, 36, 2, 1, 255, 230, 120);
+  END
+  RETURN g;
+END
+
+// Flyers: a robot gull on the coast, a zap fly in the works
+FUNCTION make_flyer(z0, f);
+PRIVATE g, wy;
+BEGIN
+  g = new_graphic(44, 30);
+  gfx_fill_rgba(g, 0, 0, 0, 0);
+  wy = 2;
+  IF (f == 1) wy = 26; END
+  IF (z0 == 0)
+    tri(g, 20, 15, 4, wy, 14, 15, 200, 205, 220);
+    tri(g, 24, 15, 40, wy, 30, 15, 200, 205, 220);
+    ell(g, 22, 16, 11, 6, 235, 238, 245);
+    gfx_rect(g, 12, 18, 20, 3, 150, 160, 180);
+    gfx_circle(g, 32, 12, 5, 235, 238, 245);
+    tri(g, 36, 11, 43, 13, 36, 15, 255, 150, 40);
+    gfx_circle(g, 33, 11, 1, 20, 20, 30);
+    tri(g, 12, 15, 4, 11, 6, 19, 170, 175, 190);
+    gfx_rect(g, 20, 22, 2, 5, 120, 120, 130);
+    gfx_rect(g, 24, 22, 2, 5, 120, 120, 130);
+  ELSE
+    ell(g, 12, 8, 9, 4, 170, 255, 190);
+    ell(g, 30, 8, 9, 4, 170, 255, 190);
+    IF (f == 1)
+      ell(g, 12, 10, 9, 3, 120, 220, 150);
+      ell(g, 30, 10, 9, 3, 120, 220, 150);
+    END
+    ell(g, 21, 15, 12, 5, 40, 150, 80);
+    gfx_circle(g, 33, 14, 5, 40, 150, 80);
+    gfx_circle(g, 35, 13, 2, 255, 60, 60);
+    gfx_rect(g, 6, 14, 8, 3, 250, 230, 60);
+    tri(g, 6, 13, 0, 16, 6, 18, 255, 255, 180);
+    gfx_rect(g, 14, 12, 3, 7, 250, 230, 60);
+    gfx_rect(g, 22, 12, 3, 7, 250, 230, 60);
+  END
+  RETURN g;
+END
+
+// Springs: k 0 yellow, 1 yellow stretched, 2 red, 3 red stretched
+FUNCTION make_spring(k);
+PRIVATE g, i, top, r, gg, b;
+BEGIN
+  g = new_graphic(30, 26);
+  gfx_fill_rgba(g, 0, 0, 0, 0);
+  r = 250; gg = 210; b = 40;
+  IF (k >= 2) r = 240; gg = 60; b = 60; END
+  top = 10;
+  IF (k % 2 == 1) top = 0; END
+  gfx_rect(g, 2, 21, 26, 5, 70, 80, 100);
+  gfx_rect(g, 2, 21, 26, 1, 150, 160, 180);
+  FOR i = top + 5 TO 20 STEP 3
+    gfx_line(g, 7, i, 23, i + 1, 200, 205, 215);
+    gfx_line(g, 7, i + 1, 23, i + 2, 110, 115, 130);
+  END
+  gfx_rect(g, 0, top, 30, 6, r * 7 / 10, gg * 7 / 10, b * 7 / 10);
+  gfx_rect(g, 0, top, 30, 4, r, gg, b);
+  gfx_rect(g, 2, top + 1, 26, 1, 255, 255, 220);
+  RETURN g;
+END
+
+// Speed booster pad, 2 frames
+FUNCTION make_boost(f);
+PRIVATE g, i, c;
+BEGIN
+  g = new_graphic(44, 10);
+  gfx_fill_rgba(g, 0, 0, 0, 0);
+  gfx_rect(g, 0, 2, 44, 8, 50, 55, 70);
+  gfx_rect(g, 0, 2, 44, 1, 140, 150, 170);
+  FOR i = 0 TO 3
+    c = 170;
+    IF ((i + f) % 2 == 0) c = 255; END
+    gfx_line(g, 4 + i * 10, 3, 10 + i * 10, 6, c, c * 3 / 4, 40);
+    gfx_line(g, 10 + i * 10, 6, 4 + i * 10, 9, c, c * 3 / 4, 40);
+    gfx_line(g, 5 + i * 10, 3, 11 + i * 10, 6, c, c * 3 / 4, 40);
+    gfx_line(g, 11 + i * 10, 6, 5 + i * 10, 9, c, c * 3 / 4, 40);
+  END
+  RETURN g;
+END
+
+// Checkpoint beacon: 0 off (red), 1 passed (green)
+FUNCTION make_check(k);
+PRIVATE g;
+BEGIN
+  g = new_graphic(20, 50);
+  gfx_fill_rgba(g, 0, 0, 0, 0);
+  gfx_rect(g, 8, 10, 4, 36, 160, 165, 180);
+  gfx_rect(g, 8, 10, 1, 36, 220, 225, 235);
+  gfx_rect(g, 3, 44, 14, 6, 80, 85, 100);
+  gfx_circle(g, 10, 7, 7, 60, 60, 80);
+  IF (k == 0)
+    gfx_circle(g, 10, 7, 5, 230, 50, 50);
+    gfx_pixel(g, 8, 5, 255, 180, 180);
+  ELSE
+    gfx_circle(g, 10, 7, 5, 70, 240, 120);
+    gfx_circle(g, 10, 7, 2, 220, 255, 230);
+  END
+  RETURN g;
+END
+
+// The goal gate: two posts, a banner and a spark lamp. 0 waiting, 1 lit
+FUNCTION make_goal(k);
+PRIVATE g, i;
+BEGIN
+  g = new_graphic(72, 84);
+  gfx_fill_rgba(g, 0, 0, 0, 0);
+  gfx_rect(g, 4, 20, 6, 64, 120, 125, 140);
+  gfx_rect(g, 62, 20, 6, 64, 120, 125, 140);
+  gfx_rect(g, 4, 20, 2, 64, 200, 205, 215);
+  gfx_rect(g, 62, 20, 2, 64, 200, 205, 215);
+  IF (k == 0)
+    gfx_rect(g, 6, 24, 60, 20, 60, 70, 120);
+  ELSE
+    gfx_rect(g, 6, 24, 60, 20, 40, 170, 120);
+  END
+  FOR i = 0 TO 5
+    gfx_rect(g, 6 + i * 10, 24, 5, 3, 255, 255, 255);
+  END
+  gfx_text(g, 17, 28, 'GOAL', 255, 250, 220, 13);
+  gfx_circle(g, 36, 11, 11, 70, 70, 90);
+  IF (k == 0)
+    gfx_circle(g, 36, 11, 9, 120, 130, 160);
+    gfx_text(g, 33, 4, '?', 230, 230, 255, 12);
+  ELSE
+    gfx_circle(g, 36, 11, 9, 130, 220, 255);
+    gfx_circle(g, 36, 11, 6, 255, 245, 160);
+    gfx_circle(g, 36, 11, 3, 255, 255, 255);
+  END
+  RETURN g;
+END
+
+// A crate with ten sparks inside
+FUNCTION make_crate();
+PRIVATE g;
+BEGIN
+  g = new_graphic(28, 28);
+  gfx_fill(g, 90, 70, 60);
+  gfx_rect(g, 2, 2, 24, 24, 150, 110, 70);
+  gfx_rect(g, 2, 2, 24, 3, 190, 150, 100);
+  gfx_rect(g, 7, 7, 14, 14, 30, 40, 70);
+  gfx_circle(g, 14, 14, 5, 130, 220, 255);
+  gfx_circle(g, 14, 14, 3, 255, 245, 160);
+  gfx_pixel(g, 4, 4, 60, 50, 40); gfx_pixel(g, 23, 4, 60, 50, 40);
+  gfx_pixel(g, 4, 23, 60, 50, 40); gfx_pixel(g, 23, 23, 60, 50, 40);
+  RETURN g;
+END
+
+FUNCTION make_boom(f);
+PRIVATE g, r;
+BEGIN
+  g = new_graphic(40, 40);
+  gfx_fill_rgba(g, 0, 0, 0, 0);
+  r = 6 + f * 4;
+  gfx_circle(g, 20, 20, r + 2, 200, 70, 30);
+  gfx_circle(g, 20, 20, r, 255, 160, 50);
+  gfx_circle(g, 20, 20, r - 3, 255, 230, 120);
+  IF (f < 2) gfx_circle(g, 20, 20, r - 6, 255, 255, 240); END
+  IF (f >= 2)
+    gfx_circle(g, 20 - r / 2, 20 - r / 2, r / 3, 255, 255, 255);
+  END
+  RETURN g;
+END
+
+// Baron Rust in his pod, 96 x 76. k: rotor frame + 2 when flashing
+FUNCTION make_boss(k);
+PRIVATE g, f, hit, i;
+BEGIN
+  g = new_graphic(96, 76);
+  gfx_fill_rgba(g, 0, 0, 0, 0);
+  f = k % 2;
+  hit = k / 2;
+  // rotor
+  gfx_rect(g, 45, 4, 6, 12, 90, 90, 100);
+  IF (f == 0)
+    gfx_rect(g, 14, 2, 68, 4, 60, 60, 70);
+  ELSE
+    gfx_rect(g, 30, 2, 36, 4, 60, 60, 70);
+  END
+  // glass dome with the crow inside
+  gfx_circle(g, 48, 34, 22, 150, 200, 230);
+  gfx_circle(g, 48, 34, 20, 190, 225, 245);
+  gfx_circle(g, 50, 32, 11, 30, 28, 36);
+  gfx_circle(g, 46, 24, 7, 30, 28, 36);
+  tri(g, 56, 28, 70, 31, 56, 34, 250, 150, 40);
+  gfx_circle(g, 55, 26, 5, 120, 120, 130);
+  gfx_circle(g, 55, 26, 3, 255, 60, 40);
+  gfx_pixel(g, 54, 25, 255, 200, 200);
+  gfx_rect(g, 38, 20, 6, 3, 40, 38, 46);
+  gfx_rect(g, 40, 18, 3, 3, 40, 38, 46);
+  gfx_pixel(g, 40, 26, 255, 255, 255);
+  // pod body
+  IF (hit)
+    ell(g, 48, 50, 44, 16, 255, 255, 255);
+  ELSE
+    ell(g, 48, 50, 44, 16, 120, 70, 50);
+    ell(g, 48, 48, 42, 13, 170, 100, 60);
+    gfx_rect(g, 6, 46, 84, 4, 110, 60, 40);
+    FOR i = 0 TO 6
+      gfx_circle(g, 12 + i * 12, 48, 2, 220, 170, 110);
+    END
+    gfx_rect(g, 20, 58, 12, 8, 80, 80, 90);
+    gfx_rect(g, 64, 58, 12, 8, 80, 80, 90);
+    gfx_rect(g, 22, 66, 8, 3, 255, 140 + f * 60, 40);
+    gfx_rect(g, 66, 66, 8, 3, 255, 140 + f * 60, 40);
+  END
+  RETURN g;
+END
+
+FUNCTION make_bomb();
+PRIVATE g, i, a;
+BEGIN
+  g = new_graphic(22, 22);
+  gfx_fill_rgba(g, 0, 0, 0, 0);
+  FOR i = 0 TO 7
+    a = i * 45000;
+    gfx_line(g, 11, 11, 11 + cos(a) * 10, 11 - sin(a) * 10, 150, 150, 160);
+  END
+  gfx_circle(g, 11, 11, 7, 40, 40, 50);
+  gfx_circle(g, 11, 11, 6, 70, 70, 85);
+  gfx_circle(g, 11, 11, 2, 255, 60, 40);
+  gfx_pixel(g, 8, 8, 200, 200, 210);
+  RETURN g;
+END
+
+// Sky of a zone, 480 x 270
+FUNCTION make_sky(z0);
+PRIVATE g, i, t, cx;
+BEGIN
+  g = new_graphic(SW, SH);
+  FOR i = 0 TO 67
+    t = fdiv(i, 67);
+    IF (z0 == 0)
+      gfx_rect(g, 0, i * 4, SW, 4, lerp(60, 200, t), lerp(140, 232, t), lerp(225, 250, t));
+    ELSE
+      gfx_rect(g, 0, i * 4, SW, 4, lerp(46, 250, t * t), lerp(30, 150, t * t), lerp(90, 110, t));
+    END
+  END
+  IF (z0 == 0)
+    gfx_circle(g, 380, 60, 26, 255, 250, 210);
+    gfx_circle(g, 380, 60, 22, 255, 255, 235);
+    FOR i = 0 TO 4
+      cx = 30 + i * 100;
+      gfx_circle(g, cx, 40 + (i % 2) * 30, 12, 250, 252, 255);
+      gfx_circle(g, cx + 14, 34 + (i % 2) * 30, 16, 250, 252, 255);
+      gfx_circle(g, cx + 32, 42 + (i % 2) * 30, 11, 250, 252, 255);
+      gfx_rect(g, cx, 42 + (i % 2) * 30, 34, 10, 250, 252, 255);
+    END
+  ELSE
+    gfx_circle(g, 120, 150, 40, 255, 190, 120);
+    gfx_circle(g, 120, 150, 34, 255, 215, 150);
+    FOR i = 0 TO 40
+      gfx_pixel(g, rand(0, SW), rand(0, 90), 255, 230, 255);
+    END
+  END
+  RETURN g;
+END
+
+// Far layer: the sea and islands, or the factory skyline (480 x 250).
+// Its left and right edges match: it repeats side by side.
+FUNCTION make_far(z0);
+PRIVATE g, i, h, x0, w;
+BEGIN
+  g = new_graphic(SW, 250);
+  gfx_fill_rgba(g, 0, 0, 0, 0);
+  IF (z0 == 0)
+    gfx_circle(g, 90, 150, 64, 110, 170, 170);
+    gfx_circle(g, 118, 142, 40, 120, 185, 170);
+    gfx_circle(g, 330, 190, 100, 100, 160, 165);
+    gfx_circle(g, 420, 150, 36, 115, 175, 170);
+    gfx_rect(g, 0, 96, SW, 154, 40, 120, 200);
+    FOR i = 0 TO 11
+      gfx_rect(g, 0, 100 + i * 5, SW, 1, 70, 150, 220);
+    END
+    FOR i = 0 TO 50
+      gfx_rect(g, rand(0, SW - 12), rand(100, 240), rand(4, 12), 1, 210, 240, 255);
+    END
+  ELSE
+    FOR i = 0 TO 11
+      x0 = i * 40 + 4;
+      w = 24 + (i * 7) % 14;
+      h = 40 + (i * 29) % 60;
+      gfx_rect(g, x0, 150 - h, w, h, 70, 40, 90);
+      IF (i % 3 == 0)
+        gfx_rect(g, x0 + 6, 150 - h - 40, 8, 40, 70, 40, 90);
+        gfx_circle(g, x0 + 10, 150 - h - 50, 8, 150, 110, 150);
+        gfx_circle(g, x0 + 16, 150 - h - 62, 10, 170, 130, 165);
+      END
+      IF (i % 2 == 1)
+        gfx_rect(g, x0 + 4, 150 - h + 10, 4, 4, 255, 200, 90);
+        gfx_rect(g, x0 + 14, 150 - h + 22, 4, 4, 255, 200, 90);
+      END
+    END
+    gfx_rect(g, 0, 148, SW, 102, 70, 40, 90);
+  END
+  RETURN g;
+END
+
+// Near layer: palm-topped hills, or girders (480 x 230), repeating
+FUNCTION make_mid(z0);
+PRIVATE g, i, x0, h, k;
+BEGIN
+  g = new_graphic(SW, 230);
+  gfx_fill_rgba(g, 0, 0, 0, 0);
+  IF (z0 == 0)
+    FOR i = 0 TO 6
+      x0 = i * 80;
+      h = 50 + ((i % 6) * 37) % 40;
+      gfx_circle(g, x0, 170, h + 40, 60, 150, 120);
+      gfx_circle(g, x0 - 4, 176, h + 30, 72, 168, 128);
+    END
+    FOR i = 0 TO 6
+      x0 = i * 80;
+      h = 50 + ((i % 6) * 37) % 40;
+      IF (i % 2 == 0 AND i < 6)
+        thick(g, x0, 134 - h, x0 + 8, 100 - h, 2, 110, 80, 50);
+        FOR k = 0 TO 4
+          thick(g, x0 + 8, 100 - h, x0 + 8 + cos(k * 45000 + 10000) * 20, 106 - h - sin(k * 45000 + 10000) * 10, 1, 40, 130, 80);
+        END
+      END
+    END
+    gfx_rect(g, 0, 170, SW, 60, 72, 168, 128);
+  ELSE
+    gfx_rect(g, 0, 40, SW, 6, 60, 50, 80);
+    gfx_rect(g, 0, 90, SW, 6, 60, 50, 80);
+    FOR i = 0 TO 11
+      x0 = i * 40;
+      gfx_rect(g, x0, 40, 5, 90, 60, 50, 80);
+      gfx_line(g, x0, 46, x0 + 40, 90, 60, 50, 80);
+      gfx_line(g, x0 + 1, 46, x0 + 41, 90, 60, 50, 80);
+      gfx_line(g, x0 + 40, 46, x0, 90, 60, 50, 80);
+    END
+    gfx_rect(g, 0, 108, SW, 10, 90, 70, 90);
+    gfx_rect(g, 0, 108, SW, 2, 130, 110, 130);
+    gfx_rect(g, 0, 118, SW, 112, 50, 40, 66);
+    FOR i = 0 TO 7
+      gfx_rect(g, i * 60 + 10, 130, 30, 100, 60, 50, 78);
+      gfx_rect(g, i * 60 + 10, 130, 30, 3, 90, 80, 110);
+    END
+  END
+  RETURN g;
+END
+
+// =====================================================================
+// The painted world: 512-px chunks of ground, parallax layers, HUD
+// =====================================================================
+
+
+// One column pair of ground, gx pixels into graphic g whose top is `top`
+FUNCTION paint_column(g, gx, wx, top, hgt);
+PRIVATE h, sy, c;
+BEGIN
+  h = ground_h(wx);
+  IF (h >= GAP) RETURN 0; END
+  sy = int(h) - top;
+  IF (sy < 0) sy = 0; END
+  gfx_rect(g, gx, sy, 2, hgt - sy, zcol(9, 0), zcol(9, 1), zcol(9, 2));
+  IF (zone == 0)
+    gfx_rect(g, gx, sy + 7, 2, 28, zcol(2, 0), zcol(2, 1), zcol(2, 2));
+    gfx_rect(g, gx, sy + 35, 2, 12, zcol(3, 0), zcol(3, 1), zcol(3, 2));
+    gfx_rect(g, gx, sy + 47, 2, 24, zcol(4, 0), zcol(4, 1), zcol(4, 2));
+    gfx_rect(g, gx, sy + 71, 2, 10, zcol(5, 0), zcol(5, 1), zcol(5, 2));
+    gfx_rect(g, gx, sy, 2, 5, zcol(0, 0), zcol(0, 1), zcol(0, 2));
+    gfx_rect(g, gx, sy + 5, 2, 2, zcol(1, 0), zcol(1, 1), zcol(1, 2));
+    IF ((wx * 7 + int(h)) % 23 == 0) gfx_rect(g, gx, sy + 14 + wx % 17, 2, 2, 250, 230, 190); END
+    IF ((wx * 13) % 37 == 0) gfx_rect(g, gx, sy - 2, 2, 2, zcol(0, 0), zcol(0, 1), zcol(0, 2)); END
+  ELSE
+    c = ((wx + int(h)) / 8) % 2;
+    IF (c == 0)
+      gfx_rect(g, gx, sy, 2, 5, zcol(0, 0), zcol(0, 1), zcol(0, 2));
+    ELSE
+      gfx_rect(g, gx, sy, 2, 5, zcol(1, 0), zcol(1, 1), zcol(1, 2));
+    END
+    gfx_rect(g, gx, sy + 5, 2, 2, 20, 20, 26);
+    gfx_rect(g, gx, sy + 7, 2, 34, zcol(2, 0), zcol(2, 1), zcol(2, 2));
+    gfx_rect(g, gx, sy + 41, 2, 3, zcol(4, 0), zcol(4, 1), zcol(4, 2));
+    gfx_rect(g, gx, sy + 44, 2, 50, zcol(5, 0), zcol(5, 1), zcol(5, 2));
+    IF (wx % 32 < 2)
+      gfx_rect(g, gx, sy + 12, 2, 2, zcol(3, 0), zcol(3, 1), zcol(3, 2));
+      gfx_rect(g, gx, sy + 34, 2, 2, zcol(3, 0), zcol(3, 1), zcol(3, 2));
+    END
+    IF (wx % 64 < 2) gfx_rect(g, gx, sy + 44, 2, 50, zcol(4, 0), zcol(4, 1), zcol(4, 2)); END
+  END
+  RETURN 0;
+END
+
+// Rows of an annulus clipped to dy < ymax: the loop's ring
+FUNCTION paint_ring(g, cx, cy, r0, r1, r, gg, b);
+PRIVATE dy, wo, wi;
+BEGIN
+  FOR dy = -r1 TO RIN - 1
+    wo = sqrt(r1 * r1 - dy * dy);
+    IF (abs(dy) < r0)
+      wi = sqrt(r0 * r0 - dy * dy);
+      gfx_rect(g, cx - wo, cy + dy, wo - wi + 1, 1, r, gg, b);
+      gfx_rect(g, cx + wi, cy + dy, wo - wi + 1, 1, r, gg, b);
+    ELSE
+      gfx_rect(g, cx - wo, cy + dy, wo * 2 + 1, 1, r, gg, b);
+    END
+  END
+  RETURN 0;
+END
+
+// Scenery standing on the ground at wx (palms, shells / pipes, signs)
+FUNCTION paint_decor(g, gx, wx, top, k);
+PRIVATE h, sy, i, a;
+BEGIN
+  h = ground_h(wx);
+  IF (h >= GAP) RETURN 0; END
+  IF (abs(ground_h(wx - 12) - h) > 6 OR abs(ground_h(wx + 12) - h) > 6) RETURN 0; END
+  sy = int(h) - top + 2;
+  IF (zone == 0)
+    IF (k % 3 == 0)
+      FOR i = 0 TO 9
+        gfx_circle(g, gx + i * 1.4, sy - i * 8, 3, 150 - i * 3, 104, 60);
+        gfx_rect(g, gx + i * 1.4 - 3, sy - i * 8, 6, 1, 110, 76, 44);
+      END
+      FOR i = 0 TO 5
+        a = i * 36000 + 5000;
+        thick(g, gx + 13, sy - 80, gx + 13 + cos(a) * 26, sy - 80 - sin(a) * 12 + 8, 1, 40 + i * 6, 150, 70);
+      END
+      gfx_circle(g, gx + 11, sy - 76, 3, 110, 70, 40);
+      gfx_circle(g, gx + 16, sy - 75, 3, 110, 70, 40);
+    ELSE
+      IF (k % 3 == 1)
+        gfx_rect(g, gx, sy - 18, 2, 18, 60, 150, 80);
+        gfx_circle(g, gx + 1, sy - 20, 4, 255, 120, 150);
+        gfx_circle(g, gx + 1, sy - 20, 2, 255, 230, 120);
+        gfx_rect(g, gx + 7, sy - 12, 2, 12, 60, 150, 80);
+        gfx_circle(g, gx + 8, sy - 14, 3, 255, 200, 90);
+      ELSE
+        ell(g, gx, sy - 4, 7, 5, 245, 200, 180);
+        gfx_line(g, gx - 4, sy - 4, gx, sy - 8, 200, 150, 140);
+        gfx_line(g, gx + 4, sy - 4, gx, sy - 8, 200, 150, 140);
+      END
+    END
+  ELSE
+    IF (k % 2 == 0)
+      gfx_rect(g, gx - 6, sy - 70, 12, 70, 90, 100, 120);
+      gfx_rect(g, gx - 6, sy - 70, 3, 70, 140, 150, 170);
+      gfx_rect(g, gx - 9, sy - 74, 18, 6, 70, 80, 100);
+      gfx_rect(g, gx - 9, sy - 30, 18, 4, 70, 80, 100);
+    ELSE
+      gfx_rect(g, gx - 1, sy - 34, 3, 34, 110, 110, 120);
+      tri(g, gx, sy - 50, gx - 11, sy - 32, gx + 11, sy - 32, 250, 200, 40);
+      gfx_text(g, gx - 2, sy - 45, '!', 30, 30, 30, 11);
+    END
+  END
+  RETURN 0;
+END
+
+PROCESS chunk(ci);
+PRIVATE g, x0, top, hgt, i, j, h, my_gen, dx, k;
+BEGIN
+  my_gen = gen;
+  ch_alive[ci] = 1;
+  ctype = c_scroll;
+  z = 100;
+  x0 = ci * CHW;
+  // the chunk's height: from above its highest feature to the bottom
+  top = lv_bottom - 40;
+  FOR i = 0 TO CHW STEP 8
+    h = ground_h(x0 + i);
+    IF (h < top AND h > -90000) top = h; END
+  END
+  top = top - 110;
+  FOR j = 0 TO nloops - 1
+    IF (lcx[j] + ROUT > x0 AND lcx[j] - ROUT < x0 + CHW)
+      IF (lcy[j] - ROUT - 6 < top) top = lcy[j] - ROUT - 6; END
+    END
+  END
+  FOR j = 0 TO nblk - 1
+    IF (blx2[j] > x0 AND blx1[j] < x0 + CHW)
+      IF (bly1[j] - 6 < top) top = bly1[j] - 6; END
+    END
+  END
+  top = int(top);
+  hgt = lv_bottom + 4 - top;
+  g = new_graphic(CHW, hgt);
+  gfx_fill_rgba(g, 0, 0, 0, 0);
+  set_point(0, g, 0, 0, 0);
+  x = x0; y = top;
+  FRAME;
+  // the ground, a column pair at a time, over two frames
+  FOR k = 0 TO 3
+    FOR i = k * 64 TO k * 64 + 63
+      paint_column(g, i * 2, x0 + i * 2 + 1, top, hgt);
+    END
+    FRAME;
+  END
+  // scenery
+  FOR i = 0 TO 3
+    k = (ci * 7 + i * 3) % 5;
+    dx = 40 + i * 120 + (ci * 37 + i * 53) % 60;
+    paint_decor(g, dx, x0 + dx, top, k + ci);
+  END
+  // loops: a thick ring with a running surface inside
+  FOR j = 0 TO nloops - 1
+    IF (lcx[j] + ROUT > x0 AND lcx[j] - ROUT < x0 + CHW)
+      paint_ring(g, lcx[j] - x0, lcy[j] - top, RIN, ROUT, zcol(6, 0), zcol(6, 1), zcol(6, 2));
+      FRAME;
+      paint_ring(g, lcx[j] - x0, lcy[j] - top, RIN + 16, ROUT, zcol(8, 0), zcol(8, 1), zcol(8, 2));
+      FRAME;
+      paint_ring(g, lcx[j] - x0, lcy[j] - top, RIN, RIN + 4, zcol(7, 0), zcol(7, 1), zcol(7, 2));
+      FOR i = 0 TO 23
+        dx = i * 15000;
+        IF (sin(dx) > -0.8)
+          gfx_circle(g, lcx[j] - x0 + cos(dx) * (RIN + 11), lcy[j] - top - sin(dx) * (RIN + 11), 2, zcol(7, 0), zcol(7, 1), zcol(7, 2));
+        END
+      END
+    END
+  END
+  // blocks
+  FOR j = 0 TO nblk - 1
+    IF (blx2[j] > x0 AND blx1[j] < x0 + CHW)
+      gfx_rect(g, blx1[j] - x0, bly1[j] - top, blx2[j] - blx1[j], bly2[j] - bly1[j], zcol(8, 0), zcol(8, 1), zcol(8, 2));
+      gfx_rect(g, blx1[j] - x0 + 2, bly1[j] - top + 2, blx2[j] - blx1[j] - 4, bly2[j] - bly1[j] - 4, zcol(6, 0), zcol(6, 1), zcol(6, 2));
+      gfx_rect(g, blx1[j] - x0, bly1[j] - top, blx2[j] - blx1[j], 4, zcol(7, 0), zcol(7, 1), zcol(7, 2));
+      IF (zone == 1)
+        gfx_line(g, blx1[j] - x0 + 3, bly1[j] - top + 5, blx2[j] - x0 - 4, bly2[j] - top - 3, zcol(8, 0), zcol(8, 1), zcol(8, 2));
+        gfx_line(g, blx2[j] - x0 - 4, bly1[j] - top + 5, blx1[j] - x0 + 3, bly2[j] - top - 3, zcol(8, 0), zcol(8, 1), zcol(8, 2));
+      END
+    END
+  END
+  graph = g;
+  LOOP
+    IF (my_gen != gen) BREAK; END
+    IF (x0 + CHW < cam_x - 700 OR x0 > cam_x + SW + 1100) BREAK; END
+    FRAME;
+  END
+  graph = 0;
+  free_graphic(g);
+  IF (my_gen == gen) ch_alive[ci] = 0; END
+END
+
+// Creates the chunks around the camera (at most one per frame)
+FUNCTION keep_chunks(all);
+PRIVATE c0, c1, c;
+BEGIN
+  c0 = int((cam_x - 300) / CHW);
+  c1 = int((cam_x + SW + 800) / CHW);
+  IF (c0 < 0) c0 = 0; END
+  IF (c1 > lv_w / CHW) c1 = lv_w / CHW; END
+  FOR c = c0 TO c1
+    IF (NOT ch_alive[c])
+      chunk(c);
+      IF (NOT all) RETURN 1; END
+    END
+  END
+  RETURN 0;
+END
+
+// A parallax layer: kind 0 far (sea, skyline), 1 near; copy k of 2
+PROCESS bglayer(kind, k);
+PRIVATE my_gen, sh, f, base;
+BEGIN
+  my_gen = gen;
+  z = 300 - kind * 50;
+  IF (kind == 0) graph = g_far[zone]; f = 0.08; base = 20; ELSE graph = g_mid[zone]; f = 0.3; base = 76; END
+  LOOP
+    IF (my_gen != gen) BREAK; END
+    sh = cam_x * f;
+    sh = sh - floor(sh * 0.00208333333) * SW;
+    x = k * SW - sh;
+    y = base + clamp((start_y - 170 - cam_y) * (f * 0.4), -40, 60);
+    FRAME;
+  END
+END
+
+// The HUD: redrawn when something on it changes
+PROCESS hud();
+PRIVATE my_gen, last_sec, blink, b, sec;
+BEGIN
+  my_gen = gen;
+  z = -100;
+  x = 0; y = 0;
+  last_sec = -1;
+  LOOP
+    IF (my_gen != gen) BREAK; END
+    sec = frames / 60;
+    b = 0;
+    IF (sparks == 0 AND (frames / 16) % 2 == 0) b = 1; END
+    IF (sec != last_sec OR hud_dirty OR b != blink)
+      last_sec = sec; hud_dirty = 0; blink = b;
+      gfx_fill_rgba(g_hud, 0, 0, 0, 0);
+      otext(g_hud, 10, 6, 'SCORE', 255, 220, 80, 13);
+      otext(g_hud, 70, 6, '' + score, 255, 255, 255, 13);
+      otext(g_hud, 10, 23, 'TIME', 255, 220, 80, 13);
+      otext(g_hud, 70, 23, '' + (sec / 60) + ':' + (sec % 60) / 10 + (sec % 10), 255, 255, 255, 13);
+      IF (blink)
+        otext(g_hud, 10, 40, 'SPARKS', 255, 70, 60, 13);
+      ELSE
+        otext(g_hud, 10, 40, 'SPARKS', 255, 220, 80, 13);
+      END
+      otext(g_hud, 70, 40, '' + sparks, 255, 255, 255, 13);
+      gfx_circle(g_hud, 22, 250, 10, 110, 56, 24);
+      gfx_circle(g_hud, 22, 250, 9, 184, 102, 44);
+      gfx_circle(g_hud, 27, 247, 5, 240, 206, 160);
+      gfx_circle(g_hud, 29, 246, 1, 20, 20, 30);
+      otext(g_hud, 38, 243, 'KIP x' + lives, 255, 255, 255, 12);
+      IF (zone == 1 AND arena_on AND boss_hp > 0)
+        otext(g_hud, 330, 6, 'BARON RUST', 255, 120, 90, 12);
+        gfx_rect(g_hud, 330, 22, 122, 8, 30, 20, 30);
+        gfx_rect(g_hud, 331, 23, boss_hp * 15, 6, 255, 90, 60);
+      END
+    END
+    graph = g_hud;
+    FRAME;
+  END
+END
+
+// =====================================================================
+// Kip's physics
+// =====================================================================
+
+// Standing size (radius 19 x 9) or curled up (14 x 7). On the ground the
+// centre moves so the feet stay where they are.
+FUNCTION set_radius(curled);
+BEGIN
+  IF (curled)
+    IF (hr != 14)
+      IF (onground) hx += pdx[hmode] * 5; hy += pdy[hmode] * 5; END
+      hr = 14; wr = 7;
+    END
+  ELSE
+    IF (hr != 19)
+      IF (onground) hx -= pdx[hmode] * 5; hy -= pdy[hmode] * 5; END
+      hr = 19; wr = 9;
+    END
+  END
+  RETURN 0;
+END
+
+// The two ground sensors, pointing the way the ground angle says (floor,
+// right wall, ceiling, left wall). Puts Kip's feet on the ground and
+// takes the ground angle from the two contact points. 0 when the
+// ground is too far: he is in the air.
+FUNCTION ground_follow();
+PRIVATE m, dx, dy, fx, fy, ax, ay, qx, qy, da, db, d, lim;
+BEGIN
+  m = mode_of(ga);
+  dx = pdx[m]; dy = pdy[m];
+  fx = pdy[m]; fy = -pdx[m];                // "forward" along the ground
+  ax = hx + dx * hr - fx * wr; ay = hy + dy * hr - fy * wr;
+  qx = hx + dx * hr + fx * wr; qy = hy + dy * hr + fy * wr;
+  da = probe(ax, ay, m, 32);
+  db = probe(qx, qy, m, 32);
+  IF (da < -30) da = 99; END
+  IF (db < -30) db = 99; END
+  d = min(da, db);
+  lim = min(abs(gsp) + 4, 14);
+  IF (d > lim) RETURN 0; END
+  hx += dx * d;
+  hy += dy * d;
+  IF (da < 50 AND db < 50 AND abs(da - db) < 24)
+    ga = norm_ang(atan2(-((qy + dy * db) - (ay + dy * da)), (qx + dx * db) - (ax + dx * da)));
+  ELSE
+    // one foot over an edge: feel the surface under the other one
+    IF (da <= db) d = surf_angle(ax + dx * da, ay + dy * da); ELSE d = surf_angle(qx + dx * db, qy + dy * db); END
+    IF (d >= 0) ga = d; ELSE ga = m * 90000; END
+  END
+  hmode = mode_of(ga);
+  RETURN 1;
+END
+
+// Keeps Kip inside the level (and the boss arena)
+FUNCTION clamp_x();
+BEGIN
+  IF (hx < 16) hx = 16; IF (xsp < 0) xsp = 0; END IF (gsp < 0 AND hmode == 0) gsp = 0; END END
+  IF (hx > lv_w - 24) hx = lv_w - 24; IF (xsp > 0) xsp = 0; END END
+  IF (arena_on)
+    IF (hx < lock_x1 + 14) hx = lock_x1 + 14; IF (xsp < 0) xsp = 0; END IF (gsp < 0) gsp = 0; END END
+    IF (hx > lock_x2 - 14) hx = lock_x2 - 14; IF (xsp > 0) xsp = 0; END IF (gsp > 0) gsp = 0; END END
+  END
+  RETURN 0;
+END
+
+// Touching down on ground of angle ang
+FUNCTION land(ang);
+BEGIN
+  ga = ang;
+  hmode = mode_of(ga);
+  gsp = xsp * cos(ga) - ysp * sin(ga);
+  onground = 1; jumped = 0; sprung = 0; chain = 0;
+  IF (hurt) hurt = 0; gsp = 0; xsp = 0; END
+  IF (ball AND kd AND abs(gsp) > 1)
+    rolling = 1;
+  ELSE
+    ball = 0; rolling = 0;
+    set_radius(0);
+  END
+  RETURN 0;
+END
+
+FUNCTION kip_ground();
+PRIVATE xs, ys, s, wd, ox, oy, oy0, d, moved, sl, m;
+BEGIN
+  // ---- charge dash: hold DOWN, tap JUMP to rev, let go of DOWN
+  IF (charging)
+    IF (kjp)
+      rev = min(rev + 2, 8);
+      play_sound(s_charge, 55, 90 + rev * 10, 0);
+    END
+    rev -= rev * 0.03125;
+    IF (kd) RETURN 0; END
+    gsp = facing * (8 + int(rev) * 0.5);
+    charging = 0; rolling = 1; ball = 1;
+    set_radius(1);
+    play_sound(s_dash, 70, 100, 0);
+  END
+  IF (crouch)
+    IF (NOT kd OR abs(gsp) > 0.5)
+      crouch = 0;
+    ELSE
+      IF (kjp)
+        charging = 1; rev = 0; crouch = 0;
+        play_sound(s_charge, 55, 90, 0);
+      END
+      RETURN 0;
+    END
+  END
+
+  // ---- jump: off the ground, at right angles to it
+  IF (kjp AND NOT frozen AND NOT goal_hit)
+    xsp = gsp * cos(ga) - JMP * sin(ga);
+    ysp = -gsp * sin(ga) - JMP * cos(ga);
+    onground = 0; jumped = 1; ball = 1; rolling = 0; crouch = 0; chain = 0;
+    hr = 14; wr = 7;
+    hmode = 0;
+    play_sound(s_jump, 55, 100, 0);
+    RETURN 0;
+  END
+
+  // ---- the slope pulls
+  IF (rolling)
+    IF (sgn(gsp) == sgn(sin(ga))) sl = SLP_UP; ELSE sl = SLP_DOWN; END
+    gsp -= sl * sin(ga);
+  ELSE
+    gsp -= SLP * sin(ga);
+  END
+
+  // ---- running, braking, rolling
+  IF (ctrl_lock > 0)
+    ctrl_lock--;
+  ELSE
+    IF (rolling)
+      IF (kl AND gsp > 0) gsp -= RDEC; IF (gsp < 0) gsp = 0; END END
+      IF (kr AND gsp < 0) gsp += RDEC; IF (gsp > 0) gsp = 0; END END
+    ELSE
+      IF (kl)
+        IF (gsp > 0)
+          gsp -= DEC;
+          IF (gsp <= 0) gsp = -0.5; END
+          IF (gsp > 4 AND skid_t <= 0 AND hmode == 0) play_sound(s_skid, 45, 100, 0); skid_t = 20; dust(hx, hy + hr - 4); END
+        ELSE
+          IF (gsp > -TOP) gsp = max(gsp - ACC, -TOP); END
+          facing = -1;
+        END
+      END
+      IF (kr)
+        IF (gsp < 0)
+          gsp += DEC;
+          IF (gsp >= 0) gsp = 0.5; END
+          IF (gsp < -4 AND skid_t <= 0 AND hmode == 0) play_sound(s_skid, 45, 100, 0); skid_t = 20; dust(hx, hy + hr - 4); END
+        ELSE
+          IF (gsp < TOP) gsp = min(gsp + ACC, TOP); END
+          facing = 1;
+        END
+      END
+    END
+  END
+  IF (rolling)
+    gsp -= min(abs(gsp), RFRC) * sgn(gsp);
+  ELSE
+    IF ((NOT kl AND NOT kr) OR ctrl_lock > 0 OR goal_hit)
+      gsp -= min(abs(gsp), FRC) * sgn(gsp);
+    END
+  END
+  IF (kd AND NOT rolling AND ctrl_lock == 0)
+    IF (abs(gsp) >= 1.0)
+      rolling = 1; ball = 1;
+      set_radius(1);
+      play_sound(s_spin, 50, 100, 0);
+    ELSE
+      IF (hmode == 0 AND NOT kl AND NOT kr AND NOT goal_hit) crouch = 1; gsp = 0; END
+    END
+  END
+  IF (rolling AND abs(gsp) < 0.5)
+    rolling = 0; ball = 0;
+    set_radius(0);
+  END
+  gsp = clamp(gsp, -MAXG, MAXG);
+
+  // ---- walls ahead (sensor from the centre, turned with the mode)
+  xs = gsp * cos(ga);
+  ys = -gsp * sin(ga);
+  moved = 0;
+  m = hmode;
+  s = sgn(gsp);
+  IF (s != 0)
+    IF (s > 0) wd = (m + 1) % 4; ELSE wd = (m + 3) % 4; END
+    ox = hx + xs; oy0 = hy + ys; oy = oy0;
+    IF (m == 0 AND ga == 0) oy = oy0 + 8; END
+    d = probe(ox, oy, wd, 16);
+    IF (d < 10)
+      hx = ox + pdx[wd] * (d - 10);
+      hy = oy0 + pdy[wd] * (d - 10);
+      gsp = 0;
+      moved = 1;
+    END
+  END
+  IF (NOT moved) hx += xs; hy += ys; END
+  clamp_x();
+
+  // ---- stay on the ground, or take off
+  IF (NOT ground_follow())
+    onground = 0;
+    xsp = gsp * cos(ga);
+    ysp = -gsp * sin(ga);
+    hmode = 0;
+    crouch = 0;
+    IF (NOT rolling) ball = 0; set_radius(0); END
+    RETURN 0;
+  END
+
+  // ---- too slow on a wall or the ceiling: slip off
+  IF (ctrl_lock == 0 AND abs(gsp) < 2.5 AND hmode != 0)
+    IF (ga > 70000 AND ga < 290000)
+      onground = 0;
+      xsp = gsp * cos(ga);
+      ysp = -gsp * sin(ga);
+      hmode = 0;
+      IF (NOT rolling) ball = 0; END
+    END
+    ctrl_lock = 30;
+  END
+  RETURN 1;
+END
+
+FUNCTION kip_air();
+PRIVATE d, da, db, ang;
+BEGIN
+  IF (NOT hurt AND NOT goal_hit)
+    IF (jumped AND NOT kj AND ysp < -4) ysp = -4; END
+    IF (kl)
+      IF (xsp > -TOP) xsp = max(xsp - AIR, -TOP); END
+      facing = -1;
+    END
+    IF (kr)
+      IF (xsp < TOP) xsp = min(xsp + AIR, TOP); END
+      facing = 1;
+    END
+  END
+  IF (ysp < 0 AND ysp > -4 AND abs(xsp) >= 0.125) xsp -= xsp * 0.0078125; END
+  hx += xsp;
+  hy += ysp;
+  IF (hurt) ysp += 0.1875; ELSE ysp += GRV; END
+  IF (ysp > 16) ysp = 16; END
+  clamp_x();
+
+  // walls
+  d = probe(hx, hy, 1, 16);
+  IF (d < 10) hx -= 10 - d; IF (xsp > 0) xsp = 0; END END
+  d = probe(hx, hy, 3, 16);
+  IF (d < 10) hx += 10 - d; IF (xsp < 0) xsp = 0; END END
+
+  IF (ysp < 0)
+    // ceiling: bump the head, or land on a steep ceiling (a loop's side)
+    da = probe(hx + wr, hy - hr, 2, 16);
+    db = probe(hx - wr, hy - hr, 2, 16);
+    IF (da < -30) da = 99; END
+    IF (db < -30) db = 99; END
+    d = min(da, db);
+    IF (d < 0)
+      ang = 180000;
+      IF (da < 50 AND db < 50) ang = norm_ang(atan2(db - da, -2 * wr)); END
+      hy -= d;
+      IF ((ang > 95000 AND ang < 150000) OR (ang > 210000 AND ang < 265000))
+        ga = ang;
+        hmode = mode_of(ga);
+        gsp = xsp * cos(ga) - ysp * sin(ga);
+        onground = 1; jumped = 0; ball = 0; rolling = 0;
+        hr = 19; wr = 9;
+        IF (NOT ground_follow()) onground = 0; hmode = 0; ELSE RETURN 0; END
+      END
+      IF (ysp < 0) ysp = 0; END
+    END
+  ELSE
+    // floor
+    da = probe(hx - wr, hy + hr, 0, 16);
+    db = probe(hx + wr, hy + hr, 0, 16);
+    IF (da < -30) da = 99; END
+    IF (db < -30) db = 99; END
+    d = min(da, db);
+    IF (d < 0.5 AND d > -(ysp + 14))
+      hy += d;
+      IF (da < 50 AND db < 50 AND abs(da - db) < 24)
+        ang = norm_ang(atan2(da - db, 2 * wr));
+      ELSE
+        IF (da <= db) ang = surf_angle(hx - wr, hy + hr); ELSE ang = surf_angle(hx + wr, hy + hr); END
+        IF (ang < 0) ang = 0; END
+      END
+      land(ang);
+    END
+  END
+  RETURN 0;
+END
+
+// Which side of the loop is solid: the entry side until Kip has passed
+// the top, then the exit side
+FUNCTION loop_layers();
+PRIVATE j, near;
+BEGIN
+  near = 0;
+  FOR j = 0 TO nloops - 1
+    IF (abs(hx - lcx[j]) < ROUT + 20)
+      near = 1;
+      IF (onground AND hy < lcy[j] - 20)
+        IF (hx < lcx[j])
+          IF (layer == 0 AND loop_last != j) loop_last = j; loops_done++; END
+          layer = 1;
+        ELSE
+          layer = 0;
+        END
+      END
+    END
+  END
+  IF (NOT near) layer = 0; loop_last = -1; END
+  RETURN 0;
+END
+
+FUNCTION kip_step();
+BEGIN
+  kl = key(_left); kr = key(_right); kd = key(_down);
+  kj = key(_space) OR key(_z) OR key(_x);
+  kjp = key_pressed(_space) OR key_pressed(_z) OR key_pressed(_x);
+  IF (frozen OR goal_hit) kl = 0; kr = 0; kd = 0; kj = 0; kjp = 0; END
+  IF (onground) kip_ground(); ELSE kip_air(); END
+  loop_layers();
+  IF (invuln > 0) invuln--; END
+  IF (skid_t > 0) skid_t--; END
+  IF (boost_t > 0) boost_t--; END
+  IF (hy > lv_bottom + 30) kill_kip(); END
+  RETURN 0;
+END
+
+// Kip is hit by something at x = srcx
+FUNCTION hurt_kip(srcx);
+PRIVATE n, i, a, sp;
+BEGIN
+  IF (invuln > 0 OR dead OR hurt OR goal_hit) RETURN 0; END
+  IF (sparks <= 0) kill_kip(); RETURN 0; END
+  hits_taken++;
+  // the sparks fly out in a fan, two circles of 16
+  n = min(sparks, 32);
+  FOR i = 0 TO n - 1
+    a = 101250 + (i % 16) / 2 * 22500;
+    IF (i % 2 == 1) a = 180000 - a; END
+    sp = 4;
+    IF (i >= 16) sp = 2; END
+    lost_spark(hx, hy - 4, cos(a) * sp, -sin(a) * sp, i);
+  END
+  scattered += n;
+  sparks = 0;
+  play_sound(s_hit, 60, 100, 0);
+  hud_dirty = 1;
+  play_sound(s_scatter, 70, 100, 0);
+  hurt = 1; onground = 0; ball = 0; rolling = 0; crouch = 0; charging = 0; jumped = 0;
+  set_radius(0);
+  xsp = 2 * sgn(hx - srcx);
+  IF (xsp == 0) xsp = -2 * facing; END
+  ysp = -4;
+  hmode = 0;
+  invuln = 120;
+  RETURN 1;
+END
+
+FUNCTION kill_kip();
+BEGIN
+  IF (dead) RETURN 0; END
+  dead = 1; dead_t = 0;
+  onground = 0; ball = 0; rolling = 0; hurt = 0; charging = 0; crouch = 0;
+  xsp = 0; ysp = -7;
+  play_sound(s_die, 70, 100, 0);
+  song_stop(); mus_now = 0;
+  gstate = ST_DEAD; st_t = 0;
+  RETURN 0;
+END
+
+// 1 when Kip is a spinning ball (it breaks enemies)
+FUNCTION kip_attacking();
+BEGIN
+  RETURN ball OR charging;
+END
+
+// 1 when Kip's box touches a box of half size (w, h) at (px, py)
+FUNCTION touch_kip(px, py, w, h);
+BEGIN
+  IF (dead) RETURN 0; END
+  RETURN abs(px - hx) < w + 8 AND abs(py - hy) < h + hr - 3;
+END
+
+// An enemy popped by Kip: points, and he bounces off it
+FUNCTION pop_enemy(px, py);
+PRIVATE pts;
+BEGIN
+  chain++;
+  pts = 100;
+  IF (chain == 2) pts = 200; END
+  IF (chain == 3) pts = 500; END
+  IF (chain >= 4) pts = 1000; END
+  IF (NOT onground)
+    IF (ysp > 0) ysp = -ysp; ELSE ysp -= 1; END
+  ELSE
+    chain = 0;
+  END
+  add_score(pts);
+  popup(px, py - 20, '' + pts);
+  boom(px, py);
+  enemies_popped++;
+  play_sound(s_pop, 70, 100, 0);
+  RETURN 0;
+END
+
+FUNCTION popup(px, py, s);
+BEGIN
+  pop_x = px; pop_y = py; pop_t = 50; pop_s = s;
+  RETURN 0;
+END
+
+FUNCTION got_spark(n);
+BEGIN
+  sparks += n;
+  hud_dirty = 1;
+  spark_pan = -spark_pan;
+  play_sound(s_spark, 45, 100, spark_pan);
+  IF (sparks >= next_life)
+    next_life += 100;
+    lives++;
+    play_sound(s_life, 70, 100, 0);
+  END
+  RETURN 0;
+END
+
+// The camera leads the way Kip moves and never loses him
+FUNCTION update_camera();
+PRIVATE vx, tx, ty, sx, sy;
+BEGIN
+  IF (onground) vx = gsp * cos(ga); ELSE vx = xsp; END
+  cam_lead += (clamp(vx * 18, -130, 130) - cam_lead) * 0.06;
+  tx = hx - SW * 0.5 + cam_lead;
+  ty = hy - SH * 0.56;
+  IF (arena_on) ty = ground_h(lock_x1 + 240) - SH + 44; END
+  cam_x += (tx - cam_x) * 0.2;
+  IF (onground) cam_y += (ty - cam_y) * 0.2; ELSE cam_y += (ty - cam_y) * 0.12; END
+  sx = hx - cam_x;
+  IF (sx < 110) cam_x = hx - 110; END
+  IF (sx > SW - 110) cam_x = hx - SW + 110; END
+  sy = hy - cam_y;
+  IF (NOT arena_on)
+    IF (sy < 70) cam_y = hy - 70; END
+    IF (sy > SH - 60) cam_y = hy - SH + 60; END
+  END
+  IF (arena_on)
+    cam_x += (lock_x1 - cam_x) * 0.1;
+    IF (abs(cam_x - lock_x1) < 1) cam_x = lock_x1; END
+  END
+  cam_x = clamp(cam_x, 0, lv_w - SW);
+  cam_y = clamp(cam_y, lv_top, lv_bottom - SH);
+  scroll.x0 = int(cam_x);
+  scroll.y0 = int(cam_y);
+  RETURN 0;
+END
+
+PROCESS kip();
+PRIVATE my_gen, fr, spd;
+BEGIN
+  my_gen = gen;
+  ctype = c_scroll;
+  z = 0;
+  LOOP
+    IF (my_gen != gen) BREAK; END
+    IF (dead)
+      dead_t++;
+      IF (dead_t > 20)
+        ysp += GRV;
+        hy += ysp;
+      END
+    ELSE
+      IF (gstate == ST_PLAY OR gstate == ST_CARD OR gstate == ST_CLEAR) kip_step(); END
+    END
+    IF (NOT dead) update_camera(); END
+
+    // ---- how he looks
+    x = hx; y = hy;
+    alpha = 100;
+    IF (invuln > 0 AND NOT hurt AND (invuln / 3) % 2 == 0) alpha = 0; END
+    IF (facing < 0) flags = 1; ELSE flags = 0; END
+    IF (onground) spd = abs(gsp); ELSE spd = abs(xsp); END
+    IF (dead)
+      graph = g_kip[12]; angle = 0; flags = 0;
+    ELSE
+      IF (ball OR charging)
+        IF (charging)
+          graph = g_ball[1];
+          spin_ang -= 40000 * facing;
+          IF (frames % 4 == 0) dust(hx - facing * 12, hy + hr - 4); END
+        ELSE
+          graph = g_ball[0];
+          spin_ang -= (12000 + spd * 5000) * facing;
+        END
+        spin_ang = norm_ang(spin_ang);
+        angle = spin_ang;
+        flags = 0;
+        spr_ang = 0;
+      ELSE
+        IF (onground)
+          // follows the ground, eased so the sensor mode changes do not jerk it
+          IF (abs(ang_diff(0, ga)) < 12000)
+            spr_ang += ang_diff(spr_ang, 0) * 0.5;
+          ELSE
+            spr_ang += ang_diff(spr_ang, ga) * 0.5;
+          END
+        ELSE
+          spr_ang += ang_diff(spr_ang, 0) * 0.12;
+        END
+        angle = norm_ang(spr_ang);
+        IF (hurt)
+          graph = g_kip[10];
+        ELSE
+          IF (crouch)
+            graph = g_kip[9];
+          ELSE
+            IF (NOT onground AND sprung AND ysp < 0)
+              graph = g_kip[11];
+            ELSE
+              IF (spd < 0.1)
+                graph = g_kip[0];
+              ELSE
+                IF (skid_t > 8 AND onground)
+                  graph = g_kip[13];
+                ELSE
+                  anim += 0.08 + spd * 0.05;
+                  fr = int(anim) % 4;
+                  IF (spd >= 5.8) graph = g_kip[5 + fr]; ELSE graph = g_kip[1 + fr]; END
+                END
+              END
+            END
+          END
+        END
+      END
+    END
+    FRAME;
+  END
+END
+
+// =====================================================================
+// Effects
+// =====================================================================
+
+PROCESS boom(x, y);
+PRIVATE i;
+BEGIN
+  ctype = c_scroll; z = -5;
+  FOR i = 0 TO 15
+    graph = g_boom[i / 4];
+    FRAME;
+  END
+END
+
+PROCESS dust(x, y);
+PRIVATE i;
+BEGIN
+  ctype = c_scroll; z = -3; graph = g_dust;
+  FOR i = 0 TO 11
+    size = 60 + i * 8;
+    alpha = 90 - i * 7;
+    y -= 0.4;
+    FRAME;
+  END
+END
+
+PROCESS twinkle(x, y);
+PRIVATE i;
+BEGIN
+  ctype = c_scroll; z = -4;
+  FOR i = 0 TO 9
+    graph = g_spark[i % 4];
+    size = 100 + i * 12;
+    alpha = 100 - i * 10;
+    FRAME;
+  END
+END
+
+// =====================================================================
+// Objects
+// =====================================================================
+
+// 1 when (px, py) is far enough from the camera for the object to rest
+FUNCTION far_away(px, py);
+BEGIN
+  RETURN px < cam_x - 200 OR px > cam_x + SW + 240 OR py < cam_y - 300 OR py > cam_y + SH + 300;
+END
+
+// Wakes up the objects that come near the camera
+FUNCTION spawn_objects();
+PRIVATE i, k;
+BEGIN
+  FOR i = 0 TO nobj - 1
+    IF (ob_s[i] == 0)
+      IF (ob_x[i] > cam_x - 80 AND ob_x[i] < cam_x + SW + 120 AND ob_y[i] > cam_y - 160 AND ob_y[i] < cam_y + SH + 160)
+        ob_s[i] = 1;
+        k = ob_k[i];
+        IF (k == K_SPARK) spark(i); END
+        IF (k == K_WALKER) walker(i); END
+        IF (k == K_FLYER) flyer(i); END
+        IF (k == K_SPRING) spring(i); END
+        IF (k == K_BOOST) booster(i); END
+        IF (k == K_CHECK) beacon(i); END
+        IF (k == K_GOAL) goal(i); END
+        IF (k == K_CRATE) crate(i); END
+      END
+    END
+  END
+  RETURN 0;
+END
+
+PROCESS spark(i);
+PRIVATE my_gen;
+BEGIN
+  my_gen = gen;
+  ctype = c_scroll; z = 20;
+  x = ob_x[i]; y = ob_y[i];
+  LOOP
+    IF (my_gen != gen) BREAK; END
+    IF (far_away(x, y)) ob_s[i] = 0; BREAK; END
+    graph = g_spark[(frames / 5) % 4];
+    IF (NOT dead AND NOT hurt AND abs(x - hx) < 16 AND abs(y - hy) < hr + 6)
+      got_spark(1);
+      twinkle(x, y);
+      ob_s[i] = 2;
+      BREAK;
+    END
+    FRAME;
+  END
+END
+
+// A spark knocked out of Kip: it bounces, and can be caught again for
+// a while
+PROCESS lost_spark(x, y, vx, vy, k);
+PRIVATE life, my_gen;
+BEGIN
+  my_gen = gen;
+  ctype = c_scroll; z = -2;
+  life = 0;
+  LOOP
+    IF (my_gen != gen) BREAK; END
+    life++;
+    IF (life > 256) BREAK; END
+    vy += 0.09375;
+    x += vx;
+    y += vy;
+    IF (vy > 0 AND solid(x, y + 7)) vy = -vy * 0.75; y -= 2; IF (vy > -1) vy = -1; END END
+    IF (vx > 0 AND solid(x + 7, y)) vx = -vx * 0.75; END
+    IF (vx < 0 AND solid(x - 7, y)) vx = -vx * 0.75; END
+    graph = g_spark[(frames / 3 + k) % 4];
+    alpha = 100;
+    IF (life > 190 AND (life / 4) % 2 == 0) alpha = 0; END
+    IF (life > 64 AND NOT dead AND NOT hurt AND abs(x - hx) < 16 AND abs(y - hy) < hr + 6)
+      got_spark(1);
+      regrabbed++;
+      twinkle(x, y);
+      BREAK;
+    END
+    FRAME;
+  END
+END
+
+PROCESS walker(i);
+PRIVATE my_gen, dir, nx, gy, f, base, t;
+BEGIN
+  my_gen = gen;
+  ctype = c_scroll; z = 10;
+  x = ob_x[i]; base = x; dir = -1;
+  y = ground_h(x) - 12;
+  LOOP
+    IF (my_gen != gen) BREAK; END
+    IF (far_away(x, y)) ob_s[i] = 0; BREAK; END
+    t++;
+    nx = x + dir * 0.7;
+    gy = ground_h(nx);
+    IF (gy >= GAP OR abs(gy - ground_h(x)) > 6 OR abs(nx - base) > 110 OR solid(nx + dir * 18, gy - 14))
+      dir = -dir;
+    ELSE
+      x = nx;
+      y = gy - 12;
+    END
+    f = (t / 10) % 2;
+    graph = g_walker[zone * 2 + f];
+    IF (zone == 1 AND dir < 0) flags = 1; ELSE flags = 0; END
+    IF (gstate == ST_PLAY AND touch_kip(x, y, 16, 11))
+      IF (kip_attacking())
+        pop_enemy(x, y);
+        ob_s[i] = 2;
+        BREAK;
+      ELSE
+        hurt_kip(x);
+      END
+    END
+    FRAME;
+  END
+END
+
+PROCESS flyer(i);
+PRIVATE my_gen, t, f, ox, base;
+BEGIN
+  my_gen = gen;
+  ctype = c_scroll; z = 10;
+  base = ob_x[i];
+  x = base; y = ob_y[i];
+  LOOP
+    IF (my_gen != gen) BREAK; END
+    IF (far_away(x, y)) ob_s[i] = 0; BREAK; END
+    t++;
+    ox = x;
+    x = base + sin(t * 1200) * 80;
+    y = ob_y[i] + sin(t * 5000) * 10;
+    f = (t / 5) % 2;
+    graph = g_flyer[zone * 2 + f];
+    IF (x < ox) flags = 1; ELSE flags = 0; END
+    IF (zone == 1) flags = 1 - flags; END
+    IF (gstate == ST_PLAY AND touch_kip(x, y, 16, 10))
+      IF (kip_attacking())
+        pop_enemy(x, y);
+        ob_s[i] = 2;
+        BREAK;
+      ELSE
+        hurt_kip(x);
+      END
+    END
+    FRAME;
+  END
+END
+
+PROCESS spring(i);
+PRIVATE my_gen, up, k0, ty;
+BEGIN
+  my_gen = gen;
+  ctype = c_scroll; z = 15;
+  x = ob_x[i]; y = ground_h(x) + 1;
+  k0 = 0;
+  IF (ob_p[i] > 10) k0 = 2; END
+  LOOP
+    IF (my_gen != gen) BREAK; END
+    IF (far_away(x, y)) ob_s[i] = 0; BREAK; END
+    ty = y - 16;
+    IF (NOT dead AND abs(hx - x) < 20 AND hy + hr > ty - 4 AND hy < ty AND (onground OR ysp >= 0))
+      hy = ty - hr;
+      ysp = -ob_p[i];
+      IF (onground) xsp = gsp * cos(ga); END
+      onground = 0; ball = 0; rolling = 0; jumped = 0; crouch = 0; charging = 0; sprung = 1;
+      set_radius(0);
+      hmode = 0; ga = 0;
+      up = 16;
+      springs_used++;
+      play_sound(s_spring, 70, 100, 0);
+    END
+    IF (up > 0) up--; graph = g_spring[k0 + 1]; ELSE graph = g_spring[k0]; END
+    FRAME;
+  END
+END
+
+PROCESS booster(i);
+PRIVATE my_gen, t;
+BEGIN
+  my_gen = gen;
+  ctype = c_scroll; z = 15;
+  x = ob_x[i]; y = ground_h(x) - 4;
+  IF (ob_p[i] < 0) flags = 1; END
+  LOOP
+    IF (my_gen != gen) BREAK; END
+    IF (far_away(x, y)) ob_s[i] = 0; BREAK; END
+    t++;
+    graph = g_boost[(t / 6) % 2];
+    IF (onground AND NOT dead AND abs(hx - x) < 24 AND abs(hy + hr - y - 4) < 14)
+      IF (boost_t <= 0)
+        play_sound(s_boost, 70, 100, 0);
+        boosts_used++;
+      END
+      boost_t = 10;
+      gsp = ob_p[i] * max(abs(gsp), 12);
+      IF (ob_p[i] > 0) facing = 1; ELSE facing = -1; END
+    END
+    FRAME;
+  END
+END
+
+// Checkpoint beacon: turns green, and Kip comes back here after a fall
+PROCESS beacon(i);
+PRIVATE my_gen;
+BEGIN
+  my_gen = gen;
+  ctype = c_scroll; z = 15;
+  x = ob_x[i]; y = ground_h(x) - 25;
+  LOOP
+    IF (my_gen != gen) BREAK; END
+    IF (far_away(x, y)) ob_s[i] = 0; BREAK; END
+    IF (ob_p[i] == 0 AND NOT dead AND hx > x - 16 AND abs(hy - y) < 240)
+      ob_p[i] = 1;
+      cp_x = x; cp_y = ground_h(x) - 19; cp_time = frames;
+      play_sound(s_check, 70, 100, 0);
+      twinkle(x, y - 18);
+    END
+    graph = g_check[ob_p[i]];
+    FRAME;
+  END
+END
+
+// The goal gate at the end of an act
+PROCESS goal(i);
+PRIVATE my_gen, t;
+BEGIN
+  my_gen = gen;
+  ctype = c_scroll; z = 30;
+  x = ob_x[i]; y = ground_h(x) - 41;
+  graph = g_goal[0];
+  LOOP
+    IF (my_gen != gen) BREAK; END
+    IF (far_away(x, y)) ob_s[i] = 0; BREAK; END
+    IF (zone == 1 AND NOT boss_beaten) alpha = 30; ELSE alpha = 100; END
+    IF (NOT goal_hit AND alpha == 100 AND NOT dead AND hx > x - 8 AND abs(hy - y) < 80)
+      goal_hit = 1;
+      graph = g_goal[1];
+      play_sound(s_goal, 80, 100, 0);
+      gstate = ST_CLEAR; st_t = 0;
+    END
+    IF (goal_hit)
+      t++;
+      IF (t % 12 == 1 AND t < 90) boom(x + rand(-50, 50), y - 40 - rand(0, 60)); twinkle(x + rand(-40, 40), y - rand(0, 60)); END
+    END
+    FRAME;
+  END
+END
+
+// A crate with ten sparks: Kip breaks it by rolling or jumping into it
+PROCESS crate(i);
+PRIVATE my_gen;
+BEGIN
+  my_gen = gen;
+  ctype = c_scroll; z = 12;
+  x = ob_x[i]; y = ob_y[i];
+  graph = g_crate;
+  LOOP
+    IF (my_gen != gen) BREAK; END
+    IF (far_away(x, y)) ob_s[i] = 0; BREAK; END
+    IF (touch_kip(x, y, 14, 14))
+      IF (kip_attacking() OR (NOT onground AND ysp > 0 AND hy < y - 8))
+        IF (NOT onground) IF (ysp > 0) ysp = -ysp; END END
+        boom(x, y);
+        got_spark(10);
+        popup(x, y - 20, '+10 SPARKS');
+        play_sound(s_pop, 70, 120, 0);
+        ob_s[i] = 2;
+        BREAK;
+      ELSE
+        IF (hx < x) hx = x - 23; ELSE hx = x + 23; END
+        gsp = 0; xsp = 0;
+      END
+    END
+    FRAME;
+  END
+END
+
+// =====================================================================
+// Baron Rust
+// =====================================================================
+
+PROCESS bomb(x, y, vx);
+PRIVATE my_gen, vy, t, gy;
+BEGIN
+  my_gen = gen;
+  ctype = c_scroll; z = 5;
+  graph = g_bomb;
+  LOOP
+    IF (my_gen != gen) BREAK; END
+    t++;
+    vy += 0.15;
+    x += vx;
+    y += vy;
+    gy = ground_h(x);
+    IF (y > gy - 9) y = gy - 9; vy = -vy * 0.55; vx = vx * 0.8; END
+    angle += 8000;
+    IF (t > 150 OR touch_kip(x, y, 7, 7))
+      IF (touch_kip(x, y, 7, 7)) hurt_kip(x); END
+      boom(x, y);
+      play_sound(s_bomb, 60, 100, 0);
+      BREAK;
+    END
+    IF (x < lock_x1 OR x > lock_x2) BREAK; END
+    FRAME;
+  END
+END
+
+PROCESS boss();
+PRIVATE my_gen, t, tx, ty, flash, phase, gy, dir, k;
+BEGIN
+  my_gen = gen;
+  ctype = c_scroll; z = 8;
+  boss_hp = 8; boss_state = 0;
+  gy = ground_h(lock_x1 + 240);
+  x = lock_x2 + 80; y = gy - 120;
+  dir = -1;
+  hud_dirty = 1;
+  LOOP
+    IF (my_gen != gen) BREAK; END
+    t++;
+    IF (boss_state == 0)
+      // flies in
+      x += (lock_x2 - 110 - x) * 0.04;
+      y = gy - 120 + sin(t * 4000) * 6;
+      IF (t > 100) boss_state = 1; t = 0; END
+    END
+    IF (boss_state == 1)
+      // back and forth, dropping bombs, now and then a dive
+      x += dir * (1.6 + (8 - boss_hp) * 0.2);
+      IF (x < lock_x1 + 70) dir = 1; END
+      IF (x > lock_x2 - 70) dir = -1; END
+      y += (gy - 112 + sin(t * 4000) * 8 - y) * 0.1;
+      IF (t % 110 == 60) bomb(x, y + 30, dir * 1.5); END
+      IF (t > 330) boss_state = 2; t = 0; tx = hx; END
+    END
+    IF (boss_state == 2)
+      // the dive: down low towards where Kip was, then back up
+      x += (tx - x) * 0.03;
+      IF (t < 70) y += (gy - 58 - y) * 0.08; ELSE y += (gy - 112 - y) * 0.06; END
+      IF (t > 130) boss_state = 1; t = 0; END
+    END
+    IF (boss_state == 3)
+      // beaten: smoke and bangs, then away
+      IF (t % 8 == 0 AND t < 110) boom(x + rand(-40, 40), y + rand(-30, 20)); play_sound(s_boom, 60, 80 + rand(0, 40), 0); END
+      IF (t > 110) x += 4; y -= 2; END
+      IF (t > 220)
+        arena_on = 0;
+        BREAK;
+      END
+    END
+    IF (flash > 0) flash--; END
+    k = (t / 3) % 2;
+    IF (flash > 0 AND (flash / 3) % 2 == 0) k += 2; END
+    graph = g_boss[k];
+    IF (dir < 0) flags = 1; ELSE flags = 0; END
+    // Kip against the pod
+    IF (boss_state < 3 AND NOT dead AND abs(hx - x) < 44 + wr AND abs(hy - (y + 10)) < 26 + hr)
+      IF (kip_attacking() AND flash == 0)
+        boss_hp--;
+        flash = 40;
+        hud_dirty = 1;
+        play_sound(s_bosshit, 80, 100, 0);
+        add_score(100);
+        xsp = sgn(hx - x) * 3;
+        IF (xsp == 0) xsp = 3; END
+        ysp = -4;
+        IF (onground) onground = 0; hmode = 0; ball = 1; jumped = 0; END
+        IF (boss_hp <= 0)
+          boss_state = 3; t = 0;
+          boss_beaten = 1;
+          add_score(1000);
+          popup(x, y - 40, '1000');
+          music(mus_works);
+        END
+      ELSE
+        IF (flash == 0) hurt_kip(x); END
+      END
+    END
+    FRAME;
+  END
+  boss_id = 0;
+END
+
+// =====================================================================
+// Screens: title card, results, game over, the end
+// =====================================================================
+
+
+// The zone's name slides in, then out
+PROCESS card();
+PRIVATE my_gen, t;
+BEGIN
+  my_gen = gen;
+  z = -90;
+  graph = g_zcard[zone];
+  y = 110;
+  LOOP
+    IF (my_gen != gen) BREAK; END
+    t++;
+    IF (t < 30) x = -200 + t * 14.66; END
+    IF (t >= 30 AND t < 130) x = 240; END
+    IF (t >= 130) x = 240 + (t - 130) * 16; END
+    IF (t > 170) BREAK; END
+    FRAME;
+  END
+END
+
+// The act results: time and spark bonuses counted into the score
+PROCESS results();
+PRIVATE my_gen;
+BEGIN
+  my_gen = gen;
+  z = -95;
+  x = 240; y = 120;
+  LOOP
+    IF (my_gen != gen) BREAK; END
+    gfx_fill_rgba(g_res, 10, 20, 50, 80);
+    gfx_rect_outline(g_res, 0, 0, 300, 150, 120, 220, 255);
+    IF (zone == 0)
+      otext(g_res, 22, 10, 'KIP CLEARED CORAL COAST', 255, 230, 90, 15);
+    ELSE
+      otext(g_res, 22, 10, 'KIP CLEARED RIVET WORKS', 255, 230, 90, 15);
+    END
+    otext(g_res, 30, 46, 'TIME BONUS', 255, 220, 80, 13);
+    otext(g_res, 190, 46, '' + bonus_time, 255, 255, 255, 13);
+    otext(g_res, 30, 70, 'SPARK BONUS', 255, 220, 80, 13);
+    otext(g_res, 190, 70, '' + bonus_spark, 255, 255, 255, 13);
+    otext(g_res, 30, 102, 'SCORE', 255, 220, 80, 14);
+    otext(g_res, 190, 102, '' + score, 255, 255, 255, 14);
+    graph = g_res;
+    FRAME;
+  END
+END
+
+// A full-screen message (game over / the end)
+PROCESS endscreen();
+PRIVATE my_gen;
+BEGIN
+  my_gen = gen;
+  z = -150;
+  x = 240; y = 135;
+  graph = g_end;
+  LOOP
+    IF (my_gen != gen) BREAK; END
+    FRAME;
+  END
+END
+
+// The title screen: logo over the coast, Kip rolling by
+PROCESS title_kip();
+PRIVATE my_gen, t;
+BEGIN
+  my_gen = gen;
+  z = -60;
+  y = 232;
+  x = -40;
+  LOOP
+    IF (my_gen != gen) BREAK; END
+    t++;
+    x += 5;
+    IF (x > SW + 300) x = -60; END
+    IF ((t / 90) % 2 == 0)
+      graph = g_ball[0];
+      angle -= 30000;
+      y = 238;
+    ELSE
+      graph = g_kip[5 + (t / 3) % 4];
+      angle = 0;
+      y = 233;
+    END
+    FRAME;
+  END
+END
+
+PROCESS title_logo();
+PRIVATE my_gen, t;
+BEGIN
+  my_gen = gen;
+  z = -50;
+  x = 240; y = 135;
+  graph = g_title;
+  LOOP
+    IF (my_gen != gen) BREAK; END
+    t++;
+    y = 135 + sin(t * 3000) * 3;
+    FRAME;
+  END
+END
+
+FUNCTION make_title();
+PRIVATE g;
+BEGIN
+  g = new_graphic(SW, SH);
+  gfx_fill_rgba(g, 0, 0, 0, 0);
+  otext(g, 96, 34, 'SPARKROLL', 255, 200, 60, 50);
+  gfx_text(g, 96, 34, 'SPARKROLL', 255, 236, 120, 50);
+  gfx_rect(g, 96, 92, 290, 3, 60, 200, 255);
+  otext(g, 110, 100, 'Kip the pangolin vs. Baron Rust', 230, 250, 255, 14);
+  otext(g, 70, 136, 'ARROWS run    DOWN roll / crouch', 255, 255, 255, 12);
+  otext(g, 70, 154, 'SPACE / Z / X jump (spin attack)', 255, 255, 255, 12);
+  otext(g, 70, 172, 'charge dash: hold DOWN, tap JUMP, let go', 255, 255, 255, 12);
+  otext(g, 150, 202, 'PRESS ENTER', 255, 230, 90, 18);
+  RETURN g;
+END
+
+FUNCTION make_zcard(z0);
+PRIVATE g;
+BEGIN
+  g = new_graphic(300, 70);
+  gfx_fill_rgba(g, 0, 0, 0, 0);
+  IF (z0 == 0)
+    gfx_rect(g, 0, 8, 300, 40, 230, 110, 90);
+    gfx_rect(g, 0, 8, 300, 4, 255, 200, 150);
+    otext(g, 14, 14, 'CORAL COAST', 255, 255, 255, 24);
+  ELSE
+    gfx_rect(g, 0, 8, 300, 40, 70, 80, 120);
+    gfx_rect(g, 0, 8, 300, 4, 250, 200, 40);
+    otext(g, 14, 14, 'RIVET WORKS', 255, 255, 255, 24);
+  END
+  gfx_rect(g, 196, 44, 100, 24, 40, 40, 60);
+  otext(g, 206, 47, 'ACT ' + (z0 + 1), 255, 230, 90, 16);
+  RETURN g;
+END
+
+FUNCTION make_end(win);
+BEGIN
+  IF (g_end) free_graphic(g_end); END
+  g_end = new_graphic(SW, SH);
+  IF (win)
+    gfx_fill_rgba(g_end, 10, 30, 60, 94);
+    otext(g_end, 80, 30, 'BARON RUST FLIES OFF!', 255, 230, 90, 22);
+    otext(g_end, 60, 76, 'The sparks are free again and the islands', 230, 250, 255, 13);
+    otext(g_end, 60, 94, 'light up. Kip curls up for a well-earned nap.', 230, 250, 255, 13);
+    otext(g_end, 150, 136, 'FINAL SCORE ' + score, 255, 255, 255, 16);
+    otext(g_end, 150, 220, 'PRESS ENTER', 255, 230, 90, 16);
+  ELSE
+    gfx_fill_rgba(g_end, 20, 10, 20, 94);
+    otext(g_end, 150, 80, 'GAME OVER', 255, 90, 70, 34);
+    otext(g_end, 160, 136, 'SCORE ' + score, 255, 255, 255, 16);
+    otext(g_end, 150, 200, 'PRESS ENTER', 255, 230, 90, 16);
+  END
+  RETURN 0;
+END
+
+// =====================================================================
+// Sound and music (the engine's synthesiser, no files)
+// =====================================================================
+
+FUNCTION make_sounds();
+BEGIN
+  s_jump = sfx_tone(wave_square, 320, 880, 140, 40);
+  s_spin = sfx_tone(wave_saw, 700, 180, 180, 35);
+  s_charge = sfx_tone(wave_saw, 300, 1300, 170, 40);
+  s_dash = sfx_tone(wave_saw, 1400, 160, 320, 45);
+  s_spark = sfx_tone(wave_triangle, 1568, 2349, 90, 45);
+  s_scatter = sfx_tone(wave_square, 1800, 260, 650, 40);
+  s_spring = sfx_tone(wave_triangle, 180, 1100, 260, 55);
+  s_boost = sfx_tone(wave_saw, 200, 1600, 350, 40);
+  s_hit = sfx(sfx_hit, 3);
+  s_pop = sfx(sfx_explosion, 5);
+  s_goal = sfx(sfx_powerup, 9);
+  s_check = sfx_tone(wave_sine, 880, 1760, 250, 50);
+  s_die = sfx_tone(wave_square, 900, 60, 900, 45);
+  s_bosshit = sfx_tone(wave_square, 700, 90, 260, 50);
+  s_boom = sfx(sfx_explosion, 11);
+  s_bomb = sfx(sfx_explosion, 2);
+  s_life = sfx(sfx_coin, 5);
+  s_skid = sfx_tone(wave_noise, 900, 300, 200, 30);
+  s_start = sfx(sfx_blip, 3);
+  s_tally = sfx_tone(wave_square, 1200, 1200, 30, 20);
+
+  // Coral Coast: bright and quick, C major
+  mus_coast = song_new(152);
+  song_track(mus_coast, inst_square,
+    "E5 . G5 . C6 - B5 - G5 . E5 . G5 - - - | D5 . G5 . B5 - A5 - G5 . D5 . G5 - A5 - |" +
+    "C6 - B5 - A5 . E5 . A5 - G5 - E5 . C5 . | F5 - A5 - C6 - A5 - G5 - F5 - E5 - D5 - |" +
+    "E5 . G5 . C6 - E6 - D6 . C6 . B5 - G5 - | D6 - B5 - G5 - D6 - B5 . A5 . G5 - - - |" +
+    "A5 . C6 . E6 - D6 - C6 . B5 . A5 - E5 - | F5 - A5 - C6 - D6 - E6 - - - D6 - - -", 28);
+  song_track(mus_coast, inst_bass,
+    "C3 . C3 C4 . C3 C3 . C3 . C3 C4 . C3 G2 . | G2 . G2 G3 . G2 G2 . G2 . G2 G3 . G2 D3 . |" +
+    "A2 . A2 A3 . A2 A2 . A2 . A2 A3 . A2 E3 . | F2 . F2 F3 . F2 F2 . F2 . F2 F3 . G2 . G3 .", 45);
+  song_track(mus_coast, inst_pluck,
+    "C5 . G4 . E5 . G4 . C5 . G4 . E5 . G4 . | B4 . G4 . D5 . G4 . B4 . G4 . D5 . G4 . |" +
+    "C5 . A4 . E5 . A4 . C5 . A4 . E5 . A4 . | C5 . A4 . F5 . A4 . C5 . A4 . F5 . A4 .", 16);
+  song_track(mus_coast, inst_drums, "k . h . s . h k k . h . s . h h", 40);
+
+  // Rivet Works: A minor, driving
+  mus_works = song_new(160);
+  song_track(mus_works, inst_square,
+    "A4 . C5 . E5 . A5 . G5 . E5 . C5 . E5 . | A5 - - . G5 . E5 - D5 . C5 . D5 - E5 - |" +
+    "F5 . A5 . C6 - A5 . F5 . C5 . F5 - A5 . | G5 - - . D5 . G5 . B5 - A5 . G5 - D5 . |" +
+    "A4 . C5 . E5 . A5 . C6 . B5 . A5 . E5 . | G5 - A5 - E5 - - . C5 . D5 . E5 - - - |" +
+    "F5 . A5 . C6 . F6 . E6 . C6 . A5 . F5 . | E5 - G#5 - B5 - E6 - D6 - B5 - G#5 - E5 -", 26);
+  song_track(mus_works, inst_bass,
+    "A2 A2 . A2 A3 . A2 A2 . A2 A3 . G2 . E2 . | A2 A2 . A2 A3 . A2 A2 . A2 A3 . G2 . E2 . |" +
+    "F2 F2 . F2 F3 . F2 F2 . F2 F3 . E2 . C3 . | G2 G2 . G2 G3 . G2 G2 . G2 G3 . F2 . D2 . |" +
+    "A2 A2 . A2 A3 . A2 A2 . A2 A3 . G2 . E2 . | A2 A2 . A2 A3 . A2 A2 . A2 A3 . G2 . E2 . |" +
+    "F2 F2 . F2 F3 . F2 F2 . F2 F3 . E2 . C3 . | E2 E2 . E2 E3 . E2 E2 . E2 E3 . G#2 . B2 .", 45);
+  song_track(mus_works, inst_pad,
+    "A3 - - - - - - - - - - - - - - - | A3 - - - - - - - - - - - - - - - | F3 - - - - - - - - - - - - - - - | G3 - - - - - - - - - - - - - - - |" +
+    "A3 - - - - - - - - - - - - - - - | A3 - - - - - - - - - - - - - - - | F3 - - - - - - - - - - - - - - - | E3 - - - - - - - - - - - - - - -", 14);
+  song_track(mus_works, inst_drums, "k . h . s . h . k . k . s . h h | k . h . s . h . k . k h s h s s", 42);
+
+  // Baron Rust: E minor, fast
+  mus_boss = song_new(172);
+  song_track(mus_boss, inst_square,
+    "E5 . E5 . G5 . E5 . A5 . G5 . E5 . D5 . | E5 . E5 . G5 . E5 . B5 . A5 . G5 . F#5 . |" +
+    "E5 . E5 . G5 . E5 . A5 . G5 . E5 . D5 . | C5 - D5 - E5 - F#5 - G5 - A5 - B5 - - -", 26);
+  song_track(mus_boss, inst_bass,
+    "E2 E2 E3 E2 E2 E2 E3 E2 E2 E2 E3 E2 D2 D2 D3 D2 | E2 E2 E3 E2 E2 E2 E3 E2 E2 E2 E3 E2 D2 D2 D3 D2 |" +
+    "E2 E2 E3 E2 E2 E2 E3 E2 E2 E2 E3 E2 D2 D2 D3 D2 | C2 C2 C3 C2 C2 C2 C3 C2 B1 B1 B2 B1 B1 B1 B2 B1", 45);
+  song_track(mus_boss, inst_drums, "k h s h k h s h k h s h k k s s", 42);
+
+  // title
+  mus_title = song_new(140);
+  song_track(mus_title, inst_square,
+    "G5 . B5 . D6 - B5 . C6 . A5 . F#5 - D5 . | G5 . B5 . D6 - G6 - F#6 . E6 . D6 - - - |" +
+    "E6 . D6 . C6 - B5 . A5 . B5 . C6 - A5 . | B5 - G5 - D5 - G5 - G5 - - - . . . .", 28);
+  song_track(mus_title, inst_bass,
+    "G2 . D3 . G2 . D3 . D2 . A2 . D2 . A2 . | G2 . D3 . G2 . D3 . E2 . B2 . E2 . B2 . |" +
+    "C3 . G3 . C3 . G3 . D3 . A3 . D3 . A3 . | G2 . D3 . G2 . D3 . G2 - - - . . . .", 45);
+  song_track(mus_title, inst_drums, "k . h . s . h . k . h . s . h .", 36);
+
+  // jingles
+  mus_clear = song_new(132);
+  song_track(mus_clear, inst_square, "C5 E5 G5 C6 . G5 C6 - E6 - - - D6 - - - C6 - - - - - - - . . . . . . . .", 34);
+  song_track(mus_clear, inst_bass, "C3 - - - G2 - - - C3 - - - G2 - - - C3 - - - - - - - . . . . . . . .", 45);
+  mus_over = song_new(96);
+  song_track(mus_over, inst_square, "E5 - D5 - C5 - B4 - A4 - - - - - - - . . . .", 30);
+  song_track(mus_over, inst_bass, "A2 - - - G2 - - - F2 - - - E2 - - - . . . .", 45);
+  mus_win = song_new(140);
+  song_track(mus_win, inst_square,
+    "C5 E5 G5 C6 - G5 C6 E6 - - - . | F5 A5 C6 F6 - C6 F6 A6 - - - . | G5 B5 D6 G6 - - - - - - - . | C6 - - - - - - - . . . .", 30);
+  song_track(mus_win, inst_bass,
+    "C3 - - - C3 - - - C3 - - - | F2 - - - F2 - - - F2 - - - | G2 - - - G2 - - - G2 - - - | C3 - - - - - - - . . . .", 45);
+  song_track(mus_win, inst_drums, "k . s . k . s . k k s . | k . s . k . s . k k s . | k . s . k . s . k k s s | k . . . . . . . . . . .", 36);
+  RETURN 0;
+END
+
+// =====================================================================
+// Setting up
+// =====================================================================
+
+FUNCTION init_colours();
+BEGIN
+  set_zc(0, 0, 70, 200, 110);  set_zc(0, 1, 30, 140, 80);   set_zc(0, 2, 236, 200, 140);
+  set_zc(0, 3, 226, 120, 104); set_zc(0, 4, 244, 214, 160); set_zc(0, 5, 206, 100, 96);
+  set_zc(0, 6, 232, 132, 110); set_zc(0, 7, 80, 210, 120);  set_zc(0, 8, 170, 80, 70);
+  set_zc(0, 9, 150, 84, 80);
+  set_zc(1, 0, 250, 200, 40);  set_zc(1, 1, 40, 38, 46);    set_zc(1, 2, 130, 140, 160);
+  set_zc(1, 3, 200, 210, 225); set_zc(1, 4, 80, 86, 104);   set_zc(1, 5, 96, 102, 124);
+  set_zc(1, 6, 110, 120, 140); set_zc(1, 7, 250, 200, 40);  set_zc(1, 8, 60, 64, 80);
+  set_zc(1, 9, 58, 60, 76);
+  RETURN 0;
+END
+
+// Kip's frames: 0 stand, 1-4 run, 5-8 fast, 9 crouch, 10 hurt,
+// 11 spring, 12 dead, 13 skid
+FUNCTION make_kip_frames();
+PRIVATE i;
+BEGIN
+  g_kip[0] = make_kip(0, 0);
+  FOR i = 0 TO 3
+    g_kip[1 + i] = make_kip(1, i);
+    g_kip[5 + i] = make_kip(2, i);
+  END
+  RETURN 0;
+END
+
+FUNCTION make_kip_frames2();
+BEGIN
+  g_kip[9] = make_kip(3, 0);
+  g_kip[10] = make_kip(4, 0);
+  g_kip[11] = make_kip(5, 0);
+  g_kip[12] = make_kip(6, 0);
+  g_kip[13] = make_kip(7, 0);
+  g_ball[0] = make_ball(0);
+  g_ball[1] = make_ball(1);
+  RETURN 0;
+END
+
+FUNCTION make_objects();
+PRIVATE i;
+BEGIN
+  FOR i = 0 TO 3
+    g_spark[i] = make_spark(i);
+    g_boom[i] = make_boom(i);
+    g_spring[i] = make_spring(i);
+    g_boss[i] = make_boss(i);
+  END
+  RETURN 0;
+END
+
+FUNCTION make_objects2();
+PRIVATE i;
+BEGIN
+  FOR i = 0 TO 1
+    g_walker[i] = make_walker(0, i);
+    g_walker[2 + i] = make_walker(1, i);
+    g_flyer[i] = make_flyer(0, i);
+    g_flyer[2 + i] = make_flyer(1, i);
+    g_boost[i] = make_boost(i);
+    g_check[i] = make_check(i);
+    g_goal[i] = make_goal(i);
+  END
+  g_crate = make_crate();
+  g_bomb = make_bomb();
+  g_dust = new_graphic(14, 14);
+  gfx_fill_rgba(g_dust, 0, 0, 0, 0);
+  gfx_circle(g_dust, 7, 7, 6, 230, 225, 215);
+  gfx_circle(g_dust, 5, 6, 3, 255, 255, 250);
+  g_hud = new_graphic(SW, SH);
+  set_point(0, g_hud, 0, 0, 0);
+  g_res = new_graphic(300, 150);
+  RETURN 0;
+END
+
+// =====================================================================
+// Game flow
+// =====================================================================
+
+// Everything Kip carries back to a fresh start
+FUNCTION reset_kip();
+BEGIN
+  hx = cp_x; hy = cp_y; xsp = 0; ysp = 0; gsp = 0; ga = 0;
+  onground = 1; ball = 0; rolling = 0; hmode = 0; facing = 1;
+  hr = 19; wr = 9; ctrl_lock = 0; invuln = 0; hurt = 0; dead = 0;
+  crouch = 0; charging = 0; rev = 0; jumped = 0; sprung = 0;
+  spr_ang = 0; layer = 0; goal_hit = 0; loop_last = -1;
+  sparks = 0; hud_dirty = 1;
+  arena_on = 0; boss_hp = 0;
+  cam_x = clamp(hx - SW * 0.4, 0, lv_w - SW);
+  cam_y = clamp(hy - SH * 0.56, lv_top, lv_bottom - SH);
+  cam_lead = 0;
+  scroll.x0 = int(cam_x);
+  scroll.y0 = int(cam_y);
+  RETURN 0;
+END
+
+// Builds (fresh) or restarts (after a fall) zone z, with fades
+PROCESS loader(zn, fresh);
+PRIVATE i;
+BEGIN
+  gstate = ST_LOAD;
+  fade_off(10);
+  WHILE (is_fading()) FRAME; END
+  gen++;
+  FRAME;
+  zone = zn;
+  IF (fresh)
+    level_reset();
+    FRAME;
+    IF (zone == 0) coast_a(); ELSE works_a(); END
+    FRAME;
+    IF (zone == 0) coast_b(); ELSE works_b(); END
+    FRAME;
+    level_finish();
+    cp_x = start_x; cp_y = start_y; cp_time = 0;
+    boss_beaten = 0;
+  ELSE
+    FOR i = 0 TO nobj - 1
+      ob_s[i] = 0;
+    END
+  END
+  FOR i = 0 TO 127 ch_alive[i] = 0; END
+  frames = cp_time;
+  reset_kip();
+  start_scroll(0, 0, 0, g_sky[zone], 0, 0);
+  scroll.x0 = int(cam_x); scroll.y0 = int(cam_y);
+  keep_chunks(1);
+  FRAME; FRAME; FRAME; FRAME;
+  bglayer(0, 0); bglayer(0, 1); bglayer(1, 0); bglayer(1, 1);
+  hud();
+  kip_id = kip();
+  card();
+  spawn_objects();
+  frozen = 1;
+  gstate = ST_CARD; st_t = 0;
+  IF (zone == 0) music(mus_coast); ELSE music(mus_works); END
+  fade_on(10);
+END
+
+FUNCTION go_title();
+BEGIN
+  gen++;
+  gstate = ST_TITLE; st_t = 0;
+  zone = 0;
+  cam_x = 0; cam_y = 470; start_y = 640 - 19;
+  start_scroll(0, 0, 0, g_sky[0], 0, 0);
+  bglayer(0, 0); bglayer(0, 1); bglayer(1, 0); bglayer(1, 1);
+  title_logo();
+  title_kip();
+  music(mus_title);
+  RETURN 0;
+END
+
+PRIVATE i, k, sec;
+BEGIN
+  set_mode(480, 270);
+  set_fps(60, 0);
+  screen_color('#000000');
+  init_colours();
+  make_kip_frames();
+  FRAME;
+  make_kip_frames2();
+  FRAME;
+  make_objects();
+  FRAME;
+  make_objects2();
+  FRAME;
+  FOR i = 0 TO 1
+    g_sky[i] = make_sky(i);
+    FRAME;
+    g_far[i] = make_far(i);
+    set_point(0, g_far[i], 0, 0, 0);
+    FRAME;
+    g_mid[i] = make_mid(i);
+    set_point(0, g_mid[i], 0, 0, 0);
+    FRAME;
+    g_zcard[i] = make_zcard(i);
+  END
+  g_title = make_title();
+  make_sounds();
+  go_title();
+
+  LOOP
+    st_t++;
+    fps_now = get_fps();
+
+    IF (gstate == ST_TITLE)
+      cam_x += 2;
+      IF (key_pressed(_enter) OR key_pressed(_space))
+        play_sound(s_start, 70, 100, 0);
+        score = 0; lives = 3; next_life = 100;
+        loader(0, 1);
+      END
+    END
+
+    IF (gstate == ST_CARD)
+      spawn_objects();
+      keep_chunks(0);
+      IF (st_t > 60) frozen = 0; END
+      IF (st_t > 90) gstate = ST_PLAY; st_t = 0; END
+    END
+
+    IF (gstate == ST_PLAY)
+      frames++;
+      IF (st_t > 120 AND fps_now > 0 AND fps_now < fps_min) fps_min = fps_now; END
+      spawn_objects();
+      keep_chunks(0);
+      // the boss arena closes behind Kip
+      IF (zone == 1 AND NOT boss_beaten AND NOT arena_on AND hx > arena_x + 180 AND hx < arena_x + SW)
+        arena_on = 1;
+        lock_x1 = arena_x; lock_x2 = arena_x + SW;
+        boss_id = boss();
+        music(mus_boss);
+      END
+    END
+
+    IF (gstate == ST_CLEAR)
+      spawn_objects();
+      keep_chunks(0);
+      IF (st_t == 60)
+        music(mus_clear);
+        sec = frames / 60;
+        bonus_time = 1000;
+        IF (sec < 180) bonus_time = 3000; END
+        IF (sec < 120) bonus_time = 5000; END
+        IF (sec < 90) bonus_time = 8000; END
+        IF (sec < 60) bonus_time = 12000; END
+        IF (sec < 40) bonus_time = 20000; END
+        bonus_spark = sparks * 100;
+        results();
+      END
+      IF (st_t > 150)
+        k = 0;
+        IF (bonus_time > 0) k = min(bonus_time, 200); bonus_time -= k; score += k; END
+        IF (bonus_spark > 0) i = min(bonus_spark, 200); bonus_spark -= i; score += i; k += i; END
+        hud_dirty = 1;
+        IF (k > 0 AND st_t % 4 == 0) play_sound(s_tally, 40, 100, 0); END
+        IF (k == 0 AND st_t < 9999) st_t = 9999; play_sound(s_life, 60, 100, 0); END
+      END
+      IF (st_t > 10140)
+        IF (zone == 0)
+          loader(1, 1);
+        ELSE
+          gstate = ST_WIN; st_t = 0;
+          signal(TYPE results, s_kill);
+          make_end(1);
+          endscreen();
+          music(mus_win);
+        END
+      END
+    END
+
+    IF (gstate == ST_DEAD AND st_t > 140)
+      lives--;
+      hud_dirty = 1;
+      IF (lives > 0)
+        loader(zone, 0);
+      ELSE
+        gstate = ST_OVER; st_t = 0;
+        make_end(0);
+        endscreen();
+        music(mus_over);
+      END
+    END
+
+    IF ((gstate == ST_OVER OR gstate == ST_WIN) AND st_t > 60)
+      IF (key_pressed(_enter) OR key_pressed(_space))
+        mus_now = 0;
+        go_title();
+      END
+    END
+
+    // floating score
+    IF (pop_t > 0)
+      pop_t--;
+      set_color('#ffffff');
+      text(pop_x - cam_x - 12, pop_y - cam_y - (50 - pop_t) * 0.5, pop_s);
+    END
+    FRAME;
+  END
+END

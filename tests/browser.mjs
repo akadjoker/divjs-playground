@@ -17,7 +17,7 @@ import { readFile, readdir, stat, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { chromium } from 'playwright';
+import { chromium, devices } from 'playwright';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const MIME = {
@@ -295,12 +295,12 @@ try
     const client = await page.context().newCDPSession(page);
     const { result } = await client.send('Runtime.evaluate', { expression: 'document.getElementById("game")' });
     const { listeners } = await client.send('DOMDebugger.getEventListeners', { objectId: result.objectId });
-    const moves = listeners.filter((l) => l.type === 'mousemove').length;
+    const moves = listeners.filter((l) => l.type === 'pointermove').length;
     await page.close();
     assert(problems.length === 0, problems.join('\n'));
     assert(ticks <= 75, `${ticks} VM ticks in one second - more than one loop is running`);
     assert(ticks >= 20, `${ticks} VM ticks in one second - the program is not running`);
-    assert(moves === 1, `${moves} mousemove listeners on the canvas`);
+    assert(moves === 1, `${moves} pointermove listeners on the canvas`);
   });
 
   await check('playground: game speed does not depend on the display rate', async () =>
@@ -762,6 +762,74 @@ try
     finally
     {
       await locked.close();
+    }
+  });
+
+  // Touch: on a phone, real touches (not mouse events) play a mouse game.
+  // Chicken Cannon starts with a tap, aims while a finger is held and
+  // dragged, and fires the chicken when the finger lifts.
+  await check('touch: tap to start, hold and drag to aim, lift to fire (Chicken Cannon)', async () =>
+  {
+    const context = await browser.newContext({ ...devices['Pixel 7'], viewport: { width: 900, height: 700 } });
+    try
+    {
+      const page = await context.newPage();
+      const problems = watch(page);
+      await page.goto(`${BASE}/playground/#p=chicken-cannon`);
+      await page.waitForFunction(() => window.divPlayground?.getState()?.vm);
+      await page.waitForTimeout(1200);
+      const read = () => page.evaluate(() =>
+      {
+        const s = window.divPlayground.getState();
+        const g = (n) => Number(s.vm.globals.get(s.bytecode.globals[n]));
+        return { state: g('state'), phase: g('phase'), ang: g('aim_ang'), pow: g('aim_pow'), shots: g('shots'), left: s.runtime._mouse.buttons[0] };
+      });
+      // The page finishes laying out after the game starts (the canvas
+      // moves as panels above it fill in): wait until it holds still, and
+      // aim each touch from where the canvas is at that moment.
+      await page.locator('#game').scrollIntoViewIfNeeded();
+      let last = '';
+      for (let i = 0; i < 40; i++)
+      {
+        const now = JSON.stringify(await page.locator('#game').boundingBox());
+        if (now === last)
+        {
+          break;
+        }
+        last = now;
+        await page.waitForTimeout(100);
+      }
+      let box = await page.locator('#game').boundingBox();
+      const at = (x, y) => ({ x: box.x + x * box.width / 800, y: box.y + y * box.height / 480 });
+      const cdp = await context.newCDPSession(page);
+      const touch = (type, points) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: points });
+      await touch('touchStart', [at(400, 200)]);
+      await page.waitForTimeout(100);
+      await touch('touchEnd', []);
+      await page.waitForTimeout(1500);
+      const started = await read();
+      box = await page.locator('#game').boundingBox();
+      assert(started.state === 2, `a tap should start the game: ${JSON.stringify(started)}`);
+      await touch('touchStart', [at(400, 300)]);
+      await page.waitForTimeout(150);
+      for (let i = 1; i <= 8; i++)
+      {
+        await touch('touchMove', [at(400 - i * 9, 300 - i * 14)]);
+        await page.waitForTimeout(40);
+      }
+      await page.waitForTimeout(300);
+      const held = await read();
+      assert(held.left && held.phase === 0 && (held.ang !== started.ang || held.pow !== started.pow),
+        `a held, dragged finger should aim: ${JSON.stringify(held)} (start ${JSON.stringify(started)})`);
+      await touch('touchEnd', []);
+      await page.waitForTimeout(500);
+      const fired = await read();
+      assert(!fired.left && fired.phase === 1 && fired.shots === 1, `lifting the finger should fire: ${JSON.stringify(fired)}`);
+      assert(problems.length === 0, problems.join('\n'));
+    }
+    finally
+    {
+      await context.close();
     }
   });
 
