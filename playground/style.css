@@ -416,16 +416,39 @@ canvas:focus-visible {
   }
 }
 
-@media (max-width: 700px) {
+/* Phones: the game first, across the whole width, then the buttons, the
+   program list and the editor. */
+@media (max-width: 700px), (max-height: 500px) and (orientation: landscape) and (pointer: coarse) {
   .app {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto auto minmax(360px, 60vh) minmax(420px, auto);
+    grid-template-rows: auto auto auto minmax(360px, 60vh);
     grid-template-areas:
+      "run"
       "top"
       "side"
-      "editor"
-      "run";
-    padding: 8px;
+      "editor";
+    height: auto;
+    padding: 0 8px 8px;
+  }
+
+  .run-pane {
+    margin: 0 -8px;
+    padding: 0 8px 8px;
+    border-width: 0 0 1px;
+    border-radius: 0;
+  }
+
+  .screen {
+    flex: none;
+    margin: 0 -8px;
+    border-radius: 0;
+  }
+
+  .console,
+  .inspector,
+  .files {
+    flex: none;
+    height: 160px;
   }
 
   .topbar {
@@ -435,6 +458,22 @@ canvas:focus-visible {
 
   .program-list {
     max-height: 180px;
+  }
+}
+
+/* Upright: the game at the top, and below it a band for the thumbs (the
+   touch controls sit in the panel's bottom corners). */
+@media (max-width: 700px) {
+  .screen {
+    height: min(calc(75vw + 230px), 100svh);
+    align-items: flex-start;
+  }
+}
+
+/* Sideways: the game fills the screen, the controls either side of it. */
+@media (max-height: 500px) and (orientation: landscape) and (pointer: coarse) {
+  .screen {
+    height: 100svh;
   }
 }
 
