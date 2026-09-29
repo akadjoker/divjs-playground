@@ -319,7 +319,7 @@ export const VIDEOS = {
       clip('fighter', 8, 0.5, 'It\'s back.\n\nAnd it runs in\nyour {browser}.', { music: 'main', hit: 'hit' }),
       clip('bomber', 8, 1.6, 'The same DIV\nlanguage:\nprocesses, FRAME,\nthe lot.'),
       clip('strike', 6, 2.6, 'Every game here\nis plain {DIV code}.'),
-      clip('bad-cat', 6, 0.3, 'Read it.\nChange it.\nMake your own.'),
+      clip('bad-cat', 6, 1.8, 'Read it.\nChange it.\nMake your own.'),
       clip('chicken-cannon', 6, 1.2, '', { focus: [380, 240] }),
       clip('ghost-squad', 6, 2.8),
       clip('wobbly-walker', 6, 0.2),
@@ -343,7 +343,15 @@ export const VIDEOS = {
         { text: 'New to code?', scale: 3, y: 70, cps: 30 },
         { text: 'Start with {blocks}.', scale: 3, y: 112, at: 0.8, cps: 30, cursor: true }
       ], { hit: 'blip' }),
-      { id: 'blocks', beats: 16, take: 'blocks', from: 0.3, ui: true, crop: [160, 100, 1744, 981] },
+      {
+        // The blocks (1.25x) beside the game (1.6x) and the DIV code they make.
+        id: 'blocks', beats: 10, take: 'blocks', from: 0.3,
+        stack: [
+          { region: 'workspace', box: [177, 20, 800, 690], place: [48, 104, 1000] },
+          { region: 'screen', place: [1090, 48, 800] },
+          { region: 'code', box: [0, 40, 504, 250], place: [1090, 666, 800] }
+        ]
+      },
       card('games-card', 6, [
         { text: 'Over 30 games', scale: 3, y: 62, cps: 30 },
         { text: 'to play, read', scale: 3, y: 100, at: 0.7, cps: 30 },

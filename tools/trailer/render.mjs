@@ -177,8 +177,9 @@ function layersFor(seg, plan, meta)
       return [{ take: seg.take, crop: seg.crop || [0, 0, meta.width, meta.height], rect: [0, 0, ...plan.format.size], pixelArt: false }];
     }
     // Parts of the page (`stack`) one above the other, as wide as the
-    // window or `outWidth`. A part is a recorded region, or `box`: [x, y,
-    // w, h] from the region's top left corner (to zoom into a line of it).
+    // window or `outWidth`, or each at its `place` ([x, y, width]). A part
+    // is a recorded region, or `box`: [x, y, w, h] from the region's top
+    // left corner (to zoom into a line of it).
     const parts = seg.stack.map((part) =>
     {
       const [rx, ry, rw, rh] = meta.regions[part.region];
@@ -196,17 +197,21 @@ function layersFor(seg, plan, meta)
         const y = part.height ? Math.round(ry + (part.at ?? 0.5) * (rh - h)) : ry;
         crop = [x, y, w, h];
       }
-      const width = part.outWidth || ww;
-      return { crop, width, height: Math.round(crop[3] * width / crop[2] / 2) * 2 };
+      const width = part.place ? part.place[2] : part.outWidth || ww;
+      return { crop, width, height: Math.round(crop[3] * width / crop[2] / 2) * 2, place: part.place };
     });
     const gap = 12;
     const total = parts.reduce((n, p) => n + p.height, 0) + gap * (parts.length - 1);
     let y = wy + Math.round((wh - total) / 2);
     return parts.map((p) =>
     {
-      const layer = { take: seg.take, crop: p.crop, rect: [wx + Math.round((ww - p.width) / 4) * 2, y, p.width, p.height], pixelArt: false, border: true };
-      y += p.height + gap;
-      return layer;
+      // `place`: [x, y, width] in the video instead of the next place down.
+      const rect = p.place ? [p.place[0], p.place[1], p.width, p.height] : [wx + Math.round((ww - p.width) / 4) * 2, y, p.width, p.height];
+      if (!p.place)
+      {
+        y += p.height + gap;
+      }
+      return { take: seg.take, crop: p.crop, rect, pixelArt: false, border: true };
     });
   }
   const zoom = seg.zoom || plan.format.zoom;
