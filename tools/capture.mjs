@@ -87,6 +87,13 @@ const SHOTS = {
     play: [hold('Space', 1000), ['wait', 1200], ['press', 'z'], ['press', 'm'], ['wait', 600], ['press', 'z'], ['wait', 400], ['press', 'm'],
       ['wait', 500], ['press', 'z'], ['press', 'm']]
   },
+  sparkroll: {
+    seconds: 8,
+    setup: [['wait', 1500], ['press', 'Enter'], ['wait', 1800]],
+    play: [['down', 'ArrowDown'], ['wait', 150], ['press', 'Space'], ['wait', 120], ['press', 'Space'], ['wait', 120], ['press', 'Space'],
+      ['up', 'ArrowDown'], ['down', 'ArrowRight'], ['wait', 450], ['press', 'ArrowDown'], ['wait', 1500], ['press', 'ArrowDown'], ['wait', 2400],
+      ['press', 'Space'], ['wait', 2200], ['up', 'ArrowRight']]
+  },
   'rusty-leap': {
     seconds: 7,
     setup: [['wait', 5500], ['press', 'Enter'], ['wait', 2900]],

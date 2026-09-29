@@ -492,7 +492,7 @@
       "height": 400,
       "clearColor": "#000000",
       "description": "One-on-one karate in the style of International Karate: articulated fighters animated from 36 poses, a referee, half and full points, a CPU that gets harder each round, belts, bonus rounds and generated backdrops.",
-      "controls": "P1 arrows + Space/Ctrl/Z (fire + direction picks the move), P2 WASD + Q; Enter/Space 1 player, 2 for two players, Esc leaves a bout"
+      "controls": "P1 arrows + Space/Ctrl/Z (fire + direction picks the move), P2 WASD + Q; Enter/Space 1 player, 2 for two players, Esc leaves a bout, M music on/off"
     },
     {
       "id": "fighter",
@@ -503,7 +503,7 @@
       "height": 400,
       "clearColor": "#000000",
       "description": "One-on-one fighter in the style of Street Fighter II with a Pit-Fighter pit: jointed fighters with their own proportions, motion-input specials and supers, combos, dizzy and super meters, throws, a CPU that blocks, anti-airs and punishes, a 4-stage arcade ladder with a boss, and a crowd that throws items into the ring.",
-      "controls": "P1 arrows move, A S D punches, Z X C kicks; P2 I J K L move, 1 2 3 punches, 4 5 6 kicks. Hold back to block (down-back low); forward + heavy punch close throws; down + punch picks up an item. Specials: quarter circles and charges (see the select screen). Enter confirms, H hitboxes, Esc title"
+      "controls": "P1 arrows move, A S D punches, Z X C kicks; P2 I J K L move, 1 2 3 punches, 4 5 6 kicks. Hold back to block (down-back low); forward + heavy punch close throws; down + punch picks up an item. Specials: quarter circles and charges (see the select screen). Enter confirms, H hitboxes, M music on/off, Esc title"
     },
     {
       "id": "bomber",
@@ -536,7 +536,7 @@
       "height": 400,
       "clearColor": "#000000",
       "description": "Belt-scrolling beat 'em up in the style of Double Dragon / Final Fight: generated stages with parallax (downtown, docks, subway), combos, grabs and throws, weapons, enemies that surround you and take turns, a boss per stage, and a second player.",
-      "controls": "Arrows move, Z/Ctrl punch, X/Alt jump (Z in the air: jump kick), C kick, Z+X back elbow, walk into a dazed enemy to grab; P2: WASD, Q punch, E jump, R kick (Q joins); Enter/Space start"
+      "controls": "Arrows move, Z/Ctrl punch, X/Alt jump (Z in the air: jump kick), C kick, Z+X back elbow, walk into a dazed enemy to grab; P2: WASD, Q punch, E jump, R kick (Q joins); Enter/Space start; M music on/off"
     },
     {
       "id": "strike",
@@ -603,6 +603,17 @@
       "clearColor": "#000000",
       "description": "Pac-Man turned around: you are the four ghosts and a computer Pac-Man runs a new generated maze every round, fleeing you and going for the power pills. Catch him 3 times before he eats every dot.",
       "controls": "Arrows move your ghost, 1-4 pick a ghost, TAB or Space next ghost, N new maze; Space/Enter on screens"
+    },
+    {
+      "id": "sparkroll",
+      "title": "Sparkroll",
+      "category": "procedural",
+      "file": "sparkroll.div",
+      "width": 480,
+      "height": 270,
+      "clearColor": "#000000",
+      "description": "A high-speed momentum platformer: Kip the pangolin builds up speed on slopes, runs round loop-the-loops, curls into a spinning ball to pop Baron Rust's robots and races through Coral Coast and Rivet Works to the goal. Get hit and your sparks scatter - grab them back quick!",
+      "controls": "Arrows run, Down rolls (or crouches), Space/Z/X jump; charge dash: hold Down, tap jump, let go; Enter on screens"
     },
     {
       "id": "rusty-leap",

@@ -20,6 +20,11 @@ PROGRAM fighter;
 //   difficulty and a final boss; two-player versus.
 // * No asset files: stages, fighters, portraits and texts are drawn in
 //   code at start-up (spread over frames).
+// * Sound made by the engine: swings, light / heavy impacts, blocks,
+//   specials and supers, throws, landings, dizzy birds, breaking bottles
+//   and crates, a cheering crowd, ROUND / FIGHT / K.O. stings, and a
+//   chiptune per screen and stage (title, four stages, the boss, win,
+//   lose, game over). M turns the music off and on.
 // ---------------------------------------------------------------------
 
 GLOBAL
@@ -275,6 +280,23 @@ GLOBAL
   cap_fist = 0; cap_fr = 0; cap_fg = 0; cap_fb = 0;
   cap_band = 0; cap_br = 0; cap_bg = 0; cap_bb = 0;
   ui_g[11]; ui_x[11]; ui_y[11]; ui_s[11]; ui_f[11]; ui_a[11];
+
+  // --- Sound: every effect and song is made by the engine (no files) ---------
+  music_on = 1;               // M turns the music off and on
+  mus_want = 0;               // looping song of the current scene (0 = none)
+  snd_k = 0;                  // variation counter (the game's rand() is left alone)
+  crowd_t = 0; tweet_t = 0; clock_s = -1;
+  s_wh[5];                    // whiffs: light, medium, heavy punch / kick
+  s_hit[3]; s_thump[2]; s_crack[1]; s_blk[2]; s_tickb = 0;
+  s_jump = 0; s_land = 0; s_floor = 0; s_slap = 0;
+  s_fire = 0; s_fire2 = 0; s_flame = 0; s_rise = 0; s_spin = 0; s_dash = 0; s_tele = 0;
+  s_superf = 0; s_superc = 0; s_grab = 0; s_slam = 0; s_boom = 0; s_ko = 0;
+  s_tweet = 0; s_clash = 0; s_glass = 0; s_tink = 0; s_crate = 0; s_heal = 0; s_pick = 0;
+  s_bounce = 0; s_whistle = 0; s_cheer[2]; s_ooh = 0;
+  s_fight1 = 0; s_fight2 = 0; s_buzz = 0; s_tick = 0;
+  s_move = 0; s_ok = 0; s_back = 0; s_pick_ch = 0; s_vs = 0;
+  sng_title = 0; sng_fight[3]; sng_boss = 0; sng_victory = 0;
+  j_round[2]; j_win = 0; j_lose = 0; j_vs = 0; j_over = 0;
 
 // ======================================================================
 // Move tables
@@ -1395,6 +1417,7 @@ END
 
 FUNCTION show_banner(g, t, py);
 BEGIN
+  snd_banner(g);
   ban_g = g; ban_t = t; ban_y = py;
   RETURN 0;
 END
@@ -1573,6 +1596,7 @@ BEGIN
   IF (fs[f] == ST_ATK AND f_conn[f] > 0) n_cancels++; END
   f_sp[f] = sp; f_str[f] = str;
   set_state(f, ST_ATK, m);
+  snd_special(f, sp);
   n_sp++; last_sp = sp; sp_used[sp]++;
   RETURN 1;
 END
@@ -1589,6 +1613,7 @@ BEGIN
   IF (pend_b[o] >= 0) pend_t[o] = 0; END
   n_throws++;
   popword(g_lab[22], fx[f], GY - 170);
+  snd(s_grab, 70, 95 + vary(10), fx[o]); snd(s_wh[1], 50, 80, fx[f]);
   RETURN 1;
 END
 
@@ -1619,6 +1644,7 @@ BEGIN
   IF (b < 3)
     IF (f_hold[f] >= 0 AND in_v[f] <= 0)
       set_state(f, ST_ATK, M_TOSS); f_sp[f] = 0; pend_t[f] = 0;
+      snd(s_wh[1], 40, 70, fx[f]);
       RETURN 1;
     END
     IF (in_v[f] > 0 AND f_hold[f] < 0)
@@ -1627,8 +1653,10 @@ BEGIN
           IF (it_typ[i] == 2)
             hp[f] = min(hp_max[f], hp[f] + 150); it_on[i] = 0;
             popword(g_lab[21], fx[f], GY - 160);
+            snd(s_heal, 60, 100, fx[f]);
           ELSE
             it_on[i] = 3; it_h[i] = f; f_hold[f] = i;
+            snd(s_pick, 55, 95 + vary(10), fx[f]);
           END
           n_items++; pend_t[f] = 0;
           RETURN 1;
@@ -1638,6 +1666,7 @@ BEGIN
   END
   IF (in_v[f] > 0) set_state(f, ST_ATK, M_CLP + b); ELSE set_state(f, ST_ATK, M_SLP + b); END
   f_sp[f] = 0; f_str[f] = 1;
+  snd_swing(f, b);
   pend_t[f] = 0;
   RETURN 1;
 END
@@ -1705,6 +1734,7 @@ BEGIN
       IF (ft[f] <= 0)
         fvy[f] = ch_jvy[c]; fvx[f] = in_fw[f] * fdir[f] * ch_jvx[c]; fy[f] = 1;
         fs[f] = ST_AIR;
+        snd(s_jump, 40, 90 + vary(20), fx[f]);
         IF (in_fw[f] > 0) start_move(f, M_JUMPF); END
         IF (in_fw[f] < 0) start_move(f, M_JUMPB); END
         IF (in_fw[f] == 0) start_move(f, M_JUMP); END
@@ -1713,6 +1743,7 @@ BEGIN
       IF (pend_t[f] > 0 AND air_used[f] == 0)
         air_used[f] = 1; pend_t[f] = 0;
         set_state(f, ST_AATK, M_JLP + pend_b[f]);
+        snd_swing(f, pend_b[f]);
       END
     CASE 3                                   // ST_LAND
       ft[f]--;
@@ -1746,6 +1777,8 @@ BEGIN
     CASE 12                                  // ST_DIZZY: mash to shake it off
       ft[f]--;
       IF (mash[f]) ft[f] -= 3; END
+      tweet_t++;
+      IF (tweet_t % 40 == 0) snd(s_tweet, 40, 90 + vary(30), fx[f]); END
       IF (ft[f] <= 0) fs[f] = ST_FREE; stun[f] = 0; END
   END
   RETURN 0;
@@ -1758,6 +1791,7 @@ BEGIN
   IF (stun[f] >= ch_stunmax[fc[f]] AND hp[f] > 0)
     fs[f] = ST_DIZZY; ft[f] = 190; start_move(f, M_DIZZY); stun[f] = 0; n_dizzy++;
     popword(g_lab[18], fx[f], GY - 190);
+    snd(s_tweet, 55, 100, fx[f]); snd(s_tweet, 45, 130, fx[f]); crowd(0);
     RETURN 0;
   END
   fs[f] = ST_FREE;
@@ -1821,9 +1855,11 @@ BEGIN
   IF (an_m[f] == M_SLAM)
     fy[o] = 90; fvy[o] = -7; fvx[o] = dir * 1.0;
     shake(16, 6); hitstop = 8;
+    snd(s_slam, 70, 90 + vary(15), fx[o]); snd(s_thump[0], 90, 80, fx[o]); crowd(1);
   ELSE
     fy[o] = 40; fvy[o] = 5; fvx[o] = dir * 5.5;
     shake(8, 3);
+    snd(s_wh[5], 70, 85, fx[o]); snd(s_hit[vary(4)], 60, 80, fx[o]);
   END
   f_grab[f] = 0;
   cb_n[o] = 1; stun[o] += 10;
@@ -1930,6 +1966,7 @@ BEGIN
     fvx[d] = away * h_push * 0.8;
     IF (cornered(d) AND proj == 0) fvx[a] = -away * h_push * 0.7; END
     spark(px, py, 1);
+    snd_blow(d, px, 1, proj);
     hitstop = 4;
     meter[a] = min(100, meter[a] + h_dmg / 25); meter[d] = min(100, meter[d] + 2);
     IF (a < 2 AND proj == 0) f_conn[a] = 2; END
@@ -1956,6 +1993,7 @@ BEGIN
     hp[d] = 0; ko_flag = 1;
     fs[d] = ST_FALL; start_move(d, M_FALL); fvy[d] = 7; fvx[d] = away * 3.5; fy[d] = max(fy[d], 1);
     hitstop = 30; slowmo = 70; shake(20, 6); hype += 100;
+    snd(s_boom, 80, 70, px); snd(s_thump[0], 100, 70, px);
   ELSE
     IF (fy[d] > 0 OR h_kd == 1 OR fs[d] == ST_FALL)
       IF (fs[d] == ST_FALL) jg[d]++; n_juggles++; END
@@ -1972,6 +2010,7 @@ BEGIN
     IF (heavy) shake(10, 3); END
   END
   IF (heavy) spark(px, py, 2); ELSE spark(px, py, 0); END
+  snd_blow(d, px, 0, proj);
   meter[a] = min(100, meter[a] + h_dmg / 9); meter[d] = min(100, meter[d] + h_dmg / 20);
   IF (a < 2 AND proj == 0) f_conn[a] = 1; END
   IF (cb_n[d] >= 2)
@@ -2004,6 +2043,7 @@ BEGIN
       pr_x[i] = pt_x[f * 16 + j] + fdir[f] * 14; pr_y[i] = pt_y[f * 16 + j];
       pr_vx[i] = fdir[f] * pt_spd[typ] * (0.8 + str * 0.25);
       IF (typ == 3) pr_x[i] = fx[f] + fdir[f] * 80 * sk_sc[f]; pr_vx[i] = fdir[f] * 0.01; END
+      snd_proj(f, typ);
       RETURN 1;
     END
   END
@@ -2032,7 +2072,7 @@ BEGIN
       IF (t >= 6) pr_y[i] += pr_vy[i]; pr_vy[i] += 0.16; END
       IF (pr_t[i] > pt_life[t] OR pr_x[i] < cam_x - 60 OR pr_x[i] > cam_x + 700 OR pr_y[i] > GY)
         pr_on[i] = 0;
-        IF (t >= 6) spark(pr_x[i], min(pr_y[i], GY - 8), 0); END
+        IF (t >= 6) spark(pr_x[i], min(pr_y[i], GY - 8), 0); snd_break(t, pr_x[i]); END
       END
     END
   END
@@ -2042,6 +2082,7 @@ BEGIN
       IF (pr_on[i] AND pr_on[j] AND pr_own[i] != pr_own[j] AND abs(pr_x[i] - pr_x[j]) < 34 AND abs(pr_y[i] - pr_y[j]) < 40)
         pr_hits[i]--; pr_hits[j]--; n_clash++;
         spark((pr_x[i] + pr_x[j]) / 2, pr_y[i], 2);
+        snd(s_clash, 60, 90 + vary(20), pr_x[i]); snd(s_crack[0], 60, 80, pr_x[i]);
         IF (pr_hits[i] <= 0) pr_on[i] = 0; END
         IF (pr_hits[j] <= 0) pr_on[j] = 0; END
       END
@@ -2059,7 +2100,7 @@ BEGIN
           hit_land(pr_own[i], d, pr_x[i], pr_y[i], i + 1);
           n_proj_hits++;
           pr_hits[i]--; pr_rt[i] = 7;
-          IF (pr_hits[i] <= 0) pr_on[i] = 0; END
+          IF (pr_hits[i] <= 0) pr_on[i] = 0; IF (t >= 6) snd_break(t, pr_x[i]); END END
         END
       END
     END
@@ -2081,6 +2122,7 @@ BEGIN
           it_on[i] = 1; it_typ[i] = rand(0, 2); it_x[i] = cam_x + rand(80, 560);
           it_y[i] = 330; it_vy[i] = 0; it_vx[i] = rand(-10, 10) * 0.1; it_h[i] = -1;
           hype += 20;
+          snd(s_whistle, 45, 90 + vary(20), it_x[i]); crowd(0);
           BREAK;
         END
       END
@@ -2092,7 +2134,7 @@ BEGIN
         it_y[i] += it_vy[i]; it_vy[i] -= 0.35; it_x[i] = clamp(it_x[i] + it_vx[i], 30, SW - 30);
         IF (it_y[i] <= 0)
           it_y[i] = 0;
-          IF (it_vy[i] < -3) it_vy[i] = -it_vy[i] * 0.3; ELSE it_on[i] = 2; dust(it_x[i], 0); END
+          IF (it_vy[i] < -3) it_vy[i] = -it_vy[i] * 0.3; snd(s_bounce, 55, 90 + vary(20), it_x[i]); ELSE it_on[i] = 2; dust(it_x[i], 0); snd(s_bounce, 35, 70, it_x[i]); END
         END
       CASE 2
         IF (it_y[i] > 0) it_y[i] = max(0, it_y[i] - 4); END
@@ -2311,11 +2353,13 @@ BEGIN
   fvx[f] = 0;
   IF (st == ST_AIR OR st == ST_AATK)
     fs[f] = ST_LAND; ft[f] = 4 + lag[f]; lag[f] = 0; start_move(f, M_LAND);
+    snd(s_land, 45, 90 + vary(20), fx[f]);
     dust(fx[f] - 10, -1); dust(fx[f] + 10, 1);
   END
   IF (st == ST_FALL)
     fs[f] = ST_DOWN; ft[f] = 42; start_move(f, M_FLOOR);
     shake(8, 3); dust(fx[f] - 20, -1); dust(fx[f] + 20, 1); jg[f] = 0;
+    snd(s_floor, 80, 90 + vary(20), fx[f]); snd(s_slap, 45, 60 + vary(15), fx[f]);
     IF (hp[f] <= 0) fs[f] = ST_KO; END
   END
   IF (st == ST_ATK) lag[f] = 0; END
@@ -2493,7 +2537,7 @@ BEGIN
   FOR i = 0 TO 3 pr_on[i] = 0; END
   it_on[0] = 0; it_on[1] = 0; item_t = 300;
   timer = 99 * 60; ko_flag = 0; hitstop = 0; slowmo = 0; sfl_t = 0; hype = 10;
-  rphase = 0; rt = 0;
+  rphase = 0; rt = 0; clock_s = -1;
   cam_x = SW / 2 - 320;
   RETURN 0;
 END
@@ -2514,9 +2558,13 @@ BEGIN
           show_banner(g_lab[lbl], 70, 160);
         END
         IF (rt == 95) show_banner(g_lab[3], 45, 160); END
-        IF (rt >= 110) rphase = 1; ctl_on = 1; FOR f = 0 TO 1 fs[f] = ST_FREE; start_move(f, M_IDLE); END END
+        IF (rt >= 110) rphase = 1; ctl_on = 1; FOR f = 0 TO 1 fs[f] = ST_FREE; start_move(f, M_IDLE); END
+          IF (fc[1] == 4) music(sng_boss, 1); ELSE music(sng_fight[stage], 1); END
+        END
       CASE 1                                 // fighting
         IF (timer > 0 AND hitstop == 0 AND sfl_t == 0) timer--; END
+        // the last ten seconds tick
+        IF (timer > 0 AND timer <= 600 AND timer % 60 == 0 AND timer / 60 != clock_s) clock_s = timer / 60; play_sound(s_tick, 40, 100, 0); END
         IF (ko_flag)
           rphase = 2; rt = 0; ctl_on = 0; n_ko++;
           IF (hp[0] <= 0 AND hp[1] <= 0) w = -1; show_banner(g_lab[7], 100, 160); ELSE
@@ -2602,6 +2650,7 @@ BEGIN
   FOR f = 0 TO 1 fs[f] = ST_FREE; start_move(f, M_IDLE); END
   put_ui(0, g_logo, 320, 110, 100, 0);
   sel = 0; t = 0;
+  music(sng_title, 1);
   LOOP
     t++; rt++;
     fight_frame();
@@ -2625,18 +2674,20 @@ BEGIN
     set_color('#ffd040');
     IF ((t / 20) % 2) text(206, 192 + sel * 18, ">"); END
     set_color('#c0b8a8');
-    text(186, 256, "UP/DOWN CHOOSE   ENTER START");
+    text(180, 256, "UP/DOWN CHOOSE   ENTER START   M MUSIC");
     draw_rect(0, 340, 640, 60, 'rgba(0,0,0,0.65)');
     set_color('#ffe0a0');
     text(12, 346, "P1: ARROWS  A S D = LIGHT/MEDIUM/HEAVY PUNCH   Z X C = LIGHT/MEDIUM/HEAVY KICK");
     text(12, 358, "P2: I J K L  1 2 3 = PUNCHES  4 5 6 = KICKS     HOLD BACK TO BLOCK (DOWN-BACK FOR LOWS)");
     text(12, 370, "THROW: TOWARD + HEAVY PUNCH CLOSE.  SPECIALS: SEE THE SELECT SCREEN.  H = HITBOXES  ESC = TITLE");
-    IF (key_pressed(_up)) sel = (sel + 2) % 3; END
-    IF (key_pressed(_down)) sel = (sel + 1) % 3; END
+    IF (key_pressed(_up)) sel = (sel + 2) % 3; play_sound(s_move, 50, 100, 0); END
+    IF (key_pressed(_down)) sel = (sel + 1) % 3; play_sound(s_move, 50, 100, 0); END
     IF (sel == 2 AND (key_pressed(_left) OR key_pressed(_right) OR key_pressed(_enter) OR key_pressed(_space)))
       IF (key_pressed(_left)) diff = (diff + 2) % 3; ELSE diff = (diff + 1) % 3; END
+      play_sound(s_move, 55, 80 + diff * 20, 0);
     ELSE
       IF (key_pressed(_enter) OR key_pressed(_space))
+        play_sound(s_ok, 60, 100, 0);
         mode = sel + 1; demo = 0; clear_ui(); ctl_on = 0;
         RETURN 0;
       END
@@ -2685,20 +2736,21 @@ BEGIN
   FOR i = 0 TO 3 put_ui(i, g_por[i], 140 + i * 120, 104, 90, 0); END
   cam_x = 0; shx = 0; shy = 0;
   FOR f = 0 TO 1 sk_vis[f] = 0; END
+  music(sng_title, 1);
   FRAME;                                     // the key that opened this screen is still down
   LOOP
     t++;
     IF (ok0 == 0)
-      IF (key_pressed(_left)) cur0 = (cur0 + 3) % 4; END
-      IF (key_pressed(_right)) cur0 = (cur0 + 1) % 4; END
-      IF (key_pressed(_a) OR key_pressed(_s) OR key_pressed(_d) OR key_pressed(_z) OR key_pressed(_enter)) ok0 = 1; start_move(0, M_WIN); END
+      IF (key_pressed(_left)) cur0 = (cur0 + 3) % 4; play_sound(s_move, 50, 100, -40); END
+      IF (key_pressed(_right)) cur0 = (cur0 + 1) % 4; play_sound(s_move, 50, 100, -40); END
+      IF (key_pressed(_a) OR key_pressed(_s) OR key_pressed(_d) OR key_pressed(_z) OR key_pressed(_enter)) ok0 = 1; start_move(0, M_WIN); play_sound(s_pick_ch, 55, 90 + cur0 * 10, -40); play_sound(s_ok, 45, 100, -40); END
     END
     IF (mode == 2 AND ok1 == 0)
-      IF (key_pressed(_j)) cur1 = (cur1 + 3) % 4; END
-      IF (key_pressed(_l)) cur1 = (cur1 + 1) % 4; END
-      IF (key_pressed(_1) OR key_pressed(_2) OR key_pressed(_4)) ok1 = 1; start_move(1, M_WIN); END
+      IF (key_pressed(_j)) cur1 = (cur1 + 3) % 4; play_sound(s_move, 50, 110, 40); END
+      IF (key_pressed(_l)) cur1 = (cur1 + 1) % 4; play_sound(s_move, 50, 110, 40); END
+      IF (key_pressed(_1) OR key_pressed(_2) OR key_pressed(_4)) ok1 = 1; start_move(1, M_WIN); play_sound(s_pick_ch, 55, 90 + cur1 * 10, 40); play_sound(s_ok, 45, 110, 40); END
     END
-    IF (key_pressed(_esc)) clear_ui(); RETURN -1; END
+    IF (key_pressed(_esc)) play_sound(s_back, 50, 100, 0); clear_ui(); RETURN -1; END
     // preview fighters
     FOR f = 0 TO 1
       IF (f == 0 OR mode == 2)
@@ -2765,6 +2817,8 @@ BEGIN
     END
     IF (lad_i == 3) put_ui(10, g_lab[20], 320, 60, 100, 0); END
   END
+  music(j_vs, 0);
+  play_sound(s_vs, 60, 100 - (fc[1] == 4) * 30, 0);
   FOR t = 0 TO 170
     set_color('#ffe0a0');
     text(250, 296, "STAGE: " + stage_name[stage]);
@@ -2792,6 +2846,7 @@ BEGIN
   put_ui(1, g_por[fc[1 - w]], 520, 250, 70, 0); ui_a[1] = 40;
   put_ui(2, g_lab[16], 450, 70, 100, 0);
   put_ui(3, g_nm[fc[w]], 170, 340, 150, 0);
+  IF (mode == 1 AND w == 1) music(j_lose, 0); ELSE music(sng_victory, 1); END
   FOR t = 0 TO 240
     draw_rect(300, 120, 320, 60, 'rgba(0,0,0,0.5)');
     set_color('#ffffff'); text(312, 140, "\"" + ch_quote[fc[w]] + "\"");
@@ -2812,15 +2867,18 @@ BEGIN
   scene = 6; clear_ui(); put_screen(0, g_vsbg);
   put_ui(0, g_lab[13], 320, 120, 100, 0);
   put_ui(2, g_por[fc[0]], 320, 260, 90, 0);
+  music_stop();
   FOR t = 0 TO 599
     n = 9 - t / 60;
+    IF (t % 60 == 0) play_sound(s_tick, 50, 100 - (n < 4) * 20, 0); END
     put_ui(1, g_dig[n], 320, 180, 200, 0);
     set_color('#c0b8a8'); text(250, 330, "PRESS ENTER TO CONTINUE");
-    IF (t > 20 AND (key_pressed(_enter) OR key_pressed(_a))) clear_ui(); RETURN 1; END
+    IF (t > 20 AND (key_pressed(_enter) OR key_pressed(_a))) play_sound(s_ok, 60, 100, 0); clear_ui(); RETURN 1; END
     IF (t > 20 AND key_pressed(_esc)) BREAK; END
     FRAME;
   END
   put_ui(0, g_lab[14], 320, 150, 100, 0); ui_g[1] = 0;
+  music(j_over, 0);
   IF (score > hiscore) hiscore = score; END
   FOR t = 0 TO 150 FRAME; END
   clear_ui(); put_screen(0, 0);
@@ -2834,6 +2892,7 @@ BEGIN
   put_ui(0, g_lab[15], 320, 70, 100, 0);
   put_ui(1, g_por[fc[0]], 320, 190, 150, 0);
   IF (score > hiscore) hiscore = score; END
+  music(sng_victory, 1);
   FOR t = 0 TO 600
     set_color('#ffffff'); text(120, 300, ch_end[fc[0]]);
     set_color('#ffe0a0'); text(250, 320, "FINAL SCORE " + score);
@@ -2909,6 +2968,312 @@ BEGIN
 END
 
 // ======================================================================
+// Sound: effects and music, all made by the engine (sfx, sfx_tone and
+// the song sequencer). Sound never changes the game: it reads the state
+// and plays, and its variations come from its own counter, not rand().
+// ======================================================================
+
+FUNCTION make_sounds();
+PRIVATE i;
+BEGIN
+  // whooshes of a swing: light / medium / heavy punch, then the kicks
+  s_wh[0] = sfx_tone(wave_noise, 3600, 1600, 80, 24);
+  s_wh[1] = sfx_tone(wave_noise, 3000, 1000, 120, 28);
+  s_wh[2] = sfx_tone(wave_noise, 2400, 600, 170, 32);
+  s_wh[3] = sfx_tone(wave_noise, 2800, 1200, 100, 26);
+  s_wh[4] = sfx_tone(wave_noise, 2200, 700, 150, 30);
+  s_wh[5] = sfx_tone(wave_noise, 1800, 400, 220, 34);
+  // impacts: a slap, a body thump for the heavier ones, a crack for the heaviest
+  FOR i = 0 TO 3 s_hit[i] = sfx(sfx_hit, 40 + i); END
+  FOR i = 0 TO 2 s_thump[i] = sfx_tone(wave_sine, 170 - i * 18, 38, 190, 90); END
+  s_crack[0] = sfx_tone(wave_noise, 5200, 900, 70, 55);
+  s_crack[1] = sfx_tone(wave_noise, 4400, 600, 90, 55);
+  FOR i = 0 TO 2 s_blk[i] = sfx_tone(wave_square, 1300 + i * 170, 520, 60, 28); END
+  s_tickb = sfx_tone(wave_noise, 7000, 2600, 45, 38);
+  s_jump = sfx_tone(wave_noise, 900, 2400, 90, 14);
+  s_land = sfx_tone(wave_sine, 140, 60, 80, 45);
+  s_floor = sfx_tone(wave_sine, 120, 32, 330, 95);
+  s_slap = sfx(sfx_hit, 3);
+  // specials
+  s_fire = sfx_tone(wave_saw, 170, 560, 330, 30);
+  s_fire2 = sfx_tone(wave_noise, 800, 2600, 320, 32);
+  s_flame = sfx_tone(wave_noise, 700, 220, 650, 50);
+  s_rise = sfx_tone(wave_square, 240, 1150, 260, 24);
+  s_spin = sfx_tone(wave_noise, 1400, 3800, 460, 26);
+  s_dash = sfx_tone(wave_noise, 2600, 650, 280, 30);
+  s_tele = sfx_tone(wave_sine, 1900, 140, 320, 34);
+  s_superf = sfx(sfx_powerup, 6);
+  s_superc = sfx_tone(wave_saw, 110, 880, 620, 34);
+  s_grab = sfx_tone(wave_noise, 900, 450, 80, 45);
+  s_slam = sfx(sfx_explosion, 4);
+  s_boom = sfx(sfx_explosion, 8);
+  s_ko = sfx_tone(wave_saw, 720, 80, 1200, 42);
+  s_tweet = sfx_tone(wave_sine, 2200, 2900, 110, 18);
+  s_clash = sfx(sfx_laser, 3);
+  // items and the crowd
+  s_glass = sfx_tone(wave_noise, 6200, 1500, 300, 42);
+  s_tink = sfx_tone(wave_sine, 2600, 3300, 100, 26);
+  s_crate = sfx_tone(wave_noise, 800, 140, 280, 60);
+  s_heal = sfx(sfx_powerup, 2);
+  s_pick = sfx_tone(wave_triangle, 400, 720, 70, 30);
+  s_bounce = sfx_tone(wave_triangle, 320, 150, 80, 32);
+  s_whistle = sfx_tone(wave_sine, 1500, 650, 420, 16);
+  FOR i = 0 TO 2 s_cheer[i] = sfx_tone(wave_noise, 450 + i * 160, 1300 + i * 220, 1200, 28); END
+  s_ooh = sfx_tone(wave_noise, 1300, 420, 900, 24);
+  // announcer stings and menus
+  s_fight1 = sfx_tone(wave_saw, 520, 1040, 380, 40);
+  s_fight2 = sfx_tone(wave_square, 660, 1320, 380, 30);
+  s_buzz = sfx_tone(wave_square, 180, 170, 900, 40);
+  s_tick = sfx_tone(wave_square, 880, 880, 60, 28);
+  s_move = sfx(sfx_blip, 3);
+  s_ok = sfx(sfx_coin, 7);
+  s_back = sfx_tone(wave_square, 520, 240, 110, 30);
+  s_pick_ch = sfx(sfx_powerup, 9);
+  s_vs = sfx(sfx_explosion, 12);
+
+  // --- Songs ---------------------------------------------------------------
+  // title and select: a heroic A minor theme
+  sng_title = song_new(132);
+  song_track(sng_title, inst_square,
+    "A4 - - E5 - - A5 - | G5 - E5 - D5 - E5 - | F5 - - E5 - - D5 - | E5 - - - - - . . |" +
+    "A4 - - E5 - - A5 - | G5 - E5 - D5 - C5 - | D5 - - C5 - - B4 - | A4 - - - - - . . ", 34);
+  song_track(sng_title, inst_bass,
+    "A3 . A3 A4 A3 . A3 A4 | G3 . G3 G4 G3 . G3 G4 | F3 . F3 F4 F3 . F3 F4 | E3 . E3 E4 E3 . E3 E4 |" +
+    "A3 . A3 A4 A3 . A3 A4 | G3 . G3 G4 G3 . G3 G4 | D3 . D3 D4 D3 . D3 D4 | A3 . A3 A4 E3 . E3 E4 ", 55);
+  song_track(sng_title, inst_pad,
+    "A4 - - - - - - - - - - - - - - - | G4 - - - - - - - - - - - - - - - |" +
+    "F4 - - - - - - - - - - - - - - - | E4 - - - - - - - - - - - - - - - ", 22);
+  song_track(sng_title, inst_drums, "k . h . s . h . | k k h . s . h h ", 40);
+  // stage 0, dusk street: driving E minor
+  sng_fight[0] = song_new(150);
+  song_track(sng_fight[0], inst_square,
+    "E5 - E5 . D5 - E5 . | G5 - E5 - D5 - B4 - | E5 - E5 . D5 - E5 . | A5 - G5 - F#5 - D5 - |" +
+    "E5 - E5 . D5 - E5 . | G5 - E5 - D5 - B4 - | C5 - - D5 - - E5 - | B4 - - - - - . . ", 30);
+  song_track(sng_fight[0], inst_bass,
+    "E3 . E3 . E4 . E3 . | E3 . E3 . D4 . E3 . | C3 . C3 . C4 . C3 . | D3 . D3 . D4 . D3 . ", 55);
+  song_track(sng_fight[0], inst_pluck,
+    "E4 G4 B4 G4 E4 G4 B4 G4 | E4 G4 B4 G4 E4 G4 B4 G4 | C4 E4 G4 E4 C4 E4 G4 E4 | D4 F#4 A4 F#4 D4 F#4 A4 F#4 ", 18);
+  song_track(sng_fight[0], inst_drums, "k . h . s . h k | k . h . s . h h ", 45);
+  // stage 1, mountain temple: pentatonic, calmer
+  sng_fight[1] = song_new(128);
+  song_track(sng_fight[1], inst_triangle,
+    "D5 - F5 - G5 - A5 - | C6 - A5 - G5 - - - | F5 - G5 - A5 - D5 - | C5 - - - D5 - - - |" +
+    "A5 - C6 - D6 - C6 - | A5 - G5 - F5 - - - | G5 - F5 - D5 - C5 - | D5 - - - - - - - ", 40);
+  song_track(sng_fight[1], inst_bass,
+    "D3 . . D3 A3 . . . | D3 . . D3 C4 . . . | Bb2 . . Bb2 F3 . . . | C3 . . C3 G3 . . . ", 55);
+  song_track(sng_fight[1], inst_pad,
+    "D4 - - - - - - - - - - - - - - - | Bb3 - - - - - - - C4 - - - - - - - ", 20);
+  song_track(sng_fight[1], inst_drums, "k . . h s . . h | k . k h s . h h ", 38);
+  // stage 2, night harbour: C minor, sly
+  sng_fight[2] = song_new(140);
+  song_track(sng_fight[2], inst_saw,
+    "C5 - Eb5 - G5 - Eb5 - | F5 - Eb5 - D5 - C5 - | Ab4 - C5 - Eb5 - D5 - | B4 - - - G4 - - - |" +
+    "C5 - Eb5 - G5 - C6 - | Bb5 - Ab5 - G5 - F5 - | Eb5 - D5 - C5 - D5 - | C5 - - - - - . . ", 22);
+  song_track(sng_fight[2], inst_bass,
+    "C3 . C4 . C3 . C4 . | F3 . F4 . F3 . F4 . | Ab2 . Ab3 . Ab2 . Ab3 . | G2 . G3 . G2 . G3 . ", 55);
+  song_track(sng_fight[2], inst_drums, "k . h h s . h . | k . h h s . h s ", 42);
+  // stage 3, the pit: heavy riff
+  sng_fight[3] = song_new(156);
+  song_track(sng_fight[3], inst_square,
+    "E4 - . E4 G4 - E4 . | A4 - G4 - E4 - D4 - | E4 - . E4 G4 - B4 . | A4 - - - G4 - - - |" +
+    "E5 - . E5 D5 - B4 . | C5 - B4 - A4 - G4 - | A4 - . A4 B4 - D5 . | E5 - - - - - . . ", 30);
+  song_track(sng_fight[3], inst_bass,
+    "E3 E3 . E3 E3 . G3 E3 | E3 E3 . E3 D3 . D3 . | E3 E3 . E3 E3 . G3 E3 | A3 . A3 . G3 . G3 . ", 60);
+  song_track(sng_fight[3], inst_drums, "k . h k s . h . | k k h . s . k s ", 48);
+  // the boss: chromatic and fast
+  sng_boss = song_new(164);
+  song_track(sng_boss, inst_saw,
+    "E5 - F5 - E5 - Bb4 - | E5 - F5 - G5 - F5 - | E5 - F5 - E5 - Bb4 - | Db5 - C5 - B4 - Bb4 - ", 22);
+  song_track(sng_boss, inst_bass,
+    "E3 . E3 E3 . E3 E3 . | E3 . E3 E3 . F3 F3 . ", 60);
+  song_track(sng_boss, inst_pad,
+    "E4 - - - - - - - - - - - - - - - | Bb3 - - - - - - - - - - - - - - - ", 18);
+  song_track(sng_boss, inst_drums, "k h s h k k s h | k h s h k k s s ", 48);
+  // win screen and ending: bright C major
+  sng_victory = song_new(120);
+  song_track(sng_victory, inst_square,
+    "G5 - E5 - C5 - E5 - | F5 - A5 - C6 - A5 - | G5 - E5 - C5 - D5 - | E5 - D5 - C5 - - - ", 30);
+  song_track(sng_victory, inst_bass,
+    "C3 . G3 . C3 . G3 . | F3 . C4 . F3 . C4 . | C3 . G3 . C3 . G3 . | G3 . D4 . C3 . . . ", 50);
+  song_track(sng_victory, inst_pad, "C5 - - - - - - - - - - - - - - - | F4 - - - - - - - - - - - - - - - ", 20);
+  song_track(sng_victory, inst_drums, "k . h . s . h . ", 32);
+  // jingles (played once): ROUND 1, ROUND 2, FINAL ROUND
+  FOR i = 0 TO 2
+    j_round[i] = song_new(150);
+    round_jingle(i);
+  END
+  j_win = song_new(150);
+  song_track(j_win, inst_square, "C5 . E5 . G5 . C6 - - - G5 . C6 - - - - - - - ", 36);
+  song_track(j_win, inst_bass, "C4 - - - - - - - F3 - - - G3 - C4 - - - - - - - ", 55);
+  song_track(j_win, inst_drums, "k . . . k . . . s . . . k . s . k . . . . . . . ", 45);
+  j_lose = song_new(110);
+  song_track(j_lose, inst_triangle, "E5 - - D5 - - C5 - - B4 - - - - A4 - - - - - - - ", 42);
+  song_track(j_lose, inst_bass, "A3 - - - - - F3 - - - - - E3 - - - A2 - - - - - - - ", 50);
+  j_vs = song_new(120);
+  song_track(j_vs, inst_bass, "E3 - - - E3 - - - E3 - E3 - E3 E3 E3 E3 E4 - - - - - - - ", 60);
+  song_track(j_vs, inst_drums, "k . . . k . . . k . k . k k k k s - - - . . . . ", 55);
+  song_track(j_vs, inst_saw, ". . . . . . . . . . . . . . . . B4 - - - - - - - ", 26);
+  j_over = song_new(90);
+  song_track(j_over, inst_triangle, "C5 - - B4 - - Bb4 - - A4 - - - - - - ", 42);
+  song_track(j_over, inst_bass, "F3 - - - - - E3 - - - - - A2 - - - ", 50);
+  music_volume(40);
+  RETURN 0;
+END
+
+// The three ROUND jingles: the same fanfare, higher each round; the
+// final round is lower and tense.
+FUNCTION round_jingle(i);
+PRIVATE s;
+BEGIN
+  s = j_round[i];
+  IF (i == 0) song_track(s, inst_square, "C5 . C5 . G5 - - - . . . . ", 38); END
+  IF (i == 1) song_track(s, inst_square, "D5 . D5 . A5 - - - . . . . ", 38); END
+  IF (i == 2) song_track(s, inst_square, "G4 . G4 . Db5 - C5 - - - . . ", 38); END
+  song_track(s, inst_bass, "C3 . C3 . C3 - - - . . . . ", 50);
+  song_track(s, inst_drums, "k . k . s . . . . . . . ", 50);
+  RETURN 0;
+END
+
+// A number 0..n-1 that changes on every call (no rand(): the game's
+// random numbers stay the same with and without sound).
+FUNCTION vary(n);
+BEGIN
+  snd_k = (snd_k * 73 + 19) % 1009;
+  RETURN snd_k % n;
+END
+
+// Plays s at the world x wx (panned left / right), quieter in the demo.
+FUNCTION snd(s, vol, pitch, wx);
+BEGIN
+  IF (demo) vol = vol * 40 / 100; END
+  play_sound(s, vol, pitch, clamp((wx - cam_x - 320) / 4, -80, 80));
+  RETURN 0;
+END
+
+// Music: sng loops (lp 1) or plays once (a jingle). M mutes all of it.
+FUNCTION music(sng, lp);
+BEGIN
+  IF (lp)
+    IF (mus_want == sng AND song_playing() == sng) RETURN 0; END
+    mus_want = sng;
+  ELSE
+    mus_want = 0;
+  END
+  IF (music_on) song_play(sng, lp); END
+  RETURN 0;
+END
+
+FUNCTION music_stop();
+BEGIN
+  mus_want = 0; song_stop();
+  RETURN 0;
+END
+
+// The crowd cheers (big) or goes "ooh"; at most once a second and a half.
+FUNCTION crowd(big);
+BEGIN
+  IF (demo OR crowd_t > 0) RETURN 0; END
+  crowd_t = 90;
+  IF (big) play_sound(s_cheer[vary(3)], 40, 90 + vary(20), 0);
+  ELSE play_sound(s_ooh, 34, 90 + vary(20), 0); END
+  RETURN 0;
+END
+
+// Swing of button b (0-5), strength by the button.
+FUNCTION snd_swing(f, b);
+BEGIN
+  snd(s_wh[b], 70, 90 + vary(20) - (fc[f] == 2) * 12, fx[f]);
+  RETURN 0;
+END
+
+// A blow lands (blocked when blk); heavy and projectile blows are fuller.
+FUNCTION snd_blow(d, px, blk, proj);
+PRIVATE w;
+BEGIN
+  IF (blk)
+    snd(s_blk[vary(3)], 60, 92 + vary(16), px);
+    snd(s_tickb, 55, 90 + vary(20), px);
+    RETURN 0;
+  END
+  w = 0;
+  IF (h_dmg >= 60) w = 1; END
+  IF (h_dmg >= 90) w = 2; END
+  snd(s_hit[vary(4)], 70 + w * 12, 118 - w * 22 + vary(14), px);
+  IF (w >= 1) snd(s_thump[vary(3)], 55 + w * 20, 92 + vary(16), px); END
+  IF (w == 2) snd(s_crack[vary(2)], 70, 90 + vary(20), px); crowd(1); END
+  IF (proj) snd(s_fire2, 50, 70 + vary(20), px); END
+  IF (cb_n[d] == 4) crowd(1); END
+  RETURN 0;
+END
+
+// Starting special sp (the projectile's own sound comes on release).
+FUNCTION snd_special(f, sp);
+BEGIN
+  IF (sp == 2 OR sp == 5) snd(s_rise, 60, 92 + vary(16), fx[f]); END
+  IF (sp == 3 OR sp == 9) snd(s_spin, 60, 90 + vary(20), fx[f]); END
+  IF (sp == 6 OR sp == 10 OR sp == 16 OR sp == 7) snd(s_dash, 64, 90 + vary(20), fx[f]); END
+  IF (sp == 8 OR sp == 11) snd(s_wh[2], 70, 80, fx[f]); END
+  IF (sp == 14) snd(s_tele, 60, 100, fx[f]); END
+  RETURN 0;
+END
+
+// A projectile leaves the hand: typ as in pt_* (6, 7 thrown items).
+FUNCTION snd_proj(f, typ);
+BEGIN
+  IF (typ >= 6) snd(s_wh[5], 75, 80 + vary(15), fx[f]); RETURN 0; END
+  IF (typ == 3) snd(s_flame, 70, 95 + vary(10), fx[f]); RETURN 0; END
+  IF (typ == 1 OR typ == 4) snd(s_fire, 80, 75, fx[f]); snd(s_fire2, 70, 70, fx[f]); RETURN 0; END
+  IF (typ == 5) snd(s_fire, 65, 70 + vary(10), fx[f]); snd(s_tele, 35, 60, fx[f]); RETURN 0; END
+  IF (typ == 2) snd(s_flame, 50, 140, fx[f]); END
+  snd(s_fire, 65, 95 + vary(12), fx[f]); snd(s_fire2, 45, 100, fx[f]);
+  RETURN 0;
+END
+
+// A thrown item breaks at (wx): bottle (6) or crate (7).
+FUNCTION snd_break(t, wx);
+BEGIN
+  IF (t == 6) snd(s_glass, 70, 90 + vary(25), wx); snd(s_tink, 45, 90 + vary(30), wx); END
+  IF (t == 7) snd(s_crate, 75, 85 + vary(25), wx); snd(s_thump[vary(3)], 50, 110, wx); END
+  RETURN 0;
+END
+
+// Round and result stings, keyed on the banner being shown.
+FUNCTION snd_banner(g);
+BEGIN
+  IF (g == g_lab[0]) music(j_round[0], 0); END
+  IF (g == g_lab[1]) music(j_round[1], 0); END
+  IF (g == g_lab[2]) music(j_round[2], 0); END
+  IF (g == g_lab[3]) play_sound(s_fight1, 70, 100, 0); play_sound(s_fight2, 60, 100, 0); play_sound(s_boom, 45, 140, 0); END
+  IF (g == g_lab[4] OR g == g_lab[7]) music_stop(); play_sound(s_ko, 75, 100, 0); play_sound(s_boom, 70, 80, 0); crowd_t = 0; crowd(1); END
+  IF (g == g_lab[6]) music_stop(); play_sound(s_buzz, 60, 100, 0); END
+  IF (g == g_lab[9]) music(j_win, 0); END
+  IF (g == g_lab[5])                      // PERFECT: sad when the CPU did it to you
+    IF (mode == 1 AND fctrl[1] == 2 AND hp[0] <= 0) music(j_lose, 0); ELSE music(j_win, 0); play_sound(s_heal, 60, 120, 0); END
+  END
+  IF (g == g_lab[8] OR g == g_lab[10]) music(j_lose, 0); END
+  IF (g == g_lab[17]) snd(s_superf, 60, 100, cam_x + 320); snd(s_superc, 60, 100, cam_x + 320); crowd(1); END
+  IF (g == g_win[0] OR g == g_win[1] OR g == g_win[2] OR g == g_win[3] OR g == g_win[4]) music(j_win, 0); END
+  RETURN 0;
+END
+
+// M: music off / on, on every screen.
+PROCESS music_key();
+BEGIN
+  LOOP
+    IF (crowd_t > 0) crowd_t--; END
+    IF (key_pressed(_m))
+      music_on = 1 - music_on;
+      IF (music_on)
+        IF (mus_want) song_play(mus_want); END
+      ELSE
+        song_stop();
+      END
+    END
+    FRAME;
+  END
+END
+
+// ======================================================================
 // Main
 // ======================================================================
 
@@ -2926,7 +3291,7 @@ BEGIN
   FOR i = 0 TO 4 g_por[i] = portrait(i); loading(12 + i, n); END
   make_effects(); loading(17, n);
   FOR i = 0 TO 2 make_labels(i); loading(18 + i, n); END
-  make_screens(); loading(21, n);
+  make_screens(); make_sounds(); loading(21, n);
   FOR s = 0 TO 3
     stage_far(s); loading(22 + s * 5, n);
     stage_mid(s); loading(23 + s * 5, n);
@@ -2944,6 +3309,7 @@ BEGIN
   item_view(0); item_view(1);
   FOR i = 0 TO 11 ui(i); END
   banner(); digit(0); digit(1);
+  music_key();
   LOOP
     title();
     IF (mode == 1)
