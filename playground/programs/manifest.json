@@ -603,6 +603,17 @@
       "clearColor": "#000000",
       "description": "Pac-Man turned around: you are the four ghosts and a computer Pac-Man runs a new generated maze every round, fleeing you and going for the power pills. Catch him 3 times before he eats every dot.",
       "controls": "Arrows move your ghost, 1-4 pick a ghost, TAB or Space next ghost, N new maze; Space/Enter on screens"
+    },
+    {
+      "id": "rusty-leap",
+      "title": "Rusty Leap",
+      "category": "procedural",
+      "file": "rusty-leap.div",
+      "width": 400,
+      "height": 240,
+      "clearColor": "#000000",
+      "description": "A side-scrolling jump-and-stomp platformer: Rusty the fox runs, jumps and stomps through three worlds (Clover Meadow, Glowroot Cavern, Cloudtop Heights). Break bricks, open gift crates for glimmers, the Sun Berry that makes Rusty big and the Acorn Sling, light the lanterns and reach each Waystone. All pixel art, sound and music are made in code.",
+      "controls": "Left/Right or A/D move, X or Shift run (hold), Z/Space/Up/W jump (hold for higher), X throws acorns once you have the sling; Enter/Space on screens"
     }
   ],
   "categories": [

@@ -1,0 +1,3168 @@
+PROGRAM rusty_leap;
+
+// ---------------------------------------------------------------------
+// RUSTY LEAP - a side-scrolling jump-and-stomp platformer.
+//
+// Rusty the fox runs through three worlds - CLOVER MEADOW, GLOWROOT
+// CAVERN and CLOUDTOP HEIGHTS - to reach the Waystone at the end of each.
+//
+// * Controls with some weight: Rusty speeds up and slows down, runs while
+//   X/Shift is held, jumps higher the longer the button is held, can still
+//   jump for a few frames after running off a ledge (coyote time), and a
+//   jump pressed just before landing is kept (jump buffer).
+// * Stomp enemies to bounce off them: the MOSSBUG walks, the ROLLO curls
+//   into a ball when stomped (touch the ball to send it rolling through
+//   other enemies), the BUZZWING flies and the HOPFROG leaps at you.
+// * Bump bricks and gift crates from below. Crates hold glimmers (100 are
+//   an extra life) or a power: the SUN BERRY makes Rusty big (a hit makes
+//   him small again) and, once big, the ACORN SLING lets him throw
+//   bouncing acorns with X. Big Rusty breaks bricks.
+// * Lanterns are checkpoints; pits and thorns are dangerous; the timer
+//   counts down; reaching the Waystone turns the time left into points.
+//
+// How it is made
+// * Levels are built by small functions (gnd, fill, row, ent...) into the
+//   tile map tm[]; the static tiles are painted once into one wide graphic
+//   that scroll window 1 shows, and bricks and crates are processes (they
+//   can break or change). Scroll window 0 draws two parallax planes: its
+//   foreground (hills, rock pillars, clouds) and its background (sky).
+//   Game processes set cnumber = c_1 so they are drawn in window 1 only.
+// * Collisions with the level are done against tm[] (never against
+//   graphics), axis by axis, with the player's box kept in globals so the
+//   enemies can test stomps and hits themselves.
+// * Every sprite is pixel art stored below as rows of palette digits (two
+//   numbers of 8 pixels per row); the title and HUD font is a 5x7 pixel
+//   font turned into a BDF font at start-up (load_bdf_font_text). Sounds
+//   are sfx_tone recipes; each world has its own tune (song_*).
+// ---------------------------------------------------------------------
+
+GLOBAL
+  // ---- screen and level geometry
+  SW = 400; SH = 240; TS = 16; LH = 15;
+
+  // ---- tiles
+  T_AIR = 0; T_GROUND = 1; T_STONE = 2; T_BRICK = 3; T_GIFT = 4; T_GIFTP = 5;
+  T_USED = 6; T_PLANK = 7; T_THORN = 8;
+  tsolid[8] = 0, 1, 1, 1, 1, 1, 1, 0, 0;
+  tm[3599];                  // the level: tile at (tx, ty) is tm[ty * lw + tx]
+  bump[3599];                // frames left of a block's bump animation
+  lw = 0;                    // level width in tiles
+  theme = 0;                 // 0 meadow, 1 cavern, 2 sky
+  tb = 0;                    // theme * 48: base of the theme's colours in tc[]
+
+  // ---- level entities (filled by the level functions, spawned by spawn_level)
+  E_GEM = 1; E_BUG = 2; E_DIL = 3; E_BEE = 4; E_FROG = 5; E_CHECK = 6; E_GOAL = 7;
+  E_START = 8; E_MPH = 9; E_MPV = 10; E_BEEV = 11;
+  ne = 0; e_k[119]; e_x[119]; e_y[119]; e_p[119];
+  start_tx = 2; start_ty = 12; goal_tx = 0; check_tx = 0;
+
+  // ---- enemies register here so stomps, acorns and rolling balls find them
+  NFOE = 40;
+  f_on[39]; f_x[39]; f_y[39]; f_hit[39];
+
+  // ---- moving platforms (left x, top y, width, movement this frame)
+  nmp = 0; mp_x[7]; mp_y[7]; mp_w[7]; mp_dx[7]; mp_dy[7];
+
+  // ---- the player (feet position pfx, pfy; hitbox half-width phw, height ph)
+  pfx = 0.0; pfy = 0.0; pvx = 0.0; pvy = 0.0;
+  phw = 5; ph = 14;
+  pbig = 0; psling = 0; pinv = 0; pface = 1; pground = 0; pdead = 0;
+  pgrow = 0; pchain = 0; pon = -1; pbuf = 0; pcoy = 0; pjump = 0; plook = 0.0;
+  nacorn = 0;
+  camx = 0.0; icam = 0;
+
+  // ---- game state
+  ST_PLAY = 0; ST_CLEAR = 1; ST_DEAD = 2; ST_GOAL = 3;
+  game_state = 0; freeze = 0; paused = 0;
+  lvl = 1; NLEVELS = 3;
+  score = 0; glims = 0; lives = 3; time_left = 300; time_tick = 0;
+  cp = 0;                    // checkpoint reached in this level (tile x), 0 none
+  bump_x = 0; bump_y = 0; bump_t = 0;
+  hurry = 0;
+  stat_stomps = 0; stat_gems = 0; stat_bricks = 0; stat_deaths = 0; stat_blocks = 0;
+  stat_kicks = 0; stat_powers = 0; stat_clears = 0; stat_checks = 0;
+
+  // ---- graphics
+  g_fox[3]; g_big[3]; g_bug[2]; g_dil[2]; g_bee[1]; g_frog[1];
+  g_berry = 0; g_acorn = 0; g_gem = 0; g_gem_small = 0; g_shot = 0;
+  g_brick[2]; g_gift[8]; g_used[2]; g_debris[2];
+  g_lvl[2];                  // painted level graphics, one per level (made once)
+  g_far[2]; g_mid[2];        // parallax planes per theme
+  g_hud = 0; g_card = 0; g_lamp[1]; g_goal = 0; g_glow = 0; g_spark[3]; g_puff = 0;
+  g_mp[2]; g_cursor = 0; g_logo_bg = 0;
+  f_small = 0; f_big = 0;    // pixel fonts
+
+  // ---- theme colours: 16 RGB triples per theme
+  C_GRASS = 0; C_GRASS_L = 3; C_GRASS_D = 6; C_DIRT = 9; C_DIRT_D = 12; C_DIRT_L = 15;
+  C_ST = 18; C_ST_L = 21; C_ST_D = 24; C_BR = 27; C_BR_M = 30; C_BR_L = 33;
+  C_PL = 36; C_PL_D = 39; C_SKY1 = 42; C_SKY2 = 45;
+  tc[143] =
+    // meadow
+    86, 186, 64,  150, 226, 92,  38, 118, 44,  156, 98, 56,  112, 66, 38,  190, 132, 80,
+    168, 164, 176,  214, 212, 222,  98, 94, 116,  198, 94, 54,  110, 46, 28,  236, 146, 96,
+    196, 132, 64,  118, 70, 32,  84, 160, 255,  190, 232, 255,
+    // cavern
+    70, 190, 170,  150, 240, 220,  30, 110, 110,  72, 56, 100,  44, 32, 68,  102, 84, 138,
+    96, 100, 132,  140, 146, 180,  52, 54, 82,  136, 72, 150,  62, 28, 78,  186, 120, 200,
+    96, 214, 230,  40, 120, 150,  16, 12, 34,  40, 26, 64,
+    // sky
+    250, 252, 255,  255, 255, 255,  190, 196, 236,  232, 236, 252,  196, 198, 236,  255, 255, 255,
+    236, 214, 150,  255, 244, 196,  176, 146, 86,  98, 150, 222,  48, 84, 150,  150, 196, 250,
+    255, 250, 255,  200, 190, 236,  110, 132, 236,  255, 196, 206;
+
+  // ---- sprite art: rows of 16 pixels as two 8-digit numbers, digits are
+  // palette entries (0 = transparent)
+  A_FOX_STAND = 0;
+  A_FOX_RUN1 = 32;
+  A_FOX_RUN2 = 64;
+  A_FOX_JUMP = 96;
+  A_BUG_A = 128;
+  A_BUG_B = 160;
+  A_BUG_FLAT = 192;
+  A_DIL_A = 224;
+  A_DIL_B = 256;
+  A_DIL_BALL = 288;
+  A_BEE_A = 320;
+  A_BEE_B = 352;
+  A_FROG_SIT = 384;
+  A_FROG_LEAP = 416;
+  A_BERRY = 448;
+  A_ACORN = 480;
+  A_GEM = 512;
+  A_BIG_STAND = 544;
+  A_BIG_RUN1 = 592;
+  A_BIG_RUN2 = 640;
+  A_BIG_JUMP = 688;
+art[735] =
+  // fox_stand (16 rows, palette fox)
+  00000000, 00000000,
+  00000001, 00010000,
+  00000012, 10121000,
+  00000012, 22222100,
+  00000122, 22252100,
+  00000122, 22233310,
+  00000122, 23333391,
+  00000012, 23333110,
+  00000001, 66661000,
+  01100017, 66667100,
+  12210122, 22231000,
+  12222122, 22331000,
+  44222122, 22331000,
+  04441122, 22221000,
+  00110122, 11221000,
+  00000111, 01110000,
+  // fox_run1 (16 rows, palette fox)
+  00000001, 00010000,
+  00000012, 10121000,
+  00000012, 22222100,
+  00000122, 22252100,
+  00000122, 22233310,
+  00000122, 23333391,
+  00000012, 23333110,
+  01100001, 66661000,
+  12210017, 66667100,
+  12222122, 22231000,
+  44222122, 22331000,
+  04441122, 22331000,
+  00110122, 22221000,
+  00001221, 00122100,
+  00012210, 00012210,
+  00011100, 00001110,
+  // fox_run2 (16 rows, palette fox)
+  00000000, 00000000,
+  00000001, 00010000,
+  00000012, 10121000,
+  00000012, 22222100,
+  00000122, 22252100,
+  00000122, 22233310,
+  00000122, 23333391,
+  00000012, 23333110,
+  00000001, 66661000,
+  00000017, 66667100,
+  01100122, 22231000,
+  12222122, 22331000,
+  44222122, 22331000,
+  04441122, 22221000,
+  00000012, 12210000,
+  00000001, 11100000,
+  // fox_jump (16 rows, palette fox)
+  00000001, 00010000,
+  00000012, 10121000,
+  00000012, 22222100,
+  00000122, 22252100,
+  00000122, 22233310,
+  00000122, 23333391,
+  00000012, 23333110,
+  00000001, 66661000,
+  00000017, 66667100,
+  00000122, 22231210,
+  01101222, 22331221,
+  12222122, 22331110,
+  44222122, 22221000,
+  44410122, 10000000,
+  04400012, 21000000,
+  00000001, 11000000,
+  // bug_a (16 rows, palette bug)
+  00000000, 00000000,
+  00000000, 00000000,
+  00000111, 11100000,
+  00011773, 77711000,
+  00177377, 77377100,
+  01777773, 77777710,
+  01711111, 11111710,
+  12222222, 22222221,
+  12244122, 22144221,
+  12245122, 22154221,
+  12222222, 22222221,
+  12222111, 11122221,
+  01222222, 22222210,
+  00111111, 11111100,
+  00088100, 00188000,
+  00888800, 00888800,
+  // bug_b (16 rows, palette bug)
+  00000000, 00000000,
+  00000000, 00000000,
+  00000111, 11100000,
+  00011777, 37711000,
+  00177773, 77737100,
+  01737777, 77377710,
+  01711111, 11111710,
+  12222222, 22222221,
+  12244122, 22144221,
+  12245122, 22154221,
+  12222222, 22222221,
+  12222111, 11122221,
+  01222222, 22222210,
+  00111111, 11111100,
+  00008810, 01880000,
+  00088880, 08888000,
+  // bug_flat (16 rows, palette bug)
+  00000000, 00000000,
+  00000000, 00000000,
+  00000000, 00000000,
+  00000000, 00000000,
+  00000000, 00000000,
+  00000000, 00000000,
+  00000000, 00000000,
+  00000000, 00000000,
+  00000000, 00000000,
+  00000000, 00000000,
+  00001111, 11110000,
+  00117377, 37371100,
+  01111111, 11111110,
+  12225512, 22155221,
+  12222222, 22222221,
+  08881111, 11118880,
+  // dil_a (16 rows, palette dil)
+  00000000, 00000000,
+  00000000, 00000000,
+  00000000, 00000000,
+  00000111, 11100000,
+  00011373, 37311000,
+  00133723, 72373100,
+  01372272, 27227610,
+  01272272, 27226661,
+  12272272, 27226561,
+  12272272, 27226661,
+  12272272, 27226691,
+  01777777, 77771110,
+  00111111, 11110000,
+  00088000, 08800000,
+  00188100, 18810000,
+  00000000, 00000000,
+  // dil_b (16 rows, palette dil)
+  00000000, 00000000,
+  00000000, 00000000,
+  00000000, 00000000,
+  00000111, 11100000,
+  00011373, 37311000,
+  00133723, 72373100,
+  01372272, 27227610,
+  01272272, 27226661,
+  12272272, 27226561,
+  12272272, 27226661,
+  12272272, 27226691,
+  01777777, 77771110,
+  00111111, 11110000,
+  00008800, 00880000,
+  00018810, 01881000,
+  00000000, 00000000,
+  // dil_ball (16 rows, palette dil)
+  00000000, 00000000,
+  00000111, 11100000,
+  00011373, 37311000,
+  00133723, 72373100,
+  01372272, 27227310,
+  01272272, 27227210,
+  12272272, 27227221,
+  12272272, 27227221,
+  12272272, 27227221,
+  12272272, 27227221,
+  01272272, 27227210,
+  01272272, 27227210,
+  00172272, 27227100,
+  00011777, 77711000,
+  00000111, 11100000,
+  00000000, 00000000,
+  // bee_a (16 rows, palette bee)
+  00000000, 00000000,
+  00011100, 01110000,
+  00144410, 14441000,
+  01444441, 44444100,
+  01444771, 47744100,
+  00144411, 14441000,
+  00011122, 22211000,
+  00122332, 23322100,
+  01222332, 23329410,
+  01222332, 23325410,
+  18222332, 23322210,
+  01122332, 23321000,
+  00011111, 11110000,
+  00000000, 00000000,
+  00000000, 00000000,
+  00000000, 00000000,
+  // bee_b (16 rows, palette bee)
+  00000000, 00000000,
+  00000000, 00000000,
+  00000000, 00000000,
+  00000000, 00000000,
+  00111110, 11111000,
+  01444441, 44444100,
+  00111122, 22211000,
+  00122332, 23322100,
+  01222332, 23329410,
+  01222332, 23325410,
+  18222332, 23322210,
+  01122332, 23321000,
+  00011111, 11110000,
+  00000000, 00000000,
+  00000000, 00000000,
+  00000000, 00000000,
+  // frog_sit (16 rows, palette frog)
+  00000000, 00000000,
+  00000000, 00000000,
+  00000000, 00000000,
+  00000000, 00000000,
+  00001100, 00011000,
+  00014410, 00144100,
+  00014511, 11145100,
+  00122222, 22222210,
+  01222622, 22622221,
+  01222222, 22222221,
+  01211111, 11111121,
+  01223333, 33332221,
+  00122333, 33322100,
+  01122221, 12222110,
+  12222110, 01222221,
+  11111000, 00111111,
+  // frog_leap (16 rows, palette frog)
+  00001100, 00011000,
+  00014410, 00144100,
+  00014511, 11145100,
+  00122222, 22222210,
+  01222622, 22622221,
+  01222222, 22222221,
+  01211111, 11111121,
+  01223333, 33332221,
+  00122333, 33322100,
+  00012221, 12221000,
+  00012210, 01221000,
+  00012210, 01221000,
+  00122100, 00122100,
+  00122100, 00122100,
+  01111000, 00011110,
+  00000000, 00000000,
+  // berry (16 rows, palette item)
+  00000000, 00000000,
+  00000001, 10000000,
+  00000017, 71100000,
+  00000176, 67610000,
+  00000111, 61100000,
+  00001122, 21110000,
+  00012222, 22221000,
+  00122332, 22222100,
+  01223342, 22222210,
+  01223422, 22222210,
+  01223222, 22222810,
+  01222222, 22228810,
+  00122222, 22288100,
+  00012222, 28881000,
+  00001111, 11110000,
+  00000000, 00000000,
+  // acorn (16 rows, palette nut)
+  00000000, 00000000,
+  00000001, 10000000,
+  00000006, 60000000,
+  00001116, 61110000,
+  00117777, 77771100,
+  01777676, 76777710,
+  01776767, 67677710,
+  01111111, 11111110,
+  00122222, 22223100,
+  00122222, 22232100,
+  00122222, 22232100,
+  00012222, 22321000,
+  00012222, 23321000,
+  00001222, 33210000,
+  00000112, 21100000,
+  00000001, 10000000,
+  // gem (16 rows, palette gem)
+  00000000, 00000000,
+  00000001, 10000000,
+  00000013, 41000000,
+  00000133, 44100000,
+  00001333, 34410000,
+  00013333, 32441000,
+  00133333, 22244100,
+  01222222, 22222210,
+  00122222, 22222100,
+  00012222, 22221000,
+  00001222, 22210000,
+  00000122, 22100000,
+  00000012, 21000000,
+  00000001, 10000000,
+  00000000, 00000000,
+  00000000, 00000000,
+  // big_stand (24 rows, palette fox)
+  00000001, 00010000,
+  00000012, 10121000,
+  00000012, 22222100,
+  00000122, 22252100,
+  00000122, 22233310,
+  00000122, 23333391,
+  00000012, 23333110,
+  00000012, 66662100,
+  00000176, 66666710,
+  00000176, 66661000,
+  01100017, 62221000,
+  12210122, 22231000,
+  12222122, 22233100,
+  12222122, 22233100,
+  44222122, 22233100,
+  44422122, 22233100,
+  04441122, 22231000,
+  00110122, 22221000,
+  00000122, 22221000,
+  00000122, 81221000,
+  00000122, 10122100,
+  00000122, 10122100,
+  00000188, 10188100,
+  00000111, 10111100,
+  // big_run1 (24 rows, palette fox)
+  00000001, 00010000,
+  00000012, 10121000,
+  00000012, 22222100,
+  00000122, 22252100,
+  00000122, 22233310,
+  00000122, 23333391,
+  00000012, 23333110,
+  00000012, 66662100,
+  00000176, 66666710,
+  01100176, 66661000,
+  12210017, 62221000,
+  12222122, 22231000,
+  12222122, 22233100,
+  44222122, 22233100,
+  44422122, 22233100,
+  04441122, 22233100,
+  00110122, 22231000,
+  00000122, 22221000,
+  00001222, 11222100,
+  00012221, 01222210,
+  00122210, 00012221,
+  01222100, 00001221,
+  01881000, 00001881,
+  01111000, 00001111,
+  // big_run2 (24 rows, palette fox)
+  00000000, 00000000,
+  00000001, 00010000,
+  00000012, 10121000,
+  00000012, 22222100,
+  00000122, 22252100,
+  00000122, 22233310,
+  00000122, 23333391,
+  00000012, 23333110,
+  00000012, 66662100,
+  00000176, 66666710,
+  00000176, 66661000,
+  01100017, 62221000,
+  12210122, 22231000,
+  12222122, 22233100,
+  44222122, 22233100,
+  44422122, 22233100,
+  04441122, 22233100,
+  00110122, 22231000,
+  00000122, 22221000,
+  00000012, 22210000,
+  00000012, 22210000,
+  00000012, 21100000,
+  00000018, 81000000,
+  00000011, 11000000,
+  // big_jump (24 rows, palette fox)
+  00000001, 00010000,
+  00000012, 10121000,
+  00000012, 22222100,
+  00000122, 22252100,
+  00000122, 22233310,
+  00000122, 23333391,
+  00000012, 23333110,
+  00000012, 66662100,
+  00000176, 66666710,
+  00000176, 66661210,
+  00000017, 62221221,
+  00000122, 22231110,
+  01100122, 22233100,
+  12212122, 22233100,
+  44222122, 22233100,
+  44422122, 22233100,
+  04441122, 22231000,
+  00000122, 22221000,
+  00000122, 22221000,
+  00001221, 01222100,
+  00012210, 00012210,
+  00122100, 00001221,
+  00188100, 00001881,
+  00111100, 00000111;
+  // palettes: 10 RGB entries each (entry 0 unused)
+  P_FOX = 0; P_BUG = 30; P_DIL = 60; P_BEE = 90; P_FROG = 120; P_ITEM = 150; P_NUT = 180; P_GEM = 210;
+pal[239] =
+  // 0 fox
+  0, 0, 0,  58, 28, 24,  236, 122, 40,  255, 226, 180,  250, 250, 250,  24, 20, 40,  40, 196, 184,  18, 120, 122,  186, 80, 30,  40, 24, 24,
+  // 1 bug
+  0, 0, 0,  34, 36, 22,  176, 124, 70,  150, 214, 92,  250, 250, 240,  20, 20, 20,  120, 80, 44,  78, 150, 52,  236, 156, 60,  200, 60, 60,
+  // 2 dil
+  0, 0, 0,  40, 30, 48,  150, 128, 176,  204, 188, 222,  250, 250, 250,  20, 16, 24,  236, 160, 160,  104, 86, 128,  110, 72, 56,  60, 30, 40,
+  // 3 bee
+  0, 0, 0,  40, 26, 30,  250, 206, 56,  44, 34, 40,  214, 238, 255,  220, 40, 50,  255, 240, 150,  160, 190, 230,  200, 140, 30,  250, 250, 250,
+  // 4 frog
+  0, 0, 0,  20, 30, 64,  70, 124, 232,  252, 222, 92,  250, 250, 250,  16, 16, 30,  130, 180, 255,  40, 80, 170,  240, 110, 90,  0, 0, 0,
+  // 5 item
+  0, 0, 0,  80, 30, 20,  255, 164, 40,  255, 232, 130,  255, 255, 255,  20, 20, 20,  84, 190, 70,  40, 120, 50,  214, 96, 28,  0, 0, 0,
+  // 6 nut
+  0, 0, 0,  50, 30, 20,  206, 134, 62,  244, 196, 120,  255, 255, 255,  20, 20, 20,  96, 64, 32,  138, 94, 52,  170, 108, 50,  0, 0, 0,
+  // 7 gem
+  0, 0, 0,  20, 60, 120,  60, 186, 255,  170, 240, 255,  255, 255, 255,  0, 0, 0,  30, 120, 210,  0, 0, 0,  0, 0, 0,  0, 0, 0;
+
+  // ---- 5x7 pixel font (rows of 5 bits written as 0/1 digits)
+  NGLYPH = 46;
+  fcode[45] = 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 33, 45, 58, 46, 39, 44, 47, 63, 42, 32;
+  fglyph[321] =
+    01110, 10011, 10101, 10101, 10101, 11001, 01110,   // 0
+    00100, 01100, 00100, 00100, 00100, 00100, 01110,   // 1
+    01110, 10001, 00001, 00010, 00100, 01000, 11111,   // 2
+    11110, 00001, 00001, 01110, 00001, 00001, 11110,   // 3
+    00010, 00110, 01010, 10010, 11111, 00010, 00010,   // 4
+    11111, 10000, 11110, 00001, 00001, 10001, 01110,   // 5
+    00110, 01000, 10000, 11110, 10001, 10001, 01110,   // 6
+    11111, 00001, 00010, 00100, 01000, 01000, 01000,   // 7
+    01110, 10001, 10001, 01110, 10001, 10001, 01110,   // 8
+    01110, 10001, 10001, 01111, 00001, 00010, 01100,   // 9
+    01110, 10001, 10001, 11111, 10001, 10001, 10001,   // A
+    11110, 10001, 10001, 11110, 10001, 10001, 11110,   // B
+    01110, 10001, 10000, 10000, 10000, 10001, 01110,   // C
+    11110, 10001, 10001, 10001, 10001, 10001, 11110,   // D
+    11111, 10000, 10000, 11110, 10000, 10000, 11111,   // E
+    11111, 10000, 10000, 11110, 10000, 10000, 10000,   // F
+    01110, 10001, 10000, 10111, 10001, 10001, 01111,   // G
+    10001, 10001, 10001, 11111, 10001, 10001, 10001,   // H
+    01110, 00100, 00100, 00100, 00100, 00100, 01110,   // I
+    00111, 00010, 00010, 00010, 00010, 10010, 01100,   // J
+    10001, 10010, 10100, 11000, 10100, 10010, 10001,   // K
+    10000, 10000, 10000, 10000, 10000, 10000, 11111,   // L
+    10001, 11011, 10101, 10101, 10001, 10001, 10001,   // M
+    10001, 11001, 10101, 10011, 10001, 10001, 10001,   // N
+    01110, 10001, 10001, 10001, 10001, 10001, 01110,   // O
+    11110, 10001, 10001, 11110, 10000, 10000, 10000,   // P
+    01110, 10001, 10001, 10001, 10101, 10010, 01101,   // Q
+    11110, 10001, 10001, 11110, 10100, 10010, 10001,   // R
+    01111, 10000, 10000, 01110, 00001, 00001, 11110,   // S
+    11111, 00100, 00100, 00100, 00100, 00100, 00100,   // T
+    10001, 10001, 10001, 10001, 10001, 10001, 01110,   // U
+    10001, 10001, 10001, 10001, 10001, 01010, 00100,   // V
+    10001, 10001, 10001, 10101, 10101, 10101, 01010,   // W
+    10001, 10001, 01010, 00100, 01010, 10001, 10001,   // X
+    10001, 10001, 01010, 00100, 00100, 00100, 00100,   // Y
+    11111, 00001, 00010, 00100, 01000, 10000, 11111,   // Z
+    00100, 00100, 00100, 00100, 00100, 00000, 00100,   // !
+    00000, 00000, 00000, 01110, 00000, 00000, 00000,   // -
+    00000, 00100, 00100, 00000, 00100, 00100, 00000,   // :
+    00000, 00000, 00000, 00000, 00000, 01100, 01100,   // .
+    00100, 00100, 01000, 00000, 00000, 00000, 00000,   // '
+    00000, 00000, 00000, 00000, 01100, 00100, 01000,   // ,
+    00001, 00010, 00010, 00100, 01000, 01000, 10000,   // /
+    01110, 10001, 00001, 00010, 00100, 00000, 00100,   // ?
+    00000, 10101, 01110, 11111, 01110, 10101, 00000,   // *
+    00000, 00000, 00000, 00000, 00000, 00000, 00000;   // space
+  hexd[15] = '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F';
+
+  // ---- level names and settings
+  lname[3] = '', 'CLOVER MEADOW', 'GLOWROOT CAVERN', 'CLOUDTOP HEIGHTS';
+  ltime[3] = 0, 300, 300, 300;
+
+  // ---- sound
+  s_jump = 0; s_jumpb = 0; s_stomp = 0; s_kick = 0; s_gem = 0; s_gem2 = 0; s_bump = 0;
+  s_brick = 0; s_sprout = 0; s_note = 0; s_bell = 0; s_hurt = 0; s_throw = 0; s_poof = 0;
+  s_tick = 0; s_wall = 0; s_hurry = 0; s_select = 0; s_land = 0; s_spring = 0;
+  m_title = 0; m_theme[2]; m_clear = 0; m_die = 0; m_over = 0; m_win = 0;
+
+  // ---- scratch and misc
+  chain_pts[6] = 100, 200, 400, 800, 1000, 2000, 4000;
+  fc = 0;                    // frame counter
+  pskid = 0; pstretch = 0; pland = 0; auto_walk = 0;
+  fw_x = 0.0; fw_y = 0.0; fw_vx = 0.0; fw_vy = 0.0; fw_g = 0; fw_turn = 0;   // foe_walk
+  hiscore = 0; check_ty = 12; g_portal = 0; txt_a = 0; fbuf = ""; load_n = 0;
+
+LOCAL
+  scale_x = 100;             // horizontal scale of the graphic (spinning glimmers, squash)
+  scale_y = 100;
+  fslot = -1;                // enemy register slot
+
+// =====================================================================
+// Small helpers
+// =====================================================================
+
+FUNCTION iabs(v);
+BEGIN
+  IF (v < 0) RETURN -v; END
+  RETURN v;
+END
+
+// Tile coordinate of a pixel coordinate (floor, also for negatives)
+FUNCTION tcell(p);
+BEGIN
+  RETURN floor(p * 0.0625);
+END
+
+// Tile at (tx, ty): the level's sides are walls, above and below is air
+FUNCTION tile_at(tx, ty);
+BEGIN
+  IF (tx < 0 OR tx >= lw) RETURN T_STONE; END
+  IF (ty < 0 OR ty >= LH) RETURN T_AIR; END
+  RETURN tm[ty * lw + tx];
+END
+
+// 1 when the pixel (px, py) is inside a solid tile
+FUNCTION solid_px(px, py);
+BEGIN
+  RETURN tsolid[tile_at(tcell(px), tcell(py))];
+END
+
+// 1 when feet at (px, py) land on something: solid, or a plank whose top
+// the feet were above (old_y) before this move
+FUNCTION land_px(px, py, old_y);
+PRIVATE t;
+BEGIN
+  t = tile_at(tcell(px), tcell(py));
+  IF (tsolid[t]) RETURN 1; END
+  IF (t == T_PLANK AND old_y <= tcell(py) * 16 + 0.01) RETURN 1; END
+  RETURN 0;
+END
+
+FUNCTION k_left();  BEGIN RETURN key(_left) OR key(_a); END
+FUNCTION k_right(); BEGIN RETURN key(_right) OR key(_d); END
+FUNCTION k_run();   BEGIN RETURN key(_x) OR key(_shift) OR key(_j); END
+FUNCTION k_jump();  BEGIN RETURN key(_z) OR key(_space) OR key(_up) OR key(_w) OR key(_k); END
+FUNCTION k_jump_p();
+BEGIN
+  RETURN key_pressed(_z) OR key_pressed(_space) OR key_pressed(_up) OR key_pressed(_w) OR key_pressed(_k);
+END
+FUNCTION k_fire_p(); BEGIN RETURN key_pressed(_x) OR key_pressed(_j); END
+FUNCTION k_start_p();
+BEGIN
+  RETURN key_pressed(_enter) OR key_pressed(_space) OR key_pressed(_z);
+END
+
+// Colour ci of the current theme
+FUNCTION rect_c(g, x, y, w, h, ci);
+BEGIN
+  gfx_rect(g, x, y, w, h, tc[tb + ci], tc[tb + ci + 1], tc[tb + ci + 2]);
+  RETURN 0;
+END
+
+FUNCTION pix_c(g, x, y, ci);
+BEGIN
+  gfx_pixel(g, x, y, tc[tb + ci], tc[tb + ci + 1], tc[tb + ci + 2]);
+  RETURN 0;
+END
+
+// A small deterministic hash for decorations (the same every time the
+// level is painted)
+FUNCTION hsh(a, b);
+PRIVATE v;
+BEGIN
+  v = (a * 73 + b * 151 + a * b * 7 + 13) % 997;
+  RETURN v;
+END
+
+// Filled ellipse, one row at a time
+FUNCTION ell(g, cx, cy, rx, ry, r, gg, b);
+PRIVATE dy, half;
+BEGIN
+  FOR dy = -ry TO ry
+    half = rx * sqrt(ry * ry - dy * dy) / (ry + 0.0001);
+    gfx_rect(g, cx - half, cy + dy, half * 2 + 1, 1, r, gg, b);
+  END
+  RETURN 0;
+END
+
+// =====================================================================
+// Pixel art: paints `rows` rows of the sprite stored at art[a0] with the
+// palette at pal[pb], at (ox, oy) of graphic g
+// =====================================================================
+
+FUNCTION paint(g, ox, oy, a0, rows, pb);
+PRIVATE r, h, n, c, d;
+BEGIN
+  FOR r = 0 TO rows - 1
+    FOR h = 0 TO 1
+      n = art[a0 + r * 2 + h];
+      FOR c = 0 TO 7
+        d = n % 10;
+        n = n / 10;
+        IF (d > 0)
+          gfx_pixel(g, ox + h * 8 + 7 - c, oy + r, pal[pb + d * 3], pal[pb + d * 3 + 1], pal[pb + d * 3 + 2]);
+        END
+      END
+    END
+  END
+  RETURN 0;
+END
+
+FUNCTION sprite(a0, rows, pb);
+PRIVATE g;
+BEGIN
+  g = new_graphic(16, rows);
+  paint(g, 0, 0, a0, rows, pb);
+  RETURN g;
+END
+
+// =====================================================================
+// Pixel font: builds a BDF font text from the 5x7 glyphs, every pixel
+// drawn as sc x sc, and loads it
+// =====================================================================
+
+FUNCTION hex4(v);
+BEGIN
+  RETURN hexd[(v / 4096) % 16] + hexd[(v / 256) % 16] + hexd[(v / 16) % 16] + hexd[v % 16];
+END
+
+FUNCTION font_start(sc);
+BEGIN
+  fbuf = "STARTFONT 2.1\nFONT rusty" + sc + "\nSIZE " + (7 * sc) + " 75 75\nFONTBOUNDINGBOX " + (5 * sc) + " " + (7 * sc) + " 0 0\n";
+  fbuf = fbuf + "CHARS " + (NGLYPH + 26) + "\n";
+  RETURN 0;
+END
+
+// Adds glyphs i0..i1 to the font text being built (spread over frames:
+// building the whole font in one go is too much work for one frame)
+FUNCTION font_part(sc, i0, i1);
+PRIVATE s, i, r, k, c, n, bits, v, w, code, pass, row_s;
+BEGIN
+  w = 5 * sc;
+  s = "";
+  FOR i = i0 TO min(i1, NGLYPH - 1)
+    FOR pass = 0 TO 1
+      code = fcode[i];
+      IF (pass == 1)
+        // lower case letters use the capitals
+        IF (code < 65 OR code > 90) CONTINUE; END
+        code = code + 32;
+      END
+      s = s + "STARTCHAR g" + code + "\nENCODING " + code + "\nSWIDTH 500 0\nDWIDTH " + (6 * sc) + " 0\nBBX " + w + " " + (7 * sc) + " 0 0\nBITMAP\n";
+      FOR r = 0 TO 6
+        n = fglyph[i * 7 + r];
+        bits = 0;
+        FOR c = 0 TO 4
+          // digit c from the left is worth 10^(4-c)
+          v = (n / pow(10, 4 - c)) % 10;
+          FOR k = 0 TO sc - 1
+            bits = bits * 2 + v;
+          END
+        END
+        // left-align the row in 16 bits
+        bits = bits * pow(2, 16 - w);
+        row_s = hex4(bits) + "\n";
+        FOR k = 1 TO sc
+          s = s + row_s;
+        END
+      END
+      s = s + "ENDCHAR\n";
+    END
+  END
+  fbuf = fbuf + s;
+  RETURN 0;
+END
+
+FUNCTION font_finish();
+BEGIN
+  fbuf = fbuf + "ENDFONT\n";
+  RETURN load_bdf_font_text(fbuf);
+END
+
+// Text with a dark drop shadow (write texts, kept until delete_text)
+FUNCTION shadow_text(f, x, y, al, s, col, sh);
+BEGIN
+  set_color('#1a1020');
+  txt_a = write(f, x + sh, y + sh, al, s);
+  set_color(col);
+  RETURN write(f, x, y, al, s);
+END
+
+// =====================================================================
+// Tiles, drawn with the current theme's colours at (ox, oy) of graphic g
+// (the painted level, or a block's own graphic)
+// =====================================================================
+
+FUNCTION draw_ground(g, ox, oy, tx, ty);
+PRIVATE h, top, lft, rgt, i, bx;
+BEGIN
+  h = hsh(tx, ty);
+  top = 1 - tsolid[tile_at(tx, ty - 1)];
+  IF (ty == 0) top = 0; END
+  lft = 1 - tsolid[tile_at(tx - 1, ty)];
+  rgt = 1 - tsolid[tile_at(tx + 1, ty)];
+  IF (theme == 2)
+    // cloud ground: soft lavender body, white puffs on top
+    rect_c(g, ox, oy, 16, 16, C_DIRT);
+    rect_c(g, ox, oy + 11, 16, 5, C_DIRT_D);
+    rect_c(g, ox + (h % 10), oy + 6 + (h / 10) % 4, 4, 2, C_DIRT_L);
+    IF (lft) rect_c(g, ox, oy, 2, 16, C_DIRT_D); END
+    IF (rgt) rect_c(g, ox + 14, oy, 2, 16, C_DIRT_D); END
+    IF (top)
+      gfx_circle(g, ox + 4, oy + 4, 4, 255, 255, 255);
+      gfx_circle(g, ox + 11, oy + 3, 5, 255, 255, 255);
+      rect_c(g, ox, oy + 4, 16, 3, C_GRASS);
+      IF (lft) gfx_circle(g, ox + 3, oy + 5, 3, 236, 238, 252); END
+    END
+    RETURN 0;
+  END
+  rect_c(g, ox, oy, 16, 16, C_DIRT);
+  // pebbles and cracks
+  rect_c(g, ox + (h % 12) + 1, oy + 5 + (h / 12) % 8, 3, 2, C_DIRT_D);
+  rect_c(g, ox + ((h / 7) % 12) + 1, oy + 4 + (h / 3) % 10, 2, 1, C_DIRT_L);
+  pix_c(g, ox + (h / 5) % 15, oy + 8 + (h / 11) % 7, C_DIRT_D);
+  IF (lft) rect_c(g, ox, oy, 1, 16, C_DIRT_D); END
+  IF (rgt) rect_c(g, ox + 15, oy, 1, 16, C_DIRT_D); END
+  IF (NOT top) RETURN 0; END
+  // grass (meadow) or glowing moss (cavern) on the top edge
+  rect_c(g, ox, oy, 16, 5, C_GRASS);
+  rect_c(g, ox, oy, 16, 1, C_GRASS_L);
+  rect_c(g, ox, oy + 4, 16, 1, C_GRASS_D);
+  FOR i = 0 TO 3
+    bx = ox + (h / (i + 1) + i * 4) % 16;
+    rect_c(g, bx, oy + 5, 1, 1 + (h + i) % 3, C_GRASS_D);
+    pix_c(g, ox + (h * (i + 3)) % 16, oy + 1 + i % 2, C_GRASS_L);
+  END
+  IF (lft) rect_c(g, ox, oy, 1, 6, C_GRASS_D); END
+  IF (rgt) rect_c(g, ox + 15, oy, 1, 6, C_GRASS_D); END
+  RETURN 0;
+END
+
+FUNCTION draw_stone(g, ox, oy);
+BEGIN
+  rect_c(g, ox, oy, 16, 16, C_ST_D);
+  rect_c(g, ox, oy, 15, 15, C_ST_L);
+  rect_c(g, ox + 1, oy + 1, 14, 14, C_ST);
+  rect_c(g, ox + 3, oy + 3, 10, 10, C_ST_L);
+  rect_c(g, ox + 4, oy + 4, 9, 9, C_ST_D);
+  rect_c(g, ox + 4, oy + 4, 8, 8, C_ST);
+  pix_c(g, ox + 2, oy + 2, C_ST_D);
+  pix_c(g, ox + 13, oy + 2, C_ST_D);
+  pix_c(g, ox + 2, oy + 13, C_ST_D);
+  pix_c(g, ox + 13, oy + 13, C_ST_D);
+  RETURN 0;
+END
+
+FUNCTION draw_brick(g, ox, oy);
+PRIVATE r, k, s0, x0, x1;
+BEGIN
+  rect_c(g, ox, oy, 16, 16, C_BR_M);
+  FOR r = 0 TO 3
+    FOR k = 0 TO 2
+      s0 = (r % 2) * 4 + k * 8 - 8;
+      x0 = max(0, s0); x1 = min(16, s0 + 7);
+      IF (x1 > x0)
+        rect_c(g, ox + x0, oy + r * 4, x1 - x0, 3, C_BR);
+        rect_c(g, ox + x0, oy + r * 4, x1 - x0, 1, C_BR_L);
+      END
+    END
+  END
+  RETURN 0;
+END
+
+// Gift crate: a box tied with a ribbon; `glint` 0-3 moves a shine across
+FUNCTION draw_gift(g, ox, oy, glint);
+BEGIN
+  gfx_rect(g, ox, oy, 16, 16, 92, 44, 20);
+  gfx_rect(g, ox + 1, oy + 1, 14, 14, 238, 172, 58);
+  gfx_rect(g, ox + 1, oy + 1, 14, 1, 255, 222, 130);
+  gfx_rect(g, ox + 1, oy + 1, 1, 14, 255, 206, 110);
+  gfx_rect(g, ox + 2, oy + 14, 13, 1, 190, 116, 34);
+  // ribbon
+  gfx_rect(g, ox + 6, oy + 1, 4, 14, 36, 170, 170);
+  gfx_rect(g, ox + 1, oy + 6, 14, 4, 36, 170, 170);
+  gfx_rect(g, ox + 7, oy + 1, 1, 14, 120, 236, 226);
+  gfx_rect(g, ox + 1, oy + 7, 14, 1, 120, 236, 226);
+  // bow knot
+  gfx_rect(g, ox + 5, oy + 5, 6, 6, 20, 120, 128);
+  gfx_rect(g, ox + 6, oy + 6, 4, 4, 250, 250, 240);
+  gfx_rect(g, ox + 7, oy + 7, 2, 2, 60, 200, 196);
+  // moving shine
+  gfx_pixel(g, ox + 2 + glint * 3, oy + 12 - glint * 3, 255, 255, 255);
+  gfx_pixel(g, ox + 3 + glint * 3, oy + 11 - glint * 3, 255, 250, 200);
+  RETURN 0;
+END
+
+FUNCTION draw_used(g, ox, oy);
+BEGIN
+  gfx_rect(g, ox, oy, 16, 16, 60, 36, 26);
+  gfx_rect(g, ox + 1, oy + 1, 14, 14, 146, 104, 70);
+  gfx_rect(g, ox + 1, oy + 1, 14, 1, 176, 132, 92);
+  gfx_rect(g, ox + 2, oy + 14, 13, 1, 110, 74, 48);
+  gfx_pixel(g, ox + 3, oy + 3, 60, 36, 26);
+  gfx_pixel(g, ox + 12, oy + 3, 60, 36, 26);
+  gfx_pixel(g, ox + 3, oy + 12, 60, 36, 26);
+  gfx_pixel(g, ox + 12, oy + 12, 60, 36, 26);
+  RETURN 0;
+END
+
+FUNCTION draw_plank(g, ox, oy, tx);
+BEGIN
+  IF (theme == 2)
+    gfx_circle(g, ox + 4, oy + 4, 4, 250, 250, 255);
+    gfx_circle(g, ox + 11, oy + 4, 4, 250, 250, 255);
+    gfx_rect(g, ox, oy + 5, 16, 3, 214, 214, 244);
+    gfx_rect(g, ox + 2, oy + 2, 3, 1, 255, 255, 255);
+    RETURN 0;
+  END
+  IF (theme == 1)
+    rect_c(g, ox, oy, 16, 5, C_PL);
+    rect_c(g, ox, oy, 16, 1, C_GRASS_L);
+    rect_c(g, ox, oy + 5, 16, 2, C_PL_D);
+    gfx_pixel(g, ox + (tx * 5) % 14 + 1, oy + 2, 230, 255, 255);
+    RETURN 0;
+  END
+  rect_c(g, ox, oy, 16, 5, C_PL);
+  rect_c(g, ox, oy, 16, 1, C_DIRT_L);
+  rect_c(g, ox, oy + 5, 16, 1, C_PL_D);
+  rect_c(g, ox + 15, oy, 1, 5, C_PL_D);
+  pix_c(g, ox + 3 + (tx * 3) % 8, oy + 2, C_PL_D);
+  // bracket
+  rect_c(g, ox + 7, oy + 6, 2, 3, C_PL_D);
+  RETURN 0;
+END
+
+FUNCTION draw_thorn(g, ox, oy, tx);
+PRIVATE i, sx;
+BEGIN
+  IF (theme == 0)
+    rect_c(g, ox, oy + 12, 16, 4, C_GRASS_D);
+    FOR i = 0 TO 3
+      sx = ox + i * 4 + 1;
+      gfx_line(g, sx, oy + 15, sx + 2, oy + 6 + (tx + i) % 3, 60, 90, 40);
+      gfx_pixel(g, sx + 2, oy + 5 + (tx + i) % 3, 240, 236, 210);
+      gfx_pixel(g, sx, oy + 10, 240, 236, 210);
+      gfx_pixel(g, sx + 3, oy + 11, 240, 236, 210);
+    END
+    RETURN 0;
+  END
+  // crystal spikes
+  FOR i = 0 TO 3
+    sx = ox + i * 4;
+    gfx_line(g, sx, oy + 15, sx + 2, oy + 6 + (i % 2) * 3, 150, 230, 255);
+    gfx_line(g, sx + 3, oy + 15, sx + 2, oy + 6 + (i % 2) * 3, 80, 150, 220);
+    gfx_line(g, sx + 1, oy + 15, sx + 2, oy + 8 + (i % 2) * 3, 200, 250, 255);
+    gfx_line(g, sx + 2, oy + 15, sx + 2, oy + 8 + (i % 2) * 3, 120, 190, 240);
+  END
+  RETURN 0;
+END
+
+// Decorations in an empty tile above the ground (never solid)
+FUNCTION draw_decor(g, ox, oy, tx, ty);
+PRIVATE h;
+BEGIN
+  h = hsh(tx * 3, ty + 7);
+  IF (theme == 0)
+    IF (h % 9 == 0)
+      // flower
+      gfx_line(g, ox + 7, oy + 15, ox + 7, oy + 10, 40, 130, 50);
+      gfx_rect(g, ox + 6, oy + 8, 3, 3, 255, 240, 120);
+      gfx_pixel(g, ox + 7, oy + 7, 250, 110, 150);
+      gfx_pixel(g, ox + 5, oy + 9, 250, 110, 150);
+      gfx_pixel(g, ox + 9, oy + 9, 250, 110, 150);
+      gfx_pixel(g, ox + 7, oy + 11, 250, 110, 150);
+    END
+    IF (h % 9 == 4)
+      // clover tuft
+      gfx_circle(g, ox + 5, oy + 13, 2, 70, 160, 60);
+      gfx_circle(g, ox + 8, oy + 12, 2, 90, 180, 70);
+      gfx_circle(g, ox + 11, oy + 13, 2, 70, 160, 60);
+      gfx_pixel(g, ox + 8, oy + 11, 150, 226, 110);
+    END
+    IF (h % 9 == 7)
+      // grass blades
+      gfx_line(g, ox + 4, oy + 15, ox + 3, oy + 11, 60, 150, 50);
+      gfx_line(g, ox + 6, oy + 15, ox + 7, oy + 10, 80, 170, 60);
+      gfx_line(g, ox + 9, oy + 15, ox + 10, oy + 12, 60, 150, 50);
+    END
+    RETURN 0;
+  END
+  IF (theme == 1)
+    IF (h % 7 == 0)
+      // glowing mushroom
+      gfx_rect(g, ox + 7, oy + 11, 2, 5, 220, 210, 190);
+      gfx_circle(g, ox + 8, oy + 10, 4, 80, 230, 210);
+      gfx_rect(g, ox + 4, oy + 11, 9, 2, 16, 12, 34);
+      gfx_pixel(g, ox + 6, oy + 8, 220, 255, 250);
+      gfx_pixel(g, ox + 10, oy + 9, 220, 255, 250);
+    END
+    IF (h % 7 == 3)
+      // crystal cluster
+      gfx_line(g, ox + 5, oy + 15, ox + 4, oy + 9, 200, 120, 255);
+      gfx_line(g, ox + 6, oy + 15, ox + 5, oy + 9, 150, 80, 220);
+      gfx_line(g, ox + 8, oy + 15, ox + 9, oy + 7, 230, 170, 255);
+      gfx_line(g, ox + 9, oy + 15, ox + 10, oy + 7, 170, 100, 230);
+      gfx_line(g, ox + 11, oy + 15, ox + 12, oy + 11, 200, 120, 255);
+    END
+    RETURN 0;
+  END
+  IF (h % 11 == 0)
+    // little star flower of the clouds
+    gfx_pixel(g, ox + 8, oy + 12, 255, 220, 120);
+    gfx_pixel(g, ox + 7, oy + 13, 255, 240, 180);
+    gfx_pixel(g, ox + 9, oy + 13, 255, 240, 180);
+    gfx_pixel(g, ox + 8, oy + 14, 255, 220, 120);
+    gfx_line(g, ox + 8, oy + 15, ox + 8, oy + 15, 120, 180, 120);
+  END
+  RETURN 0;
+END
+
+// Hanging decoration under a ceiling tile (cavern stalactites, roots)
+FUNCTION draw_hang(g, ox, oy, tx, ty);
+PRIVATE h, len;
+BEGIN
+  h = hsh(tx + 5, ty * 3);
+  IF (h % 5 != 0) RETURN 0; END
+  len = 4 + h % 9;
+  gfx_line(g, ox + 7, oy, ox + 8, oy + len, 60, 46, 90);
+  gfx_line(g, ox + 6, oy, ox + 8, oy + len - 1, 72, 56, 100);
+  gfx_line(g, ox + 9, oy, ox + 8, oy + len - 2, 50, 36, 76);
+  IF (h % 3 == 0)
+    gfx_pixel(g, ox + 8, oy + len + 2, 120, 240, 230);
+  END
+  RETURN 0;
+END
+
+// =====================================================================
+// Graphics made once at start-up
+// =====================================================================
+
+FUNCTION make_sprites(part);
+PRIVATE i, g;
+BEGIN
+  IF (part == 0)
+  g_fox[0] = sprite(A_FOX_STAND, 16, P_FOX);
+  g_fox[1] = sprite(A_FOX_RUN1, 16, P_FOX);
+  g_fox[2] = sprite(A_FOX_RUN2, 16, P_FOX);
+  g_fox[3] = sprite(A_FOX_JUMP, 16, P_FOX);
+  RETURN 0;
+  END
+  IF (part == 1)
+  g_big[0] = sprite(A_BIG_STAND, 24, P_FOX);
+  g_big[1] = sprite(A_BIG_RUN1, 24, P_FOX);
+  g_big[2] = sprite(A_BIG_RUN2, 24, P_FOX);
+  g_big[3] = sprite(A_BIG_JUMP, 24, P_FOX);
+  RETURN 0;
+  END
+  IF (part == 2)
+  g_bug[0] = sprite(A_BUG_A, 16, P_BUG);
+  g_bug[1] = sprite(A_BUG_B, 16, P_BUG);
+  g_bug[2] = sprite(A_BUG_FLAT, 16, P_BUG);
+  g_dil[0] = sprite(A_DIL_A, 16, P_DIL);
+  g_dil[1] = sprite(A_DIL_B, 16, P_DIL);
+  g_dil[2] = sprite(A_DIL_BALL, 16, P_DIL);
+  g_bee[0] = sprite(A_BEE_A, 16, P_BEE);
+  g_bee[1] = sprite(A_BEE_B, 16, P_BEE);
+  RETURN 0;
+  END
+  IF (part == 3)
+  g_frog[0] = sprite(A_FROG_SIT, 16, P_FROG);
+  g_frog[1] = sprite(A_FROG_LEAP, 16, P_FROG);
+  g_berry = sprite(A_BERRY, 16, P_ITEM);
+  g_acorn = sprite(A_ACORN, 16, P_NUT);
+  g_gem = sprite(A_GEM, 16, P_GEM);
+  RETURN 0;
+  END
+  IF (part != 4) RETURN 0; END
+
+  // HUD icons: a small glimmer and Rusty's head
+  g_gem_small = new_graphic(8, 8);
+  gfx_line(g_gem_small, 3, 0, 0, 3, 20, 60, 120);
+  gfx_rect(g_gem_small, 2, 1, 4, 5, 60, 186, 255);
+  gfx_rect(g_gem_small, 1, 2, 6, 3, 60, 186, 255);
+  gfx_rect(g_gem_small, 3, 0, 2, 7, 60, 186, 255);
+  gfx_pixel(g_gem_small, 3, 1, 255, 255, 255);
+  gfx_pixel(g_gem_small, 2, 2, 170, 240, 255);
+  g_cursor = new_graphic(16, 10);
+  paint(g_cursor, 0, 0, A_FOX_STAND + 2, 9, P_FOX);
+
+  // acorn shot (8x8)
+  g_shot = new_graphic(8, 8);
+  gfx_rect(g_shot, 1, 0, 6, 3, 138, 94, 52);
+  gfx_rect(g_shot, 0, 1, 8, 2, 138, 94, 52);
+  gfx_rect(g_shot, 1, 3, 6, 3, 206, 134, 62);
+  gfx_rect(g_shot, 2, 6, 4, 1, 206, 134, 62);
+  gfx_pixel(g_shot, 2, 3, 244, 196, 120);
+  gfx_pixel(g_shot, 3, 7, 170, 108, 50);
+
+  // brick chunks
+  FOR i = 0 TO 2
+    g = new_graphic(8, 8);
+    tb = i * 48;
+    rect_c(g, 0, 0, 7, 7, C_BR_M);
+    rect_c(g, 0, 0, 6, 6, C_BR);
+    rect_c(g, 0, 0, 6, 1, C_BR_L);
+    g_debris[i] = g;
+  END
+
+  // sparkles and dust
+  FOR i = 0 TO 3
+    g = new_graphic(9, 9);
+    gfx_rect(g, 4, 4 - i, 1, 1 + i * 2, 255, 255, 220);
+    gfx_rect(g, 4 - i, 4, 1 + i * 2, 1, 255, 255, 220);
+    gfx_pixel(g, 4, 4, 255, 255, 255);
+    IF (i >= 2)
+      gfx_pixel(g, 2, 2, 255, 240, 160);
+      gfx_pixel(g, 6, 6, 255, 240, 160);
+      gfx_pixel(g, 6, 2, 255, 240, 160);
+      gfx_pixel(g, 2, 6, 255, 240, 160);
+    END
+    g_spark[i] = g;
+  END
+  g_puff = new_graphic(12, 12);
+  gfx_circle(g_puff, 6, 6, 5, 250, 250, 240);
+  gfx_circle(g_puff, 4, 5, 3, 255, 255, 255);
+
+  // lantern (checkpoint): unlit and lit, 16 x 32
+  FOR i = 0 TO 1
+    g = new_graphic(16, 32);
+    gfx_rect(g, 7, 12, 2, 20, 70, 50, 40);
+    gfx_rect(g, 7, 12, 1, 20, 110, 80, 60);
+    gfx_rect(g, 4, 29, 8, 3, 70, 50, 40);
+    gfx_rect(g, 3, 1, 10, 2, 60, 44, 36);
+    gfx_rect(g, 5, 0, 6, 1, 60, 44, 36);
+    gfx_rect(g, 4, 3, 8, 8, 60, 44, 36);
+    IF (i == 0)
+      gfx_rect(g, 5, 4, 6, 6, 90, 100, 120);
+      gfx_rect(g, 5, 4, 2, 2, 140, 150, 170);
+    ELSE
+      gfx_rect(g, 5, 4, 6, 6, 255, 214, 90);
+      gfx_rect(g, 6, 5, 4, 4, 255, 250, 200);
+    END
+    gfx_rect(g, 3, 11, 10, 1, 60, 44, 36);
+    g_lamp[i] = g;
+  END
+  g_glow = new_graphic(40, 40);
+  gfx_fill_rgba(g_glow, 0, 0, 0, 0);
+  FOR i = 0 TO 5
+    gfx_circle(g_glow, 20, 20, 19 - i * 3, 255, 200 + i * 9, 90 + i * 25);
+  END
+
+  // Waystone: two stone pillars under an arch (48 x 64); the swirl inside
+  // is drawn by its own process
+  g_goal = new_graphic(48, 64);
+  FOR i = 0 TO 30
+    gfx_circle(g_goal, 24 + cos(i * 6000) * 17, 21 - sin(i * 6000) * 15, 6, 90, 86, 110);
+  END
+  FOR i = 0 TO 30
+    gfx_circle(g_goal, 24 + cos(i * 6000) * 18, 20 - sin(i * 6000) * 16, 3, 150, 146, 170);
+  END
+  gfx_rect(g_goal, 1, 20, 11, 44, 90, 86, 110);
+  gfx_rect(g_goal, 36, 20, 11, 44, 90, 86, 110);
+  gfx_rect(g_goal, 2, 20, 3, 44, 150, 146, 170);
+  gfx_rect(g_goal, 37, 20, 3, 44, 150, 146, 170);
+  gfx_rect(g_goal, 10, 20, 1, 44, 60, 56, 80);
+  gfx_rect(g_goal, 46, 20, 1, 44, 60, 56, 80);
+  FOR i = 0 TO 4
+    gfx_rect(g_goal, 1, 28 + i * 7, 11, 1, 70, 66, 90);
+    gfx_rect(g_goal, 36, 31 + i * 7, 11, 1, 70, 66, 90);
+  END
+  gfx_rect(g_goal, 0, 58, 48, 6, 70, 66, 90);
+  gfx_rect(g_goal, 0, 58, 48, 1, 150, 146, 170);
+  gfx_rect(g_goal, 20, 1, 8, 7, 40, 150, 150);
+  gfx_rect(g_goal, 21, 2, 6, 5, 60, 210, 200);
+  gfx_rect(g_goal, 22, 3, 3, 2, 190, 255, 245);
+  RETURN 0;
+END
+
+// The inside of the Waystone arch: black made transparent by painting the
+// swirl on a separate graphic each frame is too costly, so the arch keeps
+// a dark opening and the portal process draws a glowing oval over it.
+FUNCTION make_portal();
+PRIVATE g, i;
+BEGIN
+  g = new_graphic(26, 44);
+  FOR i = 0 TO 5
+    ell(g, 13, 22, 12 - i * 2, 21 - i * 3, 60 + i * 30, 40 + i * 36, 160 + i * 16);
+  END
+  RETURN g;
+END
+
+// Block graphics for one theme (bricks, gift crates, used crates)
+FUNCTION make_blocks(th);
+PRIVATE i;
+BEGIN
+  theme = th; tb = th * 48;
+  g_brick[th] = new_graphic(16, 16);
+  draw_brick(g_brick[th], 0, 0);
+  g_used[th] = new_graphic(16, 16);
+  draw_used(g_used[th], 0, 0);
+  IF (th == 0)
+    FOR i = 0 TO 3
+      g_gift[i] = new_graphic(16, 16);
+      draw_gift(g_gift[i], 0, 0, i);
+    END
+  END
+  // moving platform, 48 x 8
+  g_mp[th] = new_graphic(48, 8);
+  IF (th == 2)
+    FOR i = 0 TO 5
+      gfx_circle(g_mp[th], 4 + i * 8, 4, 4, 250, 250, 255);
+    END
+    gfx_rect(g_mp[th], 2, 5, 44, 3, 206, 206, 240);
+  ELSE
+    rect_c(g_mp[th], 0, 0, 48, 8, C_PL_D);
+    rect_c(g_mp[th], 1, 0, 46, 6, C_PL);
+    rect_c(g_mp[th], 1, 0, 46, 1, C_GRASS_L);
+    FOR i = 1 TO 2
+      rect_c(g_mp[th], i * 16, 1, 1, 5, C_PL_D);
+    END
+  END
+  RETURN 0;
+END
+
+// Far sky plane (400 x 240, wraps) and the nearer plane (480 x 240, wraps)
+// Far sky plane (400 x 240, wraps) in three slices of work: part 0 the
+// gradient, parts 1 and 2 half of the shapes each
+FUNCTION make_far(th, part);
+PRIVATE g, y, t, i, k, cx, cy, w, hgt, dy, r, gg, b;
+BEGIN
+  theme = th; tb = th * 48;
+  IF (part == 0)
+    g = new_graphic(400, 240);
+    g_far[th] = g;
+    FOR y = 0 TO 119
+      t = y * 0.0084;
+      r = tc[tb + C_SKY1] + (tc[tb + C_SKY2] - tc[tb + C_SKY1]) * t;
+      gg = tc[tb + C_SKY1 + 1] + (tc[tb + C_SKY2 + 1] - tc[tb + C_SKY1 + 1]) * t;
+      b = tc[tb + C_SKY1 + 2] + (tc[tb + C_SKY2 + 2] - tc[tb + C_SKY1 + 2]) * t;
+      gfx_rect(g, 0, y * 2, 400, 2, r, gg, b);
+    END
+    IF (th == 2)
+      FOR i = 0 TO 4
+        gfx_circle(g, 300, 120, 44 - i * 6, 255, 214 + i * 8, 190 + i * 12);
+      END
+    END
+    RETURN 0;
+  END
+  g = g_far[th];
+  IF (th == 0)
+    // distant mountains with snow, then a few clouds
+    IF (part == 1)
+      FOR i = 0 TO 5
+        cx = i * 70 + (i % 2) * 20;
+        hgt = 60 + (i * 37) % 50;
+        FOR k = -1 TO 1
+          IF (cx + k * 400 + hgt * 1.3 >= 0 AND cx + k * 400 - hgt * 1.3 < 400)
+            FOR dy = 0 TO hgt
+              w = dy * 1.3;
+              IF (dy < hgt / 5)
+                gfx_rect(g, cx + k * 400 - w, 190 - hgt + dy, w * 2 + 1, 1, 236, 244, 255);
+              ELSE
+                gfx_rect(g, cx + k * 400 - w, 190 - hgt + dy, w * 2 + 1, 1, 136 + dy / 4, 166 + dy / 5, 214);
+              END
+            END
+          END
+        END
+      END
+    ELSE
+      gfx_rect(g, 0, 190, 400, 50, 150, 190, 226);
+      FOR i = 0 TO 3
+        cx = 40 + i * 100; cy = 30 + (i * 23) % 40;
+        FOR k = -1 TO 1
+          IF (cx + k * 400 + 30 >= 0 AND cx + k * 400 - 30 < 400)
+            ell(g, cx + k * 400, cy, 22, 7, 255, 255, 255);
+            ell(g, cx + k * 400 + 12, cy - 5, 12, 7, 255, 255, 255);
+            ell(g, cx + k * 400 - 10, cy - 3, 10, 5, 255, 255, 255);
+          END
+        END
+      END
+    END
+  END
+  IF (th == 1)
+    // faint far crystals in the dark, and far rock teeth
+    IF (part == 1)
+      FOR i = 0 TO 70
+        cx = (i * 137) % 400; cy = (i * 71) % 230;
+        gfx_pixel(g, cx, cy, 70 + (i % 4) * 30, 60 + (i % 3) * 40, 130 + (i % 5) * 20);
+      END
+    END
+    FOR i = 0 TO 9
+      IF (i % 2 == part - 1)
+        cx = i * 40 + 10; hgt = 30 + (i * 29) % 60;
+        FOR dy = 0 TO hgt
+          w = (hgt - dy) * 0.25;
+          gfx_rect(g, cx - w, dy, w * 2 + 1, 1, 34, 24, 56);
+          gfx_rect(g, cx + 17 - w, 240 - dy, w * 2 + 1, 1, 30, 22, 50);
+        END
+      END
+    END
+  END
+  IF (th == 2)
+    // a low haze of clouds
+    FOR i = 0 TO 9
+      IF (i % 2 == part - 1)
+        cx = i * 44; cy = 200 + (i * 13) % 20;
+        FOR k = -1 TO 1
+          IF (cx + k * 400 + 34 >= 0 AND cx + k * 400 - 34 < 400)
+            ell(g, cx + k * 400, cy, 34, 16, 255, 226, 232);
+          END
+        END
+      END
+    END
+    IF (part == 2) gfx_rect(g, 0, 214, 400, 26, 255, 226, 232); END
+  END
+  RETURN 0;
+END
+
+// Nearer plane (480 x 240, wraps), in two parts
+FUNCTION make_mid(th, part);
+PRIVATE g, i, k, cx, cy;
+BEGIN
+  theme = th; tb = th * 48;
+  IF (part == 0)
+    g = new_graphic(480, 240);
+    g_mid[th] = g;
+  ELSE
+    g = g_mid[th];
+  END
+  IF (th == 0)
+    IF (part == 0)
+      // rolling hills
+      FOR i = 0 TO 5
+        cx = i * 80 + 30; cy = 196 + (i * 17) % 20;
+        FOR k = -1 TO 1
+          IF (cx + k * 480 + 70 >= 0 AND cx + k * 480 - 70 < 480)
+            ell(g, cx + k * 480, cy, 70, 36, 96, 178, 96);
+            ell(g, cx + k * 480, cy + 2, 66, 32, 112, 196, 104);
+          END
+        END
+      END
+    ELSE
+      // round trees
+      FOR i = 0 TO 6
+        cx = i * 68 + 20; cy = 172 + (i * 11) % 18;
+        FOR k = -1 TO 1
+          gfx_rect(g, cx + k * 480 - 2, cy, 5, 22, 110, 76, 50);
+          gfx_circle(g, cx + k * 480, cy - 6, 12, 60, 140, 70);
+          gfx_circle(g, cx + k * 480 - 4, cy - 9, 7, 84, 166, 84);
+        END
+      END
+      gfx_rect(g, 0, 214, 480, 26, 112, 196, 104);
+    END
+  END
+  IF (th == 1)
+    // rock columns in the gloom, with glowing veins
+    FOR i = part * 3 TO part * 3 + 2
+      cx = i * 80 + 40;
+      FOR k = -1 TO 1
+        gfx_rect(g, cx + k * 480 - 14, 0, 28, 240, 42, 30, 70);
+        gfx_rect(g, cx + k * 480 - 10, 0, 6, 240, 52, 38, 84);
+        gfx_line(g, cx + k * 480 + 4, 40 + i * 20, cx + k * 480 - 3, 90 + i * 20, 70, 170, 170);
+        gfx_line(g, cx + k * 480 - 3, 90 + i * 20, cx + k * 480 + 6, 140 + i * 10, 70, 170, 170);
+      END
+    END
+  END
+  IF (th == 2)
+    // big soft clouds
+    FOR i = part * 3 TO part * 3 + 2
+      cx = i * 80 + 20; cy = 150 + (i * 31) % 50;
+      FOR k = -1 TO 1
+        IF (cx + k * 480 + 40 >= 0 AND cx + k * 480 - 40 < 480)
+          ell(g, cx + k * 480, cy, 30, 12, 255, 244, 250);
+          ell(g, cx + k * 480 + 16, cy - 8, 18, 12, 255, 250, 252);
+          ell(g, cx + k * 480 - 14, cy - 4, 14, 9, 255, 250, 252);
+          gfx_rect(g, cx + k * 480 - 26, cy + 6, 52, 3, 236, 214, 236);
+        END
+      END
+    END
+  END
+  RETURN 0;
+END
+
+FUNCTION make_hud();
+BEGIN
+  g_hud = new_graphic(400, 20);
+  gfx_fill_rgba(g_hud, 16, 10, 34, 62);
+  gfx_rect(g_hud, 0, 19, 400, 1, 255, 210, 120);
+  g_logo_bg = new_graphic(304, 146);
+  gfx_fill_rgba(g_logo_bg, 20, 12, 40, 52);
+  gfx_rect_outline(g_logo_bg, 0, 0, 304, 146, 255, 210, 120);
+  RETURN 0;
+END
+
+// Paints the static part of the level into one wide graphic, made once
+// per level at start-up (the tiles never change; bricks and crates are
+// processes). Done a strip at a time: paint_part paints rows ty of
+// columns x0..x1.
+FUNCTION paint_start(n);
+BEGIN
+  g_lvl[n - 1] = new_graphic(lw * 16, 240);
+  RETURN 0;
+END
+
+FUNCTION paint_part(n, ty, x0, x1);
+PRIVATE g, tx, t, ox, oy;
+BEGIN
+  g = g_lvl[n - 1];
+  oy = ty * 16;
+  FOR tx = x0 TO min(x1, lw - 1)
+    t = tm[ty * lw + tx];
+    ox = tx * 16;
+    IF (t == T_GROUND) draw_ground(g, ox, oy, tx, ty); END
+    IF (t == T_STONE) draw_stone(g, ox, oy); END
+    IF (t == T_USED) draw_used(g, ox, oy); END
+    IF (t == T_PLANK) draw_plank(g, ox, oy, tx); END
+    IF (t == T_THORN) draw_thorn(g, ox, oy, tx); END
+    IF (t == T_AIR AND ty < LH - 1)
+      IF (tm[(ty + 1) * lw + tx] == T_GROUND) draw_decor(g, ox, oy, tx, ty); END
+    END
+    IF (t == T_AIR AND ty > 0 AND theme == 1)
+      IF (tm[(ty - 1) * lw + tx] == T_GROUND) draw_hang(g, ox, oy, tx, ty); END
+    END
+  END
+  RETURN 0;
+END
+
+// =====================================================================
+// Sound: effects from recipes, and the tunes (all original)
+// =====================================================================
+
+FUNCTION make_sounds();
+BEGIN
+  s_jump = sfx_tone(wave_square, 330, 760, 120, 24);
+  s_jumpb = sfx_tone(wave_square, 240, 560, 150, 26);
+  s_stomp = sfx_tone(wave_square, 760, 160, 110, 36);
+  s_kick = sfx_tone(wave_triangle, 1000, 260, 90, 50);
+  s_gem = sfx_tone(wave_square, 1318, 1318, 50, 22);
+  s_gem2 = sfx_tone(wave_square, 1976, 1976, 140, 22);
+  s_bump = sfx_tone(wave_triangle, 150, 80, 80, 70);
+  s_brick = sfx_tone(wave_noise, 2600, 250, 260, 44);
+  s_sprout = sfx_tone(wave_triangle, 260, 1040, 420, 42);
+  s_note = sfx_tone(wave_square, 523, 523, 80, 26);
+  s_bell = sfx_tone(wave_sine, 1046, 1040, 380, 40);
+  s_hurt = sfx_tone(wave_saw, 560, 140, 320, 34);
+  s_throw = sfx_tone(wave_triangle, 640, 1200, 80, 36);
+  s_poof = sfx_tone(wave_noise, 1500, 400, 120, 34);
+  s_tick = sfx_tone(wave_square, 1568, 1568, 24, 16);
+  s_wall = sfx_tone(wave_triangle, 220, 110, 60, 60);
+  s_hurry = sfx_tone(wave_square, 880, 880, 110, 26);
+  s_select = sfx_tone(wave_square, 660, 990, 70, 24);
+  s_land = sfx_tone(wave_sine, 140, 70, 50, 26);
+  s_spring = sfx_tone(wave_sine, 300, 900, 160, 36);
+  RETURN 0;
+END
+
+FUNCTION make_songs();
+BEGIN
+  // Title: a bright call that climbs and resolves
+  m_title = song_new(150);
+  song_track(m_title, inst_square,
+    "G4 . C5 . E5 . G5 . - . E5 . G5 . C6 . | B5 . A5 . G5 . E5 . F5 . D5 . - . . . |" +
+    "E5 . G5 . A5 . B5 . C6 . B5 . A5 . G5 . | A5 . F5 . D5 . B4 . C5 - - - . . . . ", 26);
+  song_track(m_title, inst_bass,
+    "C3 . G3 . C3 . G3 . C3 . G3 . C3 . G3 . | G2 . D3 . G2 . D3 . F3 . C4 . G3 . D4 . |" +
+    "A2 . E3 . A2 . E3 . F3 . C4 . F3 . C4 . | G2 . D3 . G2 . D3 . C3 . G3 . C3 . . . ", 50);
+  song_track(m_title, inst_drums, "k . h . s . h h k . h . s . h . ", 30);
+
+  // Clover Meadow: bouncy, C major
+  m_theme[0] = song_new(140);
+  song_track(m_theme[0], inst_square,
+    "E5 . G5 . C6 . G5 E5 . D5 . C5 . D5 E5 . | F5 . A5 . G5 . F5 E5 . D5 - - . . . . |" +
+    "E5 . G5 . C6 . D6 C6 . B5 . A5 . G5 . . | A5 . G5 . E5 . D5 . C5 - - - . . . . |" +
+    "A5 . . A5 G5 . E5 . F5 . . F5 E5 . C5 . | D5 . . D5 E5 . F5 . G5 - - - . . . . |" +
+    "A5 . . A5 B5 . C6 . D6 . C6 . B5 . G5 . | C6 - - . G5 . E5 . C5 - - - . . . . ", 22);
+  song_track(m_theme[0], inst_bass,
+    "C3 . C4 . G3 . C4 . C3 . C4 . G3 . C4 . | F3 . F4 . C4 . F4 . G3 . G4 . D4 . G4 . |" +
+    "C3 . C4 . G3 . C4 . A2 . A3 . E3 . A3 . | F3 . F4 . G3 . G4 . C3 . G3 . C4 . . . |" +
+    "F3 . F4 . C4 . F4 . D3 . D4 . A3 . D4 . | G3 . G4 . D4 . G4 . G3 . B3 . D4 . G4 . |" +
+    "A2 . A3 . E3 . A3 . F3 . F4 . G3 . G4 . | C3 . G3 . C4 . G3 . C3 . . . C3 . . . ", 46);
+  song_track(m_theme[0], inst_pluck,
+    ". . E4 . . . E4 . . . E4 . . . E4 . | . . A4 . . . A4 . . . B4 . . . B4 . |" +
+    ". . E4 . . . E4 . . . C4 . . . C4 . | . . A4 . . . B4 . . . E4 . . . . . |" +
+    ". . A4 . . . A4 . . . F4 . . . F4 . | . . B4 . . . B4 . . . D4 . . . D4 . |" +
+    ". . C4 . . . C4 . . . A4 . . . B4 . | . . E4 . . . G4 . . . E4 . . . . . ", 18);
+  song_track(m_theme[0], inst_drums, "k . h . s . h . k k h . s . h h ", 28);
+
+  // Glowroot Cavern: slow plucks in A minor over a pad
+  m_theme[1] = song_new(112);
+  song_track(m_theme[1], inst_pluck,
+    "A4 . . C5 . . E5 . D5 . C5 . B4 . . . | G4 . . B4 . . D5 . C5 . B4 . A4 . . . |" +
+    "F4 . . A4 . . C5 . E5 . D5 . C5 . B4 . | A4 - - - . . E4 . A4 . . . . . . . ", 40);
+  song_track(m_theme[1], inst_bass,
+    "A2 . . . A2 . . . A2 . . . G2 . . . | G2 . . . G2 . . . G2 . . . F2 . . . |" +
+    "F2 . . . F2 . . . E2 . . . E2 . . . | A2 . . . E2 . . . A2 . . . . . . . ", 48);
+  song_track(m_theme[1], inst_pad,
+    "C4 - - - - - - - - - - - - - - - | B3 - - - - - - - - - - - - - - - |" +
+    "A3 - - - - - - - G#3 - - - - - - - | A3 - - - - - - - - - - - - - - - ", 18);
+  song_track(m_theme[1], inst_drums, "k . . h . . s . k . . h . . s h ", 18);
+
+  // Cloudtop Heights: airy, F major, with running plucks
+  m_theme[2] = song_new(128);
+  song_track(m_theme[2], inst_triangle,
+    "F5 . A5 . C6 . A5 . G5 . E5 . C5 . . . | D5 . F5 . A5 . G5 . F5 . E5 . D5 . . . |" +
+    "Bb4 . D5 . F5 . D5 . C5 . E5 . G5 . . . | F5 - - . A5 - - . F5 - - - . . . . ", 40);
+  song_track(m_theme[2], inst_pluck,
+    "F4 A4 C5 A4 F4 A4 C5 A4 F4 A4 C5 A4 F4 A4 C5 A4 | D4 F4 A4 F4 D4 F4 A4 F4 D4 F4 A4 F4 D4 F4 A4 F4 |" +
+    "Bb3 D4 F4 D4 Bb3 D4 F4 D4 C4 E4 G4 E4 C4 E4 G4 E4 | F4 A4 C5 A4 F4 A4 C5 A4 F4 A4 C5 A4 F4 . . . ", 16);
+  song_track(m_theme[2], inst_bass,
+    "F3 . . . C4 . . . F3 . . . C4 . . . | D3 . . . A3 . . . D3 . . . A3 . . . |" +
+    "Bb2 . . . F3 . . . C3 . . . G3 . . . | F3 . . . C3 . . . F3 . . . . . . . ", 46);
+  song_track(m_theme[2], inst_drums, "k . h . s . h . k . h . s . h h ", 22);
+
+  // Waystone reached
+  m_clear = song_new(160);
+  song_track(m_clear, inst_square, "C5 E5 G5 C6 . G5 C6 - E6 - - - - - . . | D6 - C6 - G5 - C6 - - - - - . . . . ", 30);
+  song_track(m_clear, inst_bass, "C3 . . . G3 . . . C4 - - - . . . . | G3 . . . E3 . . . C3 - - - . . . . ", 50);
+  song_track(m_clear, inst_drums, "k . . . s . . . k . . . s . s s | k . . . s . . . k . . . . . . . ", 30);
+
+  // Lost a life: a falling, diminished line
+  m_die = song_new(130);
+  song_track(m_die, inst_triangle, "G5 . E5 . C#5 . A#4 . G4 - - - - - . . | . . . . . . . . . . . . . . . . ", 44);
+  song_track(m_die, inst_bass, "G3 - - - E3 - - - C#3 - - - - - . . | . . . . . . . . . . . . . . . . ", 40);
+
+  // Game over
+  m_over = song_new(90);
+  song_track(m_over, inst_triangle, "A4 - - - G4 - - - F4 - - - E4 - - - | D4 - - - E4 - - - A3 - - - - - - - ", 40);
+  song_track(m_over, inst_pad, "C4 - - - - - - - A3 - - - - - - - | F3 - - - E3 - - - A3 - - - - - - - ", 20);
+
+  // All three Waystones
+  m_win = song_new(140);
+  song_track(m_win, inst_square,
+    "C5 . E5 . G5 . C6 . G5 . E5 . G5 - - . | F5 . A5 . C6 . F6 . E6 . C6 . A5 - - . |" +
+    "D5 . F5 . A5 . D6 . C6 . B5 . G5 . . . | C6 - - - G5 - - - C6 - - - . . . . ", 26);
+  song_track(m_win, inst_bass,
+    "C3 . G3 . C4 . G3 . C3 . G3 . C4 . G3 . | F3 . C4 . F4 . C4 . F3 . C4 . F4 . C4 . |" +
+    "G2 . D3 . G3 . D3 . G2 . D3 . G3 . D3 . | C3 . G3 . C4 . G3 . C3 . . . . . . . ", 48);
+  song_track(m_win, inst_drums, "k . h . s . h . k k h . s . h h ", 28);
+  RETURN 0;
+END
+
+// Plays a little arpeggio of s_note: kind 0 power-up, 1 extra life,
+// 2 lantern, 3 sling, 4 shrink
+PROCESS jingle(kind);
+PRIVATE i, n, p[7];
+BEGIN
+  IF (kind == 0) n = 6; p[0] = 100; p[1] = 126; p[2] = 150; p[3] = 200; p[4] = 252; p[5] = 300; END
+  IF (kind == 1) n = 6; p[0] = 150; p[1] = 189; p[2] = 252; p[3] = 200; p[4] = 252; p[5] = 300; END
+  IF (kind == 2) n = 3; p[0] = 200; p[1] = 252; p[2] = 300; END
+  IF (kind == 3) n = 5; p[0] = 134; p[1] = 168; p[2] = 200; p[3] = 268; p[4] = 336; END
+  IF (kind == 4) n = 4; p[0] = 200; p[1] = 150; p[2] = 126; p[3] = 100; END
+  FOR i = 0 TO n - 1
+    IF (kind == 2)
+      play_sound(s_bell, 60, p[i], 0);
+    ELSE
+      play_sound(s_note, 70, p[i], 0);
+    END
+    FRAME(400);
+  END
+END
+
+// The two-note glimmer chirp
+PROCESS chirp();
+BEGIN
+  play_sound(s_gem, 70, 100, 0);
+  FRAME(300);
+  play_sound(s_gem2, 70, 100, 0);
+END
+
+// =====================================================================
+// Level building: tile coordinates, rows 0 (top) to 14 (bottom); the
+// ground is normally rows 13-14, so things stand on row 12
+// =====================================================================
+
+FUNCTION lv_new(w, th);
+PRIVATE i;
+BEGIN
+  lw = w; theme = th; tb = th * 48;
+  FOR i = 0 TO w * LH - 1
+    tm[i] = 0;
+    bump[i] = 0;
+  END
+  ne = 0; goal_tx = w - 8; check_tx = 0;
+  RETURN 0;
+END
+
+FUNCTION fill(x1, y1, x2, y2, t);
+PRIVATE tx, ty;
+BEGIN
+  FOR ty = y1 TO y2
+    FOR tx = x1 TO x2
+      IF (tx >= 0 AND tx < lw AND ty >= 0 AND ty < LH) tm[ty * lw + tx] = t; END
+    END
+  END
+  RETURN 0;
+END
+
+FUNCTION gnd(x1, x2);     BEGIN RETURN fill(x1, 13, x2, 14, T_GROUND); END
+FUNCTION hill(x1, x2, top); BEGIN RETURN fill(x1, top, x2, 14, T_GROUND); END
+FUNCTION isl(x1, x2, top); BEGIN RETURN fill(x1, top, x2, top + 1, T_GROUND); END
+FUNCTION row(x, y, n, t); BEGIN RETURN fill(x, y, x + n - 1, y, t); END
+FUNCTION put(x, y, t);    BEGIN RETURN fill(x, y, x, y, t); END
+
+// Stone steps standing on row `base`: up to the right, or down
+FUNCTION stair_up(x, n, base);
+PRIVATE i;
+BEGIN
+  FOR i = 0 TO n - 1
+    fill(x + i, base - i, x + i, base, T_STONE);
+  END
+  RETURN 0;
+END
+
+FUNCTION stair_dn(x, n, base);
+PRIVATE i;
+BEGIN
+  FOR i = 0 TO n - 1
+    fill(x + i, base - (n - 1 - i), x + i, base, T_STONE);
+  END
+  RETURN 0;
+END
+
+FUNCTION ent(k, x, y);
+BEGIN
+  IF (ne < 120)
+    e_k[ne] = k; e_x[ne] = x; e_y[ne] = y; e_p[ne] = 0;
+    ne++;
+  END
+  IF (k == E_START) start_tx = x; start_ty = y; END
+  IF (k == E_GOAL) goal_tx = x; END
+  IF (k == E_CHECK) check_tx = x; check_ty = y; END
+  RETURN ne - 1;
+END
+
+FUNCTION gems(x, y, n);
+PRIVATE i;
+BEGIN
+  FOR i = 0 TO n - 1
+    ent(E_GEM, x + i, y);
+  END
+  RETURN 0;
+END
+
+// ---------------------------------------------------------------------
+// Stage 1: CLOVER MEADOW - learn to run, jump, stomp and open crates
+// ---------------------------------------------------------------------
+FUNCTION level1();
+BEGIN
+  lv_new(190, 0);
+  ent(E_START, 3, 12);
+  gnd(0, 45);
+  gems(8, 10, 3);
+  put(13, 9, T_GIFT);
+  row(17, 9, 5, T_BRICK);
+  put(18, 9, T_GIFTP);
+  put(20, 9, T_GIFT);
+  put(19, 5, T_GIFT);
+  ent(E_BUG, 25, 12);
+  fill(28, 11, 29, 12, T_STONE);
+  ent(E_BUG, 33, 12);
+  ent(E_BUG, 35, 12);
+  fill(39, 10, 40, 12, T_STONE);
+  gems(43, 9, 2);
+  // first pit: 46-48
+  gnd(49, 85);
+  row(52, 9, 6, T_BRICK);
+  put(54, 9, T_GIFT);
+  gems(55, 8, 3);
+  ent(E_DIL, 58, 12);
+  hill(62, 68, 11);
+  ent(E_BUG, 66, 10);
+  row(63, 7, 3, T_BRICK);
+  put(64, 7, T_GIFT);
+  gems(70, 11, 3);
+  ent(E_CHECK, 75, 12);
+  ent(E_FROG, 81, 12);
+  // wide pit crossed on planks: 86-93
+  row(87, 10, 3, T_PLANK);
+  row(91, 9, 2, T_PLANK);
+  gems(87, 8, 3);
+  gnd(94, 130);
+  ent(E_BEE, 99, 9);
+  row(101, 9, 2, T_BRICK);
+  put(103, 9, T_GIFTP);
+  row(104, 9, 2, T_BRICK);
+  ent(E_BUG, 105, 12);
+  ent(E_BUG, 107, 12);
+  ent(E_DIL, 112, 12);
+  fill(115, 11, 116, 12, T_STONE);
+  ent(E_BEE, 120, 8);
+  row(121, 9, 4, T_PLANK);
+  gems(121, 8, 4);
+  ent(E_FROG, 127, 12);
+  // steps up, a gap, steps down
+  stair_up(131, 4, 12);
+  gnd(131, 134);
+  gnd(137, 172);
+  stair_dn(137, 4, 12);
+  ent(E_BUG, 146, 12);
+  ent(E_BEE, 150, 9);
+  row(151, 9, 3, T_BRICK);
+  put(152, 9, T_GIFT);
+  ent(E_DIL, 155, 12);
+  stair_up(158, 6, 12);
+  fill(164, 7, 164, 12, T_STONE);
+  gems(160, 5, 3);
+  ent(E_GOAL, 172, 12);
+  gnd(172, 189);
+  RETURN 0;
+END
+
+// ---------------------------------------------------------------------
+// Stage 2: GLOWROOT CAVERN - low ceilings, thorns, frogs and a lift
+// ---------------------------------------------------------------------
+FUNCTION level2();
+BEGIN
+  lv_new(196, 1);
+  fill(0, 0, 195, 1, T_GROUND);
+  ent(E_START, 3, 12);
+  gnd(0, 30);
+  gems(6, 11, 4);
+  row(10, 8, 5, T_BRICK);
+  put(12, 8, T_GIFTP);
+  ent(E_FROG, 18, 12);
+  hill(22, 25, 10);
+  ent(E_BUG, 28, 12);
+  // a low tunnel
+  gnd(31, 60);
+  fill(32, 2, 44, 6, T_GROUND);
+  put(35, 9, T_GIFT);
+  gems(37, 11, 5);
+  ent(E_DIL, 42, 12);
+  // thorn trench under a plank bridge
+  fill(47, 13, 51, 13, T_THORN);
+  row(46, 9, 7, T_PLANK);
+  gems(47, 8, 5);
+  ent(E_BUG, 55, 12);
+  ent(E_BUG, 57, 12);
+  // pit 61-62
+  gnd(63, 100);
+  ent(E_CHECK, 66, 12);
+  fill(70, 2, 72, 9, T_GROUND);
+  ent(E_FROG, 76, 12);
+  row(78, 9, 3, T_BRICK);
+  put(79, 9, T_GIFT);
+  row(82, 6, 3, T_BRICK);
+  put(83, 6, T_GIFTP);
+  ent(E_DIL, 87, 12);
+  ent(E_DIL, 92, 12);
+  gems(95, 10, 3);
+  // a lift over the chasm 101-110
+  e_p[ent(E_MPV, 102, 11)] = 64;
+  e_p[ent(E_MPV, 107, 9)] = 48;
+  gnd(111, 150);
+  ent(E_BEE, 115, 8);
+  fill(120, 13, 125, 13, T_THORN);
+  put(122, 10, T_STONE);
+  put(123, 10, T_STONE);
+  gems(122, 8, 2);
+  ent(E_FROG, 130, 12);
+  ent(E_FROG, 134, 12);
+  row(137, 9, 6, T_BRICK);
+  put(139, 9, T_GIFT);
+  put(141, 9, T_GIFT);
+  ent(E_BUG, 141, 12);
+  ent(E_BEE, 146, 7);
+  // pit 151-153
+  gnd(154, 195);
+  stair_up(160, 4, 12);
+  gnd(164, 195);
+  ent(E_DIL, 170, 12);
+  ent(E_FROG, 174, 12);
+  ent(E_GOAL, 180, 12);
+  RETURN 0;
+END
+
+// ---------------------------------------------------------------------
+// Stage 3: CLOUDTOP HEIGHTS - islands in the sky, moving clouds, wings
+// ---------------------------------------------------------------------
+FUNCTION level3();
+BEGIN
+  lv_new(186, 2);
+  isl(0, 12, 12);
+  ent(E_START, 3, 11);
+  gems(5, 8, 3);
+  row(9, 8, 3, T_BRICK);
+  put(10, 8, T_GIFTP);
+  isl(16, 21, 11);
+  ent(E_BEE, 19, 7);
+  isl(25, 31, 12);
+  ent(E_BUG, 28, 11);
+  row(34, 10, 3, T_PLANK);
+  row(39, 8, 3, T_PLANK);
+  gems(39, 7, 3);
+  isl(44, 53, 12);
+  ent(E_FROG, 50, 11);
+  put(47, 8, T_GIFT);
+  e_p[ent(E_MPH, 56, 11)] = 96;
+  isl(67, 81, 12);
+  ent(E_CHECK, 69, 11);
+  ent(E_DIL, 77, 11);
+  row(72, 8, 4, T_BRICK);
+  put(73, 8, T_GIFT);
+  put(74, 8, T_GIFTP);
+  ent(E_BEE, 85, 8);
+  e_p[ent(E_BEEV, 89, 8)] = 40;
+  row(84, 10, 2, T_PLANK);
+  row(88, 9, 2, T_PLANK);
+  row(92, 10, 2, T_PLANK);
+  gems(88, 7, 2);
+  isl(96, 106, 12);
+  ent(E_BUG, 100, 11);
+  ent(E_BUG, 102, 11);
+  e_p[ent(E_MPV, 109, 11)] = 56;
+  isl(112, 119, 9);
+  ent(E_FROG, 116, 8);
+  gems(113, 6, 3);
+  e_p[ent(E_MPH, 122, 9)] = 80;
+  isl(131, 141, 12);
+  ent(E_BEE, 134, 8);
+  stair_up(138, 3, 11);
+  ent(E_BEE, 144, 7);
+  e_p[ent(E_BEEV, 148, 8)] = 48;
+  row(144, 10, 2, T_PLANK);
+  row(148, 9, 2, T_PLANK);
+  isl(152, 185, 12);
+  ent(E_DIL, 158, 11);
+  row(161, 8, 4, T_BRICK);
+  put(162, 8, T_GIFT);
+  ent(E_FROG, 166, 11);
+  ent(E_GOAL, 172, 11);
+  RETURN 0;
+END
+
+FUNCTION build_level(n);
+BEGIN
+  IF (n == 1) level1(); END
+  IF (n == 2) level2(); END
+  IF (n == 3) level3(); END
+  RETURN 0;
+END
+
+// =====================================================================
+// Scoring and pick-ups
+// =====================================================================
+
+FUNCTION one_up(px, py);
+BEGIN
+  lives++;
+  jingle(1);
+  popup(px, py, "1UP");
+  RETURN 0;
+END
+
+FUNCTION collect_gem();
+BEGIN
+  glims++;
+  score += 50;
+  stat_gems++;
+  chirp();
+  IF (glims >= 100)
+    glims -= 100;
+    one_up(pfx, pfy - ph - 8);
+  END
+  RETURN 0;
+END
+
+// A stomp: points climb while Rusty keeps bouncing without landing
+FUNCTION stomp_points(px, py);
+PRIVATE pts;
+BEGIN
+  pchain++;
+  stat_stomps++;
+  IF (pchain >= 8)
+    one_up(px, py);
+    RETURN 0;
+  END
+  pts = chain_pts[pchain - 1];
+  score += pts;
+  popup(px, py, "" + pts);
+  RETURN 0;
+END
+
+FUNCTION power_up(kind, px, py);
+BEGIN
+  stat_powers++;
+  score += 1000;
+  popup(px, py, "1000");
+  IF (kind == 1) psling = 1; END
+  IF (pbig == 0)
+    pgrow = 40;
+    jingle(0);
+  ELSE
+    jingle(3);
+  END
+  RETURN 0;
+END
+
+FUNCTION hurt_player();
+BEGIN
+  IF (pinv > 0 OR pdead OR game_state != ST_PLAY OR pgrow != 0) RETURN 0; END
+  IF (pbig)
+    pgrow = -36;
+    psling = 0;
+    play_sound(s_hurt, 80, 100, 0);
+    RETURN 0;
+  END
+  kill_player(0);
+  RETURN 0;
+END
+
+FUNCTION kill_player(fell);
+BEGIN
+  IF (pdead OR game_state != ST_PLAY) RETURN 0; END
+  pdead = 1 + fell;
+  freeze = 1;
+  stat_deaths++;
+  play_sound(s_hurt, 90, 80, 0);
+  song_play(m_die, 0);
+  RETURN 0;
+END
+
+// The head of the player hits tile (tx, ty) from below
+FUNCTION hit_block(tx, ty);
+PRIVATE i, t, cx, cy;
+BEGIN
+  IF (tx < 0 OR tx >= lw OR ty < 0 OR ty >= LH) RETURN 0; END
+  i = ty * lw + tx;
+  t = tm[i];
+  cx = tx * 16 + 8; cy = ty * 16;
+  bump_x = cx; bump_y = cy; bump_t = 3;
+  IF (t == T_BRICK)
+    IF (pbig)
+      tm[i] = T_AIR;
+      debris(cx - 4, cy + 4, -1.2, -5.0);
+      debris(cx + 4, cy + 4, 1.2, -5.0);
+      debris(cx - 4, cy + 12, -1.0, -3.2);
+      debris(cx + 4, cy + 12, 1.0, -3.2);
+      score += 50;
+      stat_bricks++;
+      play_sound(s_brick, 80, 100, 0);
+    ELSE
+      bump[i] = 10;
+      play_sound(s_bump, 90, 100, 0);
+    END
+    RETURN 0;
+  END
+  IF (t == T_GIFT)
+    tm[i] = T_USED; bump[i] = 10;
+    stat_blocks++;
+    gem_pop(cx, cy - 8);
+    play_sound(s_bump, 60, 130, 0);
+    RETURN 0;
+  END
+  IF (t == T_GIFTP)
+    tm[i] = T_USED; bump[i] = 10;
+    stat_blocks++;
+    IF (pbig) item(1, cx, cy + 8); ELSE item(0, cx, cy + 8); END
+    play_sound(s_sprout, 80, 100, 0);
+    RETURN 0;
+  END
+  play_sound(s_bump, 70, 100, 0);
+  RETURN 0;
+END
+
+// =====================================================================
+// Player physics (globals: pfx, pfy are the feet; the box is phw to each
+// side and ph tall)
+// =====================================================================
+
+FUNCTION player_move();
+PRIVATE dir, run, maxs, g, nx, ny, ex, top, bot, mid, xl, xr, i, sl, sr, tx, ty, ov, was, t1, t2;
+BEGIN
+  IF (pon >= 0)
+    pfx += mp_dx[pon];
+    pfy = mp_y[pon];
+  END
+  dir = 0; run = 0;
+  IF (auto_walk)
+    IF (pfx < goal_tx * 16 + 16) dir = 1; END
+  ELSE
+    IF (k_left()) dir -= 1; END
+    IF (k_right()) dir += 1; END
+    run = k_run();
+  END
+  maxs = 1.5;
+  IF (run) maxs = 2.6; END
+  IF (auto_walk) maxs = 1.0; END
+  IF (dir != 0) pface = dir; END
+  pskid = 0;
+  IF (pground)
+    IF (dir != 0)
+      IF (pvx * dir < 0)
+        pvx += dir * 0.24;
+        pskid = 1;
+      ELSE
+        IF (pvx * dir < maxs)
+          pvx += dir * (0.09 + run * 0.03);
+          IF (pvx * dir > maxs) pvx = dir * maxs; END
+        ELSE
+          pvx -= dir * 0.05;
+        END
+      END
+    ELSE
+      IF (pvx > 0) pvx = max(0, pvx - 0.11); ELSE pvx = min(0, pvx + 0.11); END
+    END
+  ELSE
+    IF (dir != 0)
+      IF (pvx * dir < maxs)
+        pvx += dir * 0.075;
+        IF (pvx * dir > maxs) pvx = dir * maxs; END
+      END
+    END
+  END
+
+  // jump: buffered press, coyote time, variable height
+  IF (NOT auto_walk)
+    IF (k_jump_p()) pbuf = 8; END
+  END
+  IF (pground) pcoy = 7; END
+  IF (pbuf > 0 AND pcoy > 0)
+    pvy = -(5.5 + iabs(pvx) * 0.25);
+    pground = 0; pcoy = 0; pbuf = 0; pjump = 1; pon = -1;
+    pstretch = 1;
+    IF (pbig) play_sound(s_jumpb, 70, 100, 0); ELSE play_sound(s_jump, 70, 100, 0); END
+  END
+  IF (pbuf > 0) pbuf -= 1; END
+  IF (pcoy > 0 AND NOT pground) pcoy -= 1; END
+  IF (NOT k_jump()) pjump = 0; END
+  g = 0.42;
+  IF (pvy < 0)
+    g = 0.6;
+    IF (pjump) g = 0.22; END
+  END
+  pvy += g;
+  IF (pvy > 6.5) pvy = 6.5; END
+
+  // move across, then stop at walls
+  nx = pfx + pvx;
+  top = pfy - ph + 1; bot = pfy - 1; mid = pfy - ph * 0.5;
+  IF (pvx > 0)
+    ex = nx + phw;
+    IF (solid_px(ex, top) OR solid_px(ex, mid) OR solid_px(ex, bot))
+      nx = tcell(ex) * 16 - phw - 0.01;
+      pvx = 0;
+    END
+  ELSE
+    IF (pvx < 0)
+      ex = nx - phw;
+      IF (solid_px(ex, top) OR solid_px(ex, mid) OR solid_px(ex, bot))
+        nx = (tcell(ex) + 1) * 16 + phw + 0.01;
+        pvx = 0;
+      END
+    END
+  END
+  pfx = nx;
+
+  // move up or down: land, or bump the head
+  ny = pfy + pvy;
+  xl = pfx - phw + 1; xr = pfx + phw - 1;
+  was = pground;
+  pground = 0; pon = -1;
+  IF (pvy >= 0)
+    IF (land_px(xl, ny, pfy) OR land_px(xr, ny, pfy))
+      ny = tcell(ny) * 16;
+      pvy = 0; pground = 1;
+    ELSE
+      FOR i = 0 TO nmp - 1
+        IF (pfx + phw > mp_x[i] AND pfx - phw < mp_x[i] + mp_w[i] AND pfy <= mp_y[i] + 1 AND ny >= mp_y[i])
+          ny = mp_y[i]; pvy = 0; pground = 1; pon = i;
+        END
+      END
+    END
+  ELSE
+    top = ny - ph;
+    sl = solid_px(xl, top); sr = solid_px(xr, top);
+    IF (sl AND NOT sr)
+      // only the left corner catches: slide past it when it is just a corner
+      ov = (tcell(xl) + 1) * 16 - xl;
+      IF (ov <= 5 AND NOT solid_px(xr + ov, top))
+        pfx += ov; sl = 0;
+      END
+    END
+    IF (sr AND NOT sl)
+      ov = xr - tcell(xr) * 16 + 1;
+      IF (ov <= 5 AND NOT solid_px(xl - ov, top))
+        pfx -= ov; sr = 0;
+      END
+    END
+    IF (sl OR sr)
+      tx = tcell(pfx);
+      ty = tcell(top);
+      IF (NOT tsolid[tile_at(tx, ty)])
+        IF (sl) tx = tcell(xl); ELSE tx = tcell(xr); END
+      END
+      hit_block(tx, ty);
+      ny = (ty + 1) * 16 + ph;
+      pvy = 0.5; pjump = 0;
+    END
+  END
+  pfy = ny;
+  IF (pground AND NOT was)
+    pchain = 0;
+    pland = 1;
+  END
+
+  // thorns sting (they fill the lower part of their tile)
+  t1 = tile_at(tcell(xl), tcell(pfy - 1));
+  t2 = tile_at(tcell(xr), tcell(pfy - 1));
+  IF ((t1 == T_THORN OR t2 == T_THORN) AND (floor(pfy - 1) % 16) >= 5)
+    IF (pinv == 0 AND pgrow == 0)
+      hurt_player();
+      IF (NOT pdead)
+        pvy = -4.5; pground = 0;
+      END
+    END
+  END
+  IF (pfy > 250 + ph) kill_player(1); END
+  RETURN 0;
+END
+
+// 0 no touch, 1 stomped from above, 2 touched from a side; the enemy is
+// centred on (ex, ey) and reaches ew / eh to each side
+FUNCTION ptouch(ex, ey, ew, eh);
+BEGIN
+  IF (pdead OR pgrow != 0) RETURN 0; END
+  IF (iabs(pfx - ex) >= phw + ew) RETURN 0; END
+  IF (pfy <= ey - eh OR pfy - ph >= ey + eh) RETURN 0; END
+  IF (pvy > 0 AND pfy - pvy <= ey - eh + 6) RETURN 1; END
+  RETURN 2;
+END
+
+FUNCTION stomp_bounce();
+BEGIN
+  IF (k_jump()) pvy = -6.2; pjump = 1; ELSE pvy = -4.2; pjump = 0; END
+  pground = 0;
+  RETURN 0;
+END
+
+FUNCTION set_camera();
+BEGIN
+  IF (camx < 0) camx = 0; END
+  IF (camx > lw * 16 - SW) camx = lw * 16 - SW; END
+  icam = int(camx);
+  scroll[1].x0 = icam;
+  scroll[0].x0 = icam / 2;
+  scroll[0].x1 = icam / 5;
+  RETURN 0;
+END
+
+// =====================================================================
+// Rusty
+// =====================================================================
+
+PROCESS player();
+PRIVATE anim = 0.0; fr = 0; dead_t = 0; dvy = 0.0; shoot_cd = 0; hh = 8; sy = 100.0; sx = 100.0;
+  flick = 0; skid_t = 0; goal_t = 0;
+BEGIN
+  ctype = c_scroll; cnumber = c_1; z = -5; priority = 5;
+  LOOP
+    IF (paused)
+      FRAME;
+      CONTINUE;
+    END
+    IF (pdead)
+      // knocked out: pops up and falls off the screen
+      dead_t++;
+      graph = g_fox[3]; flags = 2; scale_x = 100; scale_y = 100; alpha = 100;
+      IF (pdead == 1)
+        IF (dead_t == 30) dvy = -5.5; END
+        IF (dead_t > 30)
+          pfy += dvy;
+          dvy += 0.25;
+        END
+        x = int(pfx); y = int(pfy) - 8;
+      END
+      IF (dead_t > 170) game_state = ST_DEAD; END
+      FRAME;
+      CONTINUE;
+    END
+    IF (pgrow != 0)
+      // growing (pgrow > 0) or shrinking (< 0): flicker between sizes
+      flick = (iabs(pgrow) / 4) % 2;
+      IF (pgrow > 0)
+        pgrow -= 1;
+        freeze = 1;
+        IF (pgrow == 0) pbig = 1; freeze = 0; flick = 1; END
+      ELSE
+        pgrow += 1;
+        freeze = 1;
+        flick = 1 - flick;
+        IF (pgrow == 0) pbig = 0; freeze = 0; pinv = 110; flick = 0; END
+      END
+      IF (flick) graph = g_big[0]; hh = 12; ELSE graph = g_fox[0]; hh = 8; END
+      x = int(pfx); y = int(pfy) - hh;
+      FRAME;
+      CONTINUE;
+    END
+    IF (pbig) phw = 6; ph = 22; ELSE phw = 5; ph = 14; END
+
+    // reaching the Waystone
+    IF (game_state == ST_PLAY AND pfx >= goal_tx * 16 - 6 AND goal_tx > 0)
+      game_state = ST_GOAL;
+      auto_walk = 1;
+      freeze = 1;
+      song_play(m_clear, 0);
+      stat_clears++;
+    END
+
+    player_move();
+
+    // acorns
+    IF (shoot_cd > 0) shoot_cd -= 1; END
+    IF (psling AND pbig AND NOT auto_walk AND k_fire_p() AND shoot_cd == 0 AND nacorn < 2)
+      acorn_shot(pfx + pface * 8, pfy - ph + 8, pface);
+      shoot_cd = 12;
+      play_sound(s_throw, 70, 100, 0);
+    END
+
+    // looks
+    IF (pground)
+      IF (iabs(pvx) > 0.15)
+        anim += 0.08 + iabs(pvx) * 0.07;
+        fr = 1 + int(anim) % 2;
+      ELSE
+        fr = 0; anim = 0;
+      END
+      IF (pskid)
+        skid_t++;
+        IF (skid_t % 6 == 1) dust(pfx - pface * 4, pfy - 3); END
+      ELSE
+        skid_t = 0;
+      END
+    ELSE
+      fr = 3;
+    END
+    IF (pbig) graph = g_big[fr]; hh = 12; ELSE graph = g_fox[fr]; hh = 8; END
+    IF (pface < 0) flags = 1; ELSE flags = 0; END
+    IF (pstretch) sy = 116; sx = 88; pstretch = 0; END
+    IF (pland) sy = 82; sx = 116; pland = 0; dust(pfx - 5, pfy - 3); dust(pfx + 5, pfy - 3); END
+    sx += (100 - sx) * 0.2;
+    sy += (100 - sy) * 0.2;
+    scale_x = int(sx); scale_y = int(sy);
+    x = int(pfx);
+    y = int(pfy - hh * sy * 0.01);
+    alpha = 100;
+    IF (pinv > 0)
+      pinv -= 1;
+      IF ((pinv / 3) % 2 == 0) alpha = 25; END
+    END
+
+    // the Waystone: stop in the arch and celebrate
+    IF (game_state == ST_GOAL)
+      goal_t++;
+      IF (pfx >= goal_tx * 16 + 16)
+        pfx = goal_tx * 16 + 16;
+        pvx = 0;
+        IF (goal_t % 40 == 20 AND pground AND goal_t < 180) pvy = -4.5; pground = 0; pjump = 1; END
+        IF (goal_t % 7 == 0) sparkle(pfx + rand(-20, 20), pfy - rand(4, 50)); END
+      END
+    END
+
+    // camera: a little look-ahead in the direction Rusty runs
+    IF (iabs(pvx) > 0.5) plook += (pface * 40 - plook) * 0.03; END
+    camx = pfx - SW / 2 + plook;
+    set_camera();
+    FRAME;
+  END
+END
+
+// =====================================================================
+// Blocks: bricks and gift crates (the bump animation, breaking, opening)
+// =====================================================================
+
+PROCESS block(tx, ty);
+PRIVATE i, t, k, by;
+BEGIN
+  ctype = c_scroll; cnumber = c_1; z = 0;
+  i = ty * lw + tx;
+  x = tx * 16 + 8; by = ty * 16 + 8; y = by;
+  LOOP
+    t = tm[i];
+    IF (t == T_AIR) BREAK; END
+    IF (t == T_BRICK) graph = g_brick[theme]; END
+    IF (t == T_GIFT OR t == T_GIFTP)
+      k = (fc / 5 + tx * 3) % 24;
+      IF (k > 3) k = 0; END
+      graph = g_gift[k];
+    END
+    IF (t == T_USED) graph = g_used[theme]; END
+    IF (bump[i] > 0)
+      y = by - (10 - iabs(bump[i] * 2 - 10)) * 0.6;
+      bump[i] -= 1;
+    ELSE
+      y = by;
+    END
+    FRAME;
+  END
+END
+
+PROCESS debris(x, y, vx, vy);
+PRIVATE fx, fy;
+BEGIN
+  ctype = c_scroll; cnumber = c_1; z = -8;
+  graph = g_debris[theme];
+  fx = x; fy = y;
+  LOOP
+    IF (NOT paused)
+      fx += vx; fy += vy; vy += 0.3;
+      angle += 20000 * sign(vx);
+      x = int(fx); y = int(fy);
+      IF (fy > 260) BREAK; END
+    END
+    FRAME;
+  END
+END
+
+// A glimmer that jumps out of a crate and is counted at once
+PROCESS gem_pop(x, y);
+PRIVATE fy, vy = -5.0, t = 0;
+BEGIN
+  ctype = c_scroll; cnumber = c_1; z = 1;
+  graph = g_gem; fy = y;
+  collect_gem();
+  LOOP
+    t++;
+    fy += vy; vy += 0.35;
+    y = int(fy);
+    scale_x = int(iabs(cos(t * 24000)) * 100);
+    IF (t >= 26)
+      sparkle(x, y);
+      popup(x, y - 8, "50");
+      BREAK;
+    END
+    FRAME;
+  END
+END
+
+// =====================================================================
+// Glimmers, power-ups and effects
+// =====================================================================
+
+PROCESS gem(x, y);
+PRIVATE t = 0;
+BEGIN
+  ctype = c_scroll; cnumber = c_1; z = 2;
+  graph = g_gem;
+  t = x / 4;
+  LOOP
+    IF (x > icam - 24 AND x < icam + SW + 24)
+      IF (NOT paused) t++; END
+      scale_x = max(12, int(iabs(cos(t * 2600)) * 100));
+      IF (NOT pdead)
+        IF (iabs(x - pfx) < phw + 5 AND y + 6 > pfy - ph AND y - 6 < pfy)
+          collect_gem();
+          sparkle(x, y);
+          BREAK;
+        END
+      END
+      IF (bump_t > 0 AND iabs(x - bump_x) < 10 AND iabs(y + 8 - bump_y) < 6)
+        gem_pop(x, y);
+        BREAK;
+      END
+    END
+    FRAME;
+  END
+END
+
+// kind 0: SUN BERRY (rolls away), 1: ACORN SLING (stays and bobs)
+PROCESS item(kind, x, y);
+PRIVATE t = 0, fx, fy, vx = 1.0, vy = 0.0;
+BEGIN
+  ctype = c_scroll; cnumber = c_1; z = 10;
+  IF (kind == 0) graph = g_berry; ELSE graph = g_acorn; END
+  fx = x; fy = y;
+  // rise out of the crate
+  WHILE (t < 32)
+    IF (NOT paused AND NOT freeze) t++; fy -= 0.5; END
+    y = int(fy);
+    FRAME;
+  END
+  z = -1;
+  IF (pfx > fx) vx = -1.0; END
+  LOOP
+    IF (NOT paused AND NOT freeze)
+      t++;
+      IF (kind == 0)
+        fw_x = fx; fw_y = fy; fw_vx = vx; fw_vy = vy;
+        foe_walk(0);
+        fx = fw_x; fy = fw_y; vx = fw_vx; vy = fw_vy;
+        IF (bump_t > 0 AND iabs(fx - bump_x) < 14 AND iabs(fy + 8 - bump_y) < 4) vy = -4.5; END
+      ELSE
+        fy = y + sin(t * 6000) * 0.4;
+      END
+      IF (fy > 270) BREAK; END
+    END
+    x = int(fx); y = int(fy);
+    IF (NOT pdead AND iabs(fx - pfx) < phw + 7 AND fy + 7 > pfy - ph AND fy - 7 < pfy)
+      power_up(kind, x, y - 12);
+      sparkle(x, y);
+      BREAK;
+    END
+    FRAME;
+  END
+END
+
+PROCESS sparkle(x, y);
+PRIVATE t = 0;
+BEGIN
+  ctype = c_scroll; cnumber = c_1; z = -9;
+  FROM t = 0 TO 15;
+    graph = g_spark[max(0, 3 - iabs(t / 2 - 3))];
+    FRAME;
+  END
+END
+
+PROCESS dust(x, y);
+PRIVATE t = 0;
+BEGIN
+  ctype = c_scroll; cnumber = c_1; z = -6;
+  graph = g_puff;
+  FROM t = 0 TO 13;
+    size = 40 + t * 5;
+    alpha = 70 - t * 5;
+    IF (t % 3 == 0) y -= 1; END
+    FRAME;
+  END
+END
+
+// Score text rising from a point of the level
+PROCESS popup(px, py, s);
+PRIVATE t = 0;
+BEGIN
+  FROM t = 0 TO 44;
+    IF (NOT paused)
+      set_color('#1a1020');
+      write_later(px - icam + 1, py - t / 2 + 1, s);
+      set_color('#ffffff');
+      IF (s == "1UP") set_color('#7dffb0'); END
+      write_later(px - icam, py - t / 2, s);
+    END
+    FRAME;
+  END
+END
+
+FUNCTION write_later(px, py, s);
+BEGIN
+  text(px - 6, py, s);
+  RETURN 0;
+END
+
+PROCESS acorn_shot(x, y, dir);
+PRIVATE fx, fy, vx, vy = -1.0, t = 0, i;
+BEGIN
+  ctype = c_scroll; cnumber = c_1; z = -4;
+  graph = g_shot;
+  nacorn++;
+  fx = x; fy = y; vx = dir * 3.8;
+  LOOP
+    IF (NOT paused)
+      t++;
+      vy += 0.28;
+      fy += vy;
+      IF (vy > 0 AND (solid_px(fx - 3, fy + 4) OR solid_px(fx + 3, fy + 4)))
+        fy = tcell(fy + 4) * 16 - 4;
+        vy = -3.0;
+      END
+      fx += vx;
+      angle -= 30000 * dir;
+      x = int(fx); y = int(fy);
+      IF (solid_px(fx + dir * 4, fy) OR t > 110 OR fy > 250 OR x < icam - 16 OR x > icam + SW + 16)
+        IF (t <= 110 AND fy <= 250) dust(x, y); play_sound(s_poof, 40, 140, 0); END
+        BREAK;
+      END
+      FOR i = 0 TO NFOE - 1
+        IF (f_on[i] AND iabs(f_x[i] - fx) < 11 AND iabs(f_y[i] - fy) < 11)
+          f_hit[i] = 1;
+          score += 200;
+          popup(f_x[i], f_y[i] - 12, "200");
+          play_sound(s_kick, 70, 120, 0);
+          BREAK;
+        END
+      END
+      IF (i < NFOE) BREAK; END
+    END
+    FRAME;
+  END
+  nacorn -= 1;
+END
+
+// =====================================================================
+// Enemies. One process type for all four kinds so they share the
+// register (f_on / f_x / f_y / f_hit) that stomps, acorns, rolling balls
+// and bumped blocks use.
+//   E_BUG  MOSSBUG  walks, walks off ledges, stomp flattens it
+//   E_DIL  ROLLO    walks and turns at ledges; stomp: it curls up into a
+//                   ball; touch the ball: it rolls, knocking out others
+//   E_BEE  BUZZWING flies to and fro (E_BEEV: up and down)
+//   E_FROG HOPFROG  waits, then leaps towards Rusty
+// =====================================================================
+
+// Walking for enemies and the berry, on the scratch globals fw_*:
+// centre (fw_x, fw_y), 16x16. Turns at walls, and at ledges if `edges`.
+FUNCTION foe_walk(edges);
+PRIVATE ny, dir, ex;
+BEGIN
+  fw_turn = 0;
+  fw_vy += 0.3;
+  IF (fw_vy > 5) fw_vy = 5; END
+  ny = fw_y + fw_vy;
+  fw_g = 0;
+  IF (fw_vy >= 0)
+    IF (land_px(fw_x - 5, ny + 8, fw_y + 8) OR land_px(fw_x + 5, ny + 8, fw_y + 8))
+      ny = tcell(ny + 8) * 16 - 8;
+      fw_vy = 0; fw_g = 1;
+    END
+  END
+  fw_y = ny;
+  IF (fw_vx != 0)
+    dir = sign(fw_vx);
+    ex = fw_x + fw_vx + dir * 7;
+    IF (solid_px(ex, fw_y - 4) OR solid_px(ex, fw_y + 6))
+      fw_vx = -fw_vx; fw_turn = 1;
+    ELSE
+      IF (edges AND fw_g AND NOT land_px(ex, fw_y + 10, fw_y + 8))
+        fw_vx = -fw_vx; fw_turn = 1;
+      ELSE
+        fw_x += fw_vx;
+      END
+    END
+  END
+  RETURN 0;
+END
+
+PROCESS foe(kind, x, y, p);
+PRIVATE fx, fy, vx = -0.5, vy = 0.0, st = 0, t = 0, active = 0, i, hx, hy, tch, wait = 60, grace = 0, dir = 1;
+BEGIN
+  ctype = c_scroll; cnumber = c_1; z = -2;
+  fx = x; fy = y; hx = x; hy = y;
+  FOR i = 0 TO NFOE - 1
+    IF (f_on[i] == 0 AND fslot < 0) fslot = i; END
+  END
+  IF (fslot < 0) RETURN; END
+  f_on[fslot] = 1; f_hit[fslot] = 0; f_x[fslot] = fx; f_y[fslot] = fy;
+  IF (kind == E_BUG) graph = g_bug[0]; END
+  IF (kind == E_DIL) graph = g_dil[0]; vx = -0.45; END
+  IF (kind == E_BEE OR kind == E_BEEV) graph = g_bee[0]; END
+  IF (kind == E_FROG) graph = g_frog[0]; vx = 0; wait = rand(40, 90); END
+  LOOP
+    IF (paused OR freeze)
+      FRAME;
+      CONTINUE;
+    END
+    IF (NOT active)
+      IF (fx < icam + SW + 40 AND fx > icam - 60)
+        active = 1;
+      ELSE
+        FRAME;
+        CONTINUE;
+      END
+    END
+    t++;
+
+    // knocked out by an acorn, a rolling ball or a bumped block
+    IF (f_hit[fslot] OR (bump_t > 0 AND st < 8 AND iabs(fx - bump_x) < 14 AND iabs(fy + 8 - bump_y) < 4))
+      IF (f_hit[fslot] == 0) score += 100; popup(fx, fy - 12, "100"); play_sound(s_kick, 60, 90, 0); END
+      f_on[fslot] = 0; f_hit[fslot] = 0;
+      st = 9; vy = -3.5; vx = sign(fx - pfx) * 1.0; flags = 2; angle = 0;
+      IF (kind == E_DIL) graph = g_dil[2]; END
+    END
+
+    IF (st == 9)
+      // falling off the screen upside down
+      fx += vx; fy += vy; vy += 0.25;
+      x = int(fx); y = int(fy);
+      IF (fy > 280) BREAK; END
+      FRAME;
+      CONTINUE;
+    END
+    IF (st == 8)
+      // flattened, fades away
+      wait -= 1;
+      IF (wait < 10) alpha = wait * 10; END
+      IF (wait <= 0) BREAK; END
+      FRAME;
+      CONTINUE;
+    END
+
+    IF (kind == E_BUG)
+      fw_x = fx; fw_y = fy; fw_vx = vx; fw_vy = vy;
+      foe_walk(0);
+      fx = fw_x; fy = fw_y; vx = fw_vx; vy = fw_vy;
+      graph = g_bug[(t / 10) % 2];
+      tch = ptouch(fx, fy + 1, 6, 7);
+      IF (tch == 1)
+        st = 8; wait = 30; graph = g_bug[2]; f_on[fslot] = 0;
+        stomp_bounce(); stomp_points(fx, fy - 12);
+        play_sound(s_stomp, 80, 100, 0);
+        dust(fx, fy + 4);
+      END
+      IF (tch == 2) hurt_player(); END
+    END
+
+    IF (kind == E_DIL)
+      IF (st == 0)
+        fw_x = fx; fw_y = fy; fw_vx = vx; fw_vy = vy;
+        foe_walk(1);
+        fx = fw_x; fy = fw_y; vx = fw_vx; vy = fw_vy;
+        graph = g_dil[(t / 12) % 2];
+        IF (vx < 0) flags = 1; ELSE flags = 0; END
+        angle = 0;
+        tch = ptouch(fx, fy + 2, 6, 6);
+        IF (tch == 1)
+          st = 1; wait = 420; graph = g_dil[2]; vx = 0;
+          stomp_bounce(); stomp_points(fx, fy - 12);
+          play_sound(s_stomp, 80, 90, 0);
+        END
+        IF (tch == 2) hurt_player(); END
+      ELSE
+        IF (st == 1)
+          // curled up: wobbles, then uncurls
+          wait -= 1;
+          fw_x = fx; fw_y = fy; fw_vx = 0; fw_vy = vy;
+          foe_walk(0);
+          fy = fw_y; vy = fw_vy;
+          angle = 0;
+          IF (wait < 90) angle = sin(t * 60000) * 12000; END
+          IF (wait <= 0) st = 0; vx = -0.45; IF (pfx > fx) vx = 0.45; END END
+          tch = ptouch(fx, fy, 7, 7);
+          IF (tch != 0)
+            // kick it
+            st = 2; grace = 16;
+            dir = 1; IF (pfx > fx) dir = -1; END
+            vx = dir * 3.4;
+            stat_kicks++;
+            play_sound(s_kick, 80, 100, 0);
+            score += 100;
+            IF (tch == 1) stomp_bounce(); END
+          END
+        ELSE
+          // rolling ball
+          IF (grace > 0) grace -= 1; END
+          fw_x = fx; fw_y = fy; fw_vx = vx; fw_vy = vy;
+          foe_walk(0);
+          fx = fw_x; fy = fw_y; vx = fw_vx; vy = fw_vy;
+          IF (fw_turn AND fx > icam - 8 AND fx < icam + SW + 8) play_sound(s_wall, 70, 100, 0); END
+          angle -= int(vx * 9000);
+          FOR i = 0 TO NFOE - 1
+            IF (i != fslot AND f_on[i] AND iabs(f_x[i] - fx) < 13 AND iabs(f_y[i] - fy) < 13)
+              f_hit[i] = 1;
+              score += 200;
+              popup(f_x[i], f_y[i] - 12, "200");
+              play_sound(s_kick, 70, 110, 0);
+            END
+          END
+          tch = ptouch(fx, fy, 7, 7);
+          IF (tch == 1)
+            st = 1; wait = 420; vx = 0;
+            stomp_bounce();
+            play_sound(s_stomp, 80, 90, 0);
+          END
+          IF (tch == 2 AND grace == 0) hurt_player(); END
+          IF (fx < icam - 200 OR fx > icam + SW + 200) f_on[fslot] = 0; BREAK; END
+        END
+      END
+      IF (fy > 270) f_on[fslot] = 0; BREAK; END
+    END
+
+    IF (kind == E_BEE OR kind == E_BEEV)
+      graph = g_bee[(t / 4) % 2];
+      IF (kind == E_BEE)
+        fx = hx + sin(t * 900) * 40;
+        fy = hy + sin(t * 3600) * 5;
+        IF (cos(t * 900) < 0) flags = 1; ELSE flags = 0; END
+      ELSE
+        fy = hy + sin(t * 1400) * p;
+        fx = hx + sin(t * 3000) * 3;
+        IF (pfx < fx) flags = 1; ELSE flags = 0; END
+      END
+      tch = ptouch(fx, fy, 6, 6);
+      IF (tch == 1)
+        f_on[fslot] = 0;
+        st = 9; vy = -1.0; vx = 0; flags += 2;
+        stomp_bounce(); stomp_points(fx, fy - 12);
+        play_sound(s_stomp, 80, 110, 0);
+      END
+      IF (tch == 2) hurt_player(); END
+    END
+
+    IF (kind == E_FROG)
+      fw_x = fx; fw_y = fy; fw_vx = vx; fw_vy = vy;
+      foe_walk(0);
+      fx = fw_x; fy = fw_y; vx = fw_vx; vy = fw_vy;
+      IF (fw_g)
+        vx = 0;
+        graph = g_frog[0];
+        wait -= 1;
+        IF (wait <= 0)
+          dir = -1;
+          IF (pfx > fx) dir = 1; END
+          IF (iabs(pfx - fx) > 180) dir = rand(0, 1) * 2 - 1; END
+          vx = dir * 1.3; vy = -5.0;
+          wait = rand(50, 100);
+        END
+      ELSE
+        graph = g_frog[1];
+      END
+      tch = ptouch(fx, fy + 2, 6, 6);
+      IF (tch == 1)
+        st = 8; wait = 30; f_on[fslot] = 0;
+        scale_y = 45; y = int(fy) + 4;
+        stomp_bounce(); stomp_points(fx, fy - 12);
+        play_sound(s_stomp, 80, 100, 0);
+        FRAME;
+        CONTINUE;
+      END
+      IF (tch == 2) hurt_player(); END
+      IF (fy > 270) f_on[fslot] = 0; BREAK; END
+    END
+
+    IF (kind == E_BUG AND fy > 270) f_on[fslot] = 0; BREAK; END
+    x = int(fx); y = int(fy);
+    f_x[fslot] = fx; f_y[fslot] = fy;
+    FRAME;
+  END
+  f_on[fslot] = 0;
+END
+
+// =====================================================================
+// Level furniture: lanterns (checkpoints), the Waystone, moving clouds
+// =====================================================================
+
+PROCESS lamp(x, y, tx);
+PRIVATE lit = 0, gl = 0;
+BEGIN
+  ctype = c_scroll; cnumber = c_1; z = 4;
+  graph = g_lamp[0];
+  IF (cp == tx) lit = 1; END
+  LOOP
+    IF (NOT lit AND NOT pdead AND pfx >= x - 4)
+      lit = 1; cp = tx;
+      stat_checks++;
+      jingle(2);
+      sparkle(x, y - 12); sparkle(x - 6, y - 4); sparkle(x + 6, y - 8);
+    END
+    IF (lit)
+      graph = g_lamp[1];
+      IF (gl == 0) gl = lamp_glow(x, y - 9); END
+    END
+    FRAME;
+  END
+END
+
+PROCESS lamp_glow(x, y);
+PRIVATE t = 0;
+BEGIN
+  ctype = c_scroll; cnumber = c_1; z = 5;
+  graph = g_glow;
+  LOOP
+    t++;
+    alpha = 22 + sin(t * 3000) * 6;
+    FRAME;
+  END
+END
+
+PROCESS waystone(x, y);
+PRIVATE t = 0;
+BEGIN
+  ctype = c_scroll; cnumber = c_1; z = 6;
+  graph = g_goal;
+  portal(x, y + 4);
+  LOOP
+    t++;
+    IF (t % 16 == 0 AND x > icam - 40 AND x < icam + SW + 40)
+      sparkle(x + rand(-12, 12), y + rand(-10, 30));
+    END
+    FRAME;
+  END
+END
+
+PROCESS portal(x, y);
+PRIVATE t = 0;
+BEGIN
+  ctype = c_scroll; cnumber = c_1; z = 7;
+  graph = g_portal;
+  LOOP
+    t++;
+    alpha = 60 + sin(t * 4000) * 20;
+    IF (game_state == ST_GOAL) alpha = 95; END
+    scale_x = 100 + sin(t * 2500) * 6;
+    FRAME;
+  END
+END
+
+// A moving platform of 3 tiles: rx pixels to the right, or ry pixels up
+PROCESS mplat(px, py, rx, ry, slot);
+PRIVATE t = 0, nx, ny;
+BEGIN
+  ctype = c_scroll; cnumber = c_1; z = 3; priority = 10;
+  graph = g_mp[theme];
+  mp_x[slot] = px; mp_y[slot] = py; mp_w[slot] = 48; mp_dx[slot] = 0; mp_dy[slot] = 0;
+  LOOP
+    mp_dx[slot] = 0; mp_dy[slot] = 0;
+    IF (NOT paused AND NOT freeze)
+      t++;
+      nx = px + (1 - cos(t * 700)) * 0.5 * rx;
+      ny = py - (1 - cos(t * 700)) * 0.5 * ry;
+      mp_dx[slot] = nx - mp_x[slot];
+      mp_dy[slot] = ny - mp_y[slot];
+      mp_x[slot] = nx; mp_y[slot] = ny;
+    END
+    x = int(mp_x[slot]) + 24;
+    y = int(mp_y[slot]) + 4;
+    FRAME;
+  END
+END
+
+// =====================================================================
+// HUD, cards and screens
+// =====================================================================
+
+PROCESS hud();
+BEGIN
+  graph = g_hud; x = 200; y = 10; z = -100;
+  hud_icon(g_gem_small, 126, 10);
+  hud_icon(g_cursor, 268, 9);
+  shadow_text(f_small, 8, 7, 3, "SCORE", '#ffd24a', 1);
+  set_color('#ffffff');
+  write_int(f_small, 44, 7, 3, OFFSET score);
+  shadow_text(f_small, 134, 7, 3, "x", '#ffd24a', 1);
+  set_color('#ffffff');
+  write_int(f_small, 142, 7, 3, OFFSET glims);
+  shadow_text(f_small, 182, 7, 3, "STAGE", '#ffd24a', 1);
+  set_color('#ffffff');
+  write_int(f_small, 218, 7, 3, OFFSET lvl);
+  shadow_text(f_small, 278, 7, 3, "x", '#ffd24a', 1);
+  set_color('#ffffff');
+  write_int(f_small, 286, 7, 3, OFFSET lives);
+  shadow_text(f_small, 318, 7, 3, "TIME", '#ffd24a', 1);
+  set_color('#ffffff');
+  write_int(f_small, 348, 7, 3, OFFSET time_left);
+  LOOP
+    FRAME;
+  END
+END
+
+PROCESS hud_icon(graph, x, y);
+BEGIN
+  z = -101;
+  LOOP
+    FRAME;
+  END
+END
+
+// Rusty running across the title screen, hopping now and then
+PROCESS title_fox();
+PRIVATE fx = -20.0, fy = 208.0, vy = 0.0, t = 0, hop = 90;
+BEGIN
+  ctype = c_scroll; cnumber = c_1; z = -5;
+  LOOP
+    t++;
+    fx += 1.6;
+    IF (fx > icam + SW + 30) fx = icam - 30; END
+    hop -= 1;
+    IF (hop <= 0 AND fy >= 208) vy = -5.0; hop = rand(60, 140); END
+    vy += 0.3;
+    fy += vy;
+    IF (fy >= 208) fy = 208; vy = 0; END
+    IF (fy < 208) graph = g_fox[3]; ELSE graph = g_fox[1 + (t / 6) % 2]; END
+    x = int(fx); y = int(fy) - 8;
+    FRAME;
+  END
+END
+
+FUNCTION setup_scrolls(n);
+BEGIN
+  start_scroll(0, 0, g_mid[theme], g_far[theme], 0, 1);
+  start_scroll(1, 0, g_lvl[n - 1], 0, 0, 0);
+  RETURN 0;
+END
+
+FUNCTION spawn_blocks();
+PRIVATE tx, ty, t;
+BEGIN
+  FOR ty = 0 TO LH - 1
+    FOR tx = 0 TO lw - 1
+      t = tm[ty * lw + tx];
+      IF (t == T_BRICK OR t == T_GIFT OR t == T_GIFTP) block(tx, ty); END
+    END
+  END
+  RETURN 0;
+END
+
+// Everything of the level comes alive; Rusty starts at the start or at
+// the last lantern he lit
+FUNCTION spawn_level();
+PRIVATE i, k, px, py;
+BEGIN
+  FOR i = 0 TO NFOE - 1
+    f_on[i] = 0; f_hit[i] = 0;
+  END
+  nmp = 0; nacorn = 0; bump_t = 0;
+  FOR i = 0 TO ne - 1
+    k = e_k[i];
+    px = e_x[i] * 16 + 8; py = e_y[i] * 16 + 8;
+    IF (k == E_GEM) gem(px, py); END
+    IF (k == E_BUG OR k == E_DIL OR k == E_FROG OR k == E_BEE OR k == E_BEEV) foe(k, px, py, e_p[i]); END
+    IF (k == E_CHECK) lamp(px, py - 8, e_x[i]); END
+    IF (k == E_GOAL) waystone(px + 8, py - 24); END
+    IF (k == E_MPH AND nmp < 8) mplat(e_x[i] * 16, e_y[i] * 16, e_p[i], 0, nmp); nmp++; END
+    IF (k == E_MPV AND nmp < 8) mplat(e_x[i] * 16, e_y[i] * 16, 0, e_p[i], nmp); nmp++; END
+  END
+  IF (cp > 0)
+    pfx = cp * 16 + 8; pfy = check_ty * 16 + 16;
+  ELSE
+    pfx = start_tx * 16 + 8; pfy = start_ty * 16 + 16;
+  END
+  pvx = 0; pvy = 0; pground = 1; pface = 1; pdead = 0; pgrow = 0; pinv = 0; pon = -1;
+  pbuf = 0; pcoy = 0; pjump = 0; pchain = 0; plook = 0; auto_walk = 0;
+  IF (pbig) phw = 6; ph = 22; ELSE phw = 5; ph = 14; END
+  player();
+  camx = pfx - SW / 2;
+  set_camera();
+  RETURN 0;
+END
+
+// =====================================================================
+// MAIN: title, stage cards, the levels, game over and the ending
+// =====================================================================
+
+PRIVATE i = 0; k = 0; ty = 0; t = 0; pid = 0; wait_t = 0;
+BEGIN
+  set_mode(400, 240);
+  set_fps(60, 0);
+  screen_color('#000000');
+  // Start-up work, a slice per frame (a frame may run at most 100,000
+  // instructions): fonts, sprites, tiles, backdrops, the three levels
+  set_color('#ffd24a');
+  write(0, 200, 110, 4, "RUSTY LEAP");
+  set_color('#ffffff');
+  write(0, 200, 124, 4, "painting the worlds...");
+  load_bar();
+  FOR k = 1 TO 2
+    font_start(k);
+    FOR i = 0 TO NGLYPH - 1 STEP 6
+      font_part(k, i, i + 5);
+      load_n++;
+      FRAME;
+    END
+    IF (k == 1) f_small = font_finish(); ELSE f_big = font_finish(); END
+  END
+  FOR i = 0 TO 4
+    make_sprites(i);
+    load_n++;
+    FRAME;
+  END
+  FOR i = 0 TO 2
+    make_blocks(i);
+    FRAME;
+    FOR k = 0 TO 2
+      make_far(i, k);
+      load_n++;
+      FRAME;
+    END
+    FOR k = 0 TO 1
+      make_mid(i, k);
+      load_n++;
+      FRAME;
+    END
+  END
+  g_portal = make_portal();
+  make_hud();
+  make_sounds();
+  make_songs();
+  FOR k = 1 TO NLEVELS
+    build_level(k);
+    FRAME;
+    paint_start(k);
+    FOR ty = 0 TO LH - 1
+      FOR i = 0 TO lw - 1 STEP 64
+        paint_part(k, ty, i, i + 63);
+        load_n++;
+        FRAME;
+      END
+    END
+  END
+  signal(TYPE load_bar, s_kill);
+  delete_text(all_text);
+
+  LOOP
+    // ---- title screen: the meadow scrolls by behind the name
+    let_me_alone();
+    delete_text(all_text);
+    level1();
+    FRAME;
+    setup_scrolls(1);
+    spawn_blocks();
+    title_fox();
+    hud_icon(g_logo_bg, 200, 102);
+    shadow_text(f_big, 200, 48, 4, "RUSTY LEAP", '#ffd24a', 2);
+    shadow_text(f_small, 200, 74, 4, "A FOX, THREE WORLDS AND A LOT OF LEAPING", '#ffffff', 1);
+    shadow_text(f_small, 200, 150, 4, "ARROWS MOVE  -  X RUN  -  Z JUMP", '#ffffff', 1);
+    shadow_text(f_small, 200, 162, 4, "STOMP, BUMP CRATES, REACH THE WAYSTONE", '#ffffff', 1);
+    IF (hiscore > 0) shadow_text(f_small, 200, 90, 4, "BEST " + hiscore, '#7dffb0', 1); END
+    song_play(m_title);
+    t = 0; camx = 0; pid = 0;
+    LOOP
+      t++; fc++;
+      camx = (t * 0.6) % (lw * 16 - SW - 200);
+      set_camera();
+      IF (t % 60 == 1) pid = shadow_text(f_small, 200, 118, 4, "PRESS ENTER", '#ffd24a', 1); END
+      IF (t % 60 == 41) delete_text(pid); delete_text(txt_a); END
+      IF (t > 20 AND k_start_p()) BREAK; END
+      FRAME;
+    END
+    play_sound(s_select, 80, 100, 0);
+
+    // ---- a new game
+    score = 0; lives = 3; glims = 0; lvl = 1; cp = 0; pbig = 0; psling = 0;
+    WHILE (lvl <= NLEVELS AND lives > 0)
+      let_me_alone();
+      delete_text(all_text);
+      stop_scroll(0);
+      stop_scroll(1);
+      song_stop();
+      FRAME;
+      build_level(lvl);
+      FRAME;
+      shadow_text(f_big, 200, 88, 4, "STAGE " + lvl, '#ffd24a', 2);
+      shadow_text(f_small, 200, 114, 4, lname[lvl], '#ffffff', 1);
+      hud_icon(g_cursor, 186, 144);
+      shadow_text(f_small, 198, 144, 3, "x " + lives, '#ffffff', 1);
+      IF (cp > 0) shadow_text(f_small, 200, 168, 4, "FROM THE LANTERN", '#7dffb0', 1); END
+      FROM t = 0 TO 110;
+        FRAME;
+      END
+
+      delete_text(all_text);
+      let_me_alone();
+      setup_scrolls(lvl);
+      spawn_blocks();
+      FRAME;
+      spawn_level();
+      time_left = ltime[lvl]; time_tick = 0; hurry = 0;
+      game_state = ST_PLAY; freeze = 0; paused = 0; wait_t = 0;
+      hud();
+      song_play(m_theme[theme]);
+      LOOP
+        fc++;
+        IF (bump_t > 0) bump_t -= 1; END
+        IF (game_state == ST_PLAY)
+          IF (key_pressed(_enter) OR key_pressed(_p))
+            paused = 1 - paused;
+            IF (paused)
+              pid = shadow_text(f_big, 200, 110, 4, "PAUSED", '#ffffff', 2);
+            ELSE
+              delete_text(pid); delete_text(txt_a);
+            END
+          END
+          IF (NOT paused AND NOT freeze)
+            time_tick++;
+            IF (time_tick >= 60)
+              time_tick = 0;
+              time_left -= 1;
+              IF (time_left == 100) hurry = 1; hurry_beep(); END
+              IF (time_left <= 0) time_left = 0; kill_player(0); END
+            END
+          END
+        END
+        IF (game_state == ST_GOAL)
+          // the time left becomes points
+          wait_t++;
+          IF (wait_t > 110 AND time_left > 0)
+            time_left -= 1;
+            score += 50;
+            IF (wait_t % 3 == 0) play_sound(s_tick, 50, 100, 0); END
+          END
+          IF (wait_t > 110 AND time_left <= 0) wait_t = min(wait_t, 400); END
+          IF (wait_t > 300 AND time_left <= 0) game_state = ST_CLEAR; END
+        END
+        IF (game_state == ST_CLEAR OR game_state == ST_DEAD) BREAK; END
+        FRAME;
+      END
+      IF (score > hiscore) hiscore = score; END
+      IF (game_state == ST_DEAD)
+        lives -= 1; pbig = 0; psling = 0;
+      ELSE
+        lvl++; cp = 0;
+      END
+    END
+
+    let_me_alone();
+    delete_text(all_text);
+    IF (lives <= 0)
+      // ---- game over
+      stop_scroll(0); stop_scroll(1);
+      song_play(m_over, 0);
+      shadow_text(f_big, 200, 96, 4, "GAME OVER", '#ff6a5a', 2);
+      shadow_text(f_small, 200, 126, 4, "SCORE " + score, '#ffffff', 1);
+      shadow_text(f_small, 200, 170, 4, "PRESS ENTER", '#ffd24a', 1);
+    ELSE
+      // ---- the ending: back in the meadow
+      level1();
+      FRAME;
+      setup_scrolls(1);
+      spawn_blocks();
+      title_fox();
+      song_play(m_win);
+      shadow_text(f_big, 200, 54, 4, "WELL DONE!", '#ffd24a', 2);
+      shadow_text(f_small, 200, 80, 4, "RUSTY REACHED EVERY WAYSTONE", '#ffffff', 1);
+      shadow_text(f_small, 200, 96, 4, "SCORE " + score + "   LIVES " + lives, '#ffffff', 1);
+      shadow_text(f_small, 200, 124, 4, "PRESS ENTER", '#ffd24a', 1);
+      camx = 0;
+    END
+    t = 0;
+    LOOP
+      t++;
+      IF (lives > 0)
+        camx += 0.6;
+        IF (camx > lw * 16 - SW - 200) camx = 0; END
+        set_camera();
+        IF (t % 20 == 0) sparkle(icam + rand(40, 360), rand(30, 120)); END
+      END
+      IF (t > 60 AND k_start_p()) BREAK; END
+      FRAME;
+    END
+  END
+END
+
+// Loading bar (drawn every frame)
+PROCESS load_bar();
+BEGIN
+  LOOP
+    set_color('#3a2a50');
+    draw_rect(100, 140, 200, 6);
+    set_color('#ffd24a');
+    draw_rect(100, 140, min(200, load_n * 200 / 160), 6);
+    FRAME;
+  END
+END
+
+PROCESS hurry_beep();
+PRIVATE i;
+BEGIN
+  FOR i = 0 TO 2
+    play_sound(s_hurry, 70, 100, 0);
+    FRAME(1000);
+  END
+END
