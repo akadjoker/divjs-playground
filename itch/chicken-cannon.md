@@ -2,7 +2,7 @@
 
 **Tagline:** A farm cannon, a fort full of grumpy foxes, and a lot of very surprised chickens.
 
-**Viewport:** 800 x 480 · **Genre:** Puzzle · **Tags:** physics, comedy, artillery, angry-birds, chickens, casual, funny, 2d, procedural, ai-generated
+**Viewport:** 800 x 480 · **Genre:** Puzzle · **Tags:** physics, comedy, artillery, angry-birds, chickens, casual, funny, 2d, procedural
 
 ## Description
 
@@ -26,6 +26,5 @@ for every chicken you didn't need.
 ## How it was made
 
 Written in the DIV language and running on [DivJS](https://github.com/akadjoker/divjs),
-with Box2D physics. The game was written by an AI agent from the
-engine's reference and tested in a browser until a bot could clear the
-first four levels.
+with Box2D physics. It was tested in a browser until a bot could clear
+the first four levels.

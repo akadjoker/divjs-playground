@@ -2,7 +2,7 @@
 
 **Tagline:** Two tanks, bouncing bullets, online with a friend - no server, no account.
 
-**Viewport:** 640 x 480 · **Genre:** Action · **Tags:** multiplayer, online, tanks, versus, arcade, 2d, retro, local-multiplayer, ai-generated, top-down
+**Viewport:** 640 x 480 · **Genre:** Action · **Tags:** multiplayer, online, tanks, versus, arcade, 2d, retro, local-multiplayer, top-down
 
 ## Description
 
@@ -29,4 +29,4 @@ include - if the connection fails, that is the likely reason.
 ## How it was made
 
 Written in the DIV language and running on [DivJS](https://github.com/akadjoker/divjs),
-whose online play is built on WebRTC. The game was written with an AI agent as the engine's online demo.
+whose online play is built on WebRTC. It is the engine's online demo.

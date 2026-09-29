@@ -2,7 +2,7 @@
 
 **Tagline:** Four keys, two legs, one hundred metres. Good luck.
 
-**Viewport:** 640 x 480 · **Genre:** Sports · **Tags:** qwop, ragdoll, physics, comedy, sports, running, difficult, funny, 2d, ai-generated
+**Viewport:** 640 x 480 · **Genre:** Sports · **Tags:** qwop, ragdoll, physics, comedy, sports, running, difficult, funny, 2d
 
 ## Description
 
@@ -22,6 +22,5 @@ and you're a legend.
 ## How it was made
 
 Written in the DIV language and running on [DivJS](https://github.com/akadjoker/divjs),
-with Box2D joints and motors. The game was written by an AI agent
-from the engine's reference. It's deliberately hard: our test bot never
+with Box2D joints and motors. It's deliberately hard: our test bot never
 got past three metres.

@@ -2,7 +2,7 @@
 
 **Tagline:** Blow up your rivals in generated arenas - chain reactions, remote bombs, cursed skulls and CPU bombers that plan their escapes.
 
-**Viewport:** 640 x 480 · **Genre:** Action · **Tags:** bomberman, arcade, local-multiplayer, party, retro, 2d, procedural, pixel-art, ai-generated, top-down
+**Viewport:** 640 x 480 · **Genre:** Action · **Tags:** bomberman, arcade, local-multiplayer, party, retro, 2d, procedural, pixel-art, top-down
 
 ## Description
 
@@ -28,5 +28,5 @@ when they can see a way out.
 ## How it was made
 
 Written in the DIV language and running on [DivJS](https://github.com/akadjoker/divjs).
-The whole game, CPU players included, was written by an AI agent
-from the engine's reference and then tested in a browser.
+The whole game, CPU players included, is written in DIV and was tested
+in a browser.

@@ -2,7 +2,7 @@
 
 **Tagline:** Fly an attack helicopter through a new desert every campaign: rescue pilots, hunt convoys, mind the fuel.
 
-**Viewport:** 640 x 480 · **Genre:** Shooter · **Tags:** helicopter, shoot-em-up, desert-strike, retro, procedural, 2d, action, arcade, ai-generated, top-down
+**Viewport:** 640 x 480 · **Genre:** Shooter · **Tags:** helicopter, shoot-em-up, desert-strike, retro, procedural, 2d, action, arcade, top-down
 
 ## Description
 
@@ -26,5 +26,5 @@ and land rescued pilots at the helipad.
 ## How it was made
 
 Written in the DIV language and running on [DivJS](https://github.com/akadjoker/divjs).
-The game and its desert generator were written by an AI agent
-from the engine's reference and then played and fixed in a browser.
+The desert is generated in code, and the game was played and fixed in a
+browser.
