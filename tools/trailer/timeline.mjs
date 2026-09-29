@@ -119,6 +119,9 @@ export const TAKES = {
   racer: game('racer'),
   // Firing is key_pressed(): a press every few frames while turning.
   'vector-asteroids': game('vector-asteroids', 10, { steps: asteroidsPlay() }),
+  // Its README shot: a charge dash, then running down the slopes and
+  // round the first loop.
+  sparkroll: game('sparkroll', 10),
 
   // The playground: Chicken Cannon fires a chicken into the fort, its
   // gravity is changed from 600 to 1800 in the code, Run, and the same
@@ -264,7 +267,8 @@ const NAMES = {
   'wobbly-walker': 'Wobbly Walker',
   'ghost-squad': 'Ghost Squad',
   racer: 'Micro Racer',
-  'vector-asteroids': 'Vector Asteroids'
+  'vector-asteroids': 'Vector Asteroids',
+  sparkroll: 'Sparkroll'
 };
 
 // A game segment. `focus` is the point of the game screen to keep in the
@@ -289,7 +293,7 @@ export const VIDEOS = {
       clip('ghost-squad', 4, 3.0, '', { focus: [270, 240] }),
       clip('wobbly-walker', 4, 0.3, '', { zoom: 3, focus: [240, 240] }),
       clip('racer', 4, 1.9, '', { zoom: 3, focus: [260, 240] }),
-      clip('vector-asteroids', 4, 2.5, '', { thicken: true }),
+      clip('sparkroll', 4, 3.0, '', { zoom: 3, focus: [180, 135] }),
       clip('net-tanks', 4, 0.2, 'Online\nmultiplayer.', { bottom: '[No server.]', hit: 'powerup' }),
       {
         // The GRAV line zoomed in (5x: the number is as big as the
@@ -303,9 +307,10 @@ export const VIDEOS = {
         stack: [{ region: 'workspace', left: 170, width: 800, height: 356, at: 0 }, { region: 'screen', outWidth: 624 }]
       },
       card('end', 12, [
-        { text: 'DivJS', scale: 4, x: 78, y: 96, color: '#2dd4bf', cps: 12, cursor: true },
-        { text: 'Free and\nopen source', scale: 2, y: 172, at: 0.9, cps: 30 },
-        { text: 'akadjoker.github.io\n/divjs-playground', scale: 1, y: 236, at: 1.6, cps: 0, color: '#ffcb6b' }
+        // One screen: the name types in (0.3 s), the rest appears with it.
+        { text: 'DivJS', scale: 4, y: 96, color: '#2dd4bf', cps: 12 },
+        { text: 'Free and\nopen source', scale: 2, y: 172, at: 0.3, cps: 0 },
+        { text: 'akadjoker.github.io\n/divjs-playground', scale: 1, y: 236, at: 0.3, cps: 0, color: '#ffcb6b' }
       ], { music: 'end', hit: 'coin' })
     ]
   },
@@ -324,7 +329,7 @@ export const VIDEOS = {
       clip('ghost-squad', 6, 2.8),
       clip('wobbly-walker', 6, 0.2),
       clip('racer', 6, 1.6),
-      clip('vector-asteroids', 6, 2.5, '', { thicken: true }),
+      clip('sparkroll', 6, 2.5, '', { zoom: 3, focus: [213, 135] }),
       card('net-card', 6, [
         { text: 'Online multiplayer.', scale: 3, y: 70, cps: 36 },
         { text: '[No server.]', scale: 3, y: 112, at: 1.1, cps: 24, cursor: true }
@@ -335,9 +340,9 @@ export const VIDEOS = {
         { text: 'game {live}', scale: 3, y: 112, at: 0.6, cps: 30, cursor: true }
       ], { music: 'calm', hit: 'blip' }),
       {
-        // The GRAV line with its neighbours and comments (3x), the game under it.
+        // The GRAV line alone, zoomed in (8x: legible on a phone), the game under it.
         id: 'live', beats: 12, take: 'live-edit', cuts: LIVE_CUTS, window: [0, 0, 1920, 1080],
-        stack: [{ region: 'line', box: [10, -26, 560, 74], outWidth: 1700 }, { region: 'screen', outWidth: 1100 }]
+        stack: [{ region: 'line', box: [20, -5, 150, 28], outWidth: 1200 }, { region: 'screen', outWidth: 1200 }]
       },
       card('blocks-card', 6, [
         { text: 'New to code?', scale: 3, y: 70, cps: 30 },
@@ -354,13 +359,14 @@ export const VIDEOS = {
       },
       card('games-card', 6, [
         { text: 'Over 30 games', scale: 3, y: 62, cps: 30 },
-        { text: 'to play, read', scale: 3, y: 100, at: 0.7, cps: 30 },
-        { text: 'and change.', scale: 3, y: 138, at: 1.4, cps: 30, cursor: true }
+        { text: 'to play, read', scale: 3, y: 100, at: 0.4, cps: 30 },
+        { text: 'and change.', scale: 3, y: 138, at: 0.8, cps: 30, cursor: true }
       ], { music: 'main', hit: 'explosion' }),
       card('end', 14, [
-        { text: 'DivJS', scale: 8, y: 36, color: '#2dd4bf', cps: 10, cursor: true },
-        { text: 'Free and open source', scale: 2, y: 124, at: 1.0, cps: 30 },
-        { text: 'akadjoker.github.io/divjs-playground', scale: 1, y: 170, at: 1.8, cps: 0, color: '#ffcb6b' }
+        // One screen: the name types in (0.3 s), the rest appears with it.
+        { text: 'DivJS', scale: 8, y: 36, color: '#2dd4bf', cps: 10 },
+        { text: 'Free and open source', scale: 2, y: 124, at: 0.3, cps: 0 },
+        { text: 'akadjoker.github.io/divjs-playground', scale: 1, y: 170, at: 0.3, cps: 0, color: '#ffcb6b' }
       ], { music: 'end', hit: 'coin' })
     ]
   }
