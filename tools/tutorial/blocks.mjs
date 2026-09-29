@@ -11,7 +11,7 @@ export const CATEGORIES = ['program', 'looks', 'motion', 'control', 'sensing', '
 // `?lang=` (English when it has no translation).
 export function blocksUrl(lang)
 {
-  return lang && lang !== 'en' ? `blocks/?lang=${lang}` : 'blocks/';
+  return `blocks/?lang=${lang || 'en'}`;
 }
 
 // Blocks a little bigger than the page's default (0.65), so they read well

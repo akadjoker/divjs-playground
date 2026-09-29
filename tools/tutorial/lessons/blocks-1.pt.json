@@ -1,20 +1,47 @@
 {
   "language": "pt",
   "cards": {
-    "intro": { "kicker": "DivJS Blocos · Lição 1", "title": "Faz aparecer uma forma" },
-    "outro": { "kicker": "A seguir: Lição 2", "title": "Move-a com as setas" }
+    "intro": {
+      "kicker": "DivJS Blocks · Lição 1",
+      "title": "Faz aparecer uma forma"
+    },
+    "outro": {
+      "kicker": "A seguir: Lição 2",
+      "title": "Mexe-o com as setas"
+    }
   },
   "lines": {
-    "intro": "Nesta lição, vais fazer aparecer a tua primeira forma: um círculo azul-turquesa, mesmo no meio do ecrã do jogo.",
-    "tour": "A lição começa com dois blocos: {start}quando o jogo começa, e {sprite}definir sprite player.",
-    "looks": "Um sprite precisa de um aspeto. Abre a categoria {click}Aparência.",
-    "drag-look": "Arrasta {grab}parecer um círculo para dentro de definir sprite player. {snap}Encaixa no sítio.",
-    "program": "O player já parece um círculo, mas só aparece quando o jogo o cria. Abre {click}Programa.",
-    "drag-create": "Arrasta {grab}criar sprite player em x 160, y 120 para dentro de quando o jogo começa. {snap}Encaixa perfeitamente.",
-    "xy": "O ecrã do jogo tem {w}320 píxeis de largura e {h}240 de altura. {so}Por isso, x {x}160, y {y}120 é mesmo o meio.",
-    "run": "Agora carrega em {click}Executar.",
-    "result": "E aí está: {circle}o teu círculo azul-turquesa, no meio do ecrã.",
-    "code": "Aqui está o código. {code}Este é o verdadeiro código DIV que os teus blocos fizeram: {process}o player, com o seu círculo, {create}e a linha que o cria em {at}160, 120.",
-    "outro": "Muito bem! {next}Na lição dois, vais mover o teu círculo com as setas do teclado."
+    "intro": "Nesta lição, vais fazer aparecer a tua primeira forma: um círculo, mesmo no meio do jogo.",
+    "tour": {
+      "text": "A lição começa com dois blocos: {start}quando o jogo começa, e {sprite}define a personagem player.",
+      "say": "A lição começa com dois blocos: quando o jogo começa, e define a personagem pleier."
+    },
+    "looks": {
+      "text": "Uma personagem precisa de ter aspeto. Agora, clica na categoria {click}Aparência.",
+      "say": "Uma personagem precisa de ter aspeto. Agora, clica na categoria: Aparência."
+    },
+    "drag-look": {
+      "text": "Agora, arrasta o bloco {grab}parece um círculo, para dentro de define a personagem player. {snap}Encaixa no sítio.",
+      "say": "Agora, arrasta o bloco parece um círculo, para dentro de define a personagem pleier. Encaixa no sítio."
+    },
+    "program": {
+      "text": "O player já parece um círculo, mas só aparece quando o jogo o cria. Clica na categoria {click}Programa.",
+      "say": "O pleier já parece um círculo, mas só aparece quando o jogo o cria. Clica na categoria Programa."
+    },
+    "drag-create": {
+      "text": "Agora, arrasta o bloco {grab}cria a personagem player, para debaixo de quando o jogo começa. {snap}Também encaixa.",
+      "say": "Agora, arrasta o bloco, cria, a personagem pleier, para debaixo de quando o jogo começa. Também encaixa."
+    },
+    "xy": {
+      "text": "O jogo tem {w}320 píxeis de largura, e {h}240 de altura. {so}Por isso, x {x}160, y {y}120, é mesmo o meio.",
+      "say": "O jogo tem trezentos e vinte píxeis de largura, e duzentos e quarenta de altura. Por isso, xis cento e sessenta, ípsilon cento e vinte, é mesmo o meio."
+    },
+    "run": "Agora, clica no botão {click}Jogar.",
+    "result": "E aqui está: {circle}o teu círculo, no meio do jogo.",
+    "code": {
+      "text": "Aqui está o código. {code}Este é o verdadeiro código DIV que os teus blocos fizeram: {process}o player, com o seu círculo, {create}e a linha que o cria em {at}160, 120.",
+      "say": "Aqui está o código. Este é o verdadeiro código dív que os teus blocos fizeram: o pleier, com o seu círculo, e a linha que o cria em cento e sessenta, cento e vinte."
+    },
+    "outro": "Muito bem! {next}Na lição dois, vais mexer o teu círculo com as teclas das setas."
   }
 }

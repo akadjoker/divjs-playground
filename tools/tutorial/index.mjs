@@ -60,7 +60,7 @@ function runVo(linesFile, dir)
     throw new Error('The narration needs a Python with the speech engines: pass --vo-python <path> or set DIVJS_VO_PYTHON');
   }
   const argv = [here('./vo.py'), '--lines', linesFile, '--out', dir, '--engine', voice.engine, '--voice', voice.voice,
-    '--speed', String(voice.speed), '--language', lang, '--whisper', voice.whisper];
+    '--speed', String(voice.speed), '--language', lang, '--whisper', voice.whisper, ...(voice.noise ? ['--noise', voice.noise] : [])];
   return new Promise((ok, fail) =>
   {
     const child = spawn(python, argv, { stdio: ['ignore', 'inherit', 'pipe'] });

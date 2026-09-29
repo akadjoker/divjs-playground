@@ -19,7 +19,9 @@ export const VIDEO = {
 // it (an English-only model for English, a multilingual one otherwise).
 export const LANGUAGES = {
   en: { engine: 'kokoro', voice: 'af_heart', speed: 1.0, whisper: 'small.en' },
-  pt: { engine: 'piper', voice: 'pt_PT-tugão-medium', speed: 1.0, whisper: 'small' }
+  // Piper's tugão reads more clearly a little slower and steadier (less
+  // noise); large-v3-turbo hears European Portuguese best.
+  pt: { engine: 'piper', voice: 'pt_PT-tugão-medium', speed: 0.85, noise: '0.25,0.25', whisper: 'large-v3-turbo' }
 };
 
 // Loudness of the stems before the final -14 LUFS normalisation (see

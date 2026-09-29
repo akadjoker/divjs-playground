@@ -4,7 +4,7 @@ script in one language, then checks each line by transcribing it back.
     <python> tools/tutorial/vo.py --lines <script.json> --out <dir>
                                   --engine kokoro|piper --voice <voice>
                                   [--speed 1.0] [--language en]
-                                  [--whisper small.en]
+                                  [--whisper small.en] [--noise 0.25,0.25]
 
 <python> is a Python with `soundfile`, `numpy`, `faster-whisper` and the
 speech engine (`kokoro` or `piper-tts`), in a virtualenv outside the
@@ -59,7 +59,7 @@ def trim(audio, rate, threshold=0.004, pad=0.06):
 # ── Speech engines: each returns (float32 mono audio, sample rate) ─────────
 
 class Kokoro:
-    def __init__(self, voice, speed):
+    def __init__(self, voice, speed, noise=None):
         from kokoro import KPipeline
         self.pipeline = KPipeline(lang_code=voice[0], repo_id='hexgrad/Kokoro-82M')
         self.voice = voice
@@ -73,7 +73,7 @@ class Kokoro:
 class Piper:
     """A Piper voice from rhasspy/piper-voices, e.g. pt_PT-tugão-medium."""
 
-    def __init__(self, voice, speed):
+    def __init__(self, voice, speed, noise=None):
         from huggingface_hub import hf_hub_download
         from piper import PiperVoice, SynthesisConfig
         lang, name, quality = voice.split('-')
@@ -81,7 +81,9 @@ class Piper:
         model = hf_hub_download('rhasspy/piper-voices', f'{folder}/{voice}.onnx')
         hf_hub_download('rhasspy/piper-voices', f'{folder}/{voice}.onnx.json')
         self.voice = PiperVoice.load(model)
-        self.config = SynthesisConfig(length_scale=1.0 / speed)
+        # `noise`: [noise_scale, noise_w_scale], lower = steadier speech.
+        extra = {'noise_scale': noise[0], 'noise_w_scale': noise[1]} if noise else {}
+        self.config = SynthesisConfig(length_scale=1.0 / speed, **extra)
 
     def speak(self, text):
         chunks = list(self.voice.synthesize(text, self.config))
@@ -131,6 +133,7 @@ def main():
     parser.add_argument('--speed', type=float, default=1.0)
     parser.add_argument('--language', default='en')
     parser.add_argument('--whisper', default='small.en')
+    parser.add_argument('--noise', default='', help='Piper only: noise_scale,noise_w_scale')
     args = parser.parse_args()
 
     with open(args.lines, encoding='utf-8') as f:
@@ -144,20 +147,21 @@ def main():
 
     engine = None
     whisper = None
-    report = {'engine': args.engine, 'voice': args.voice, 'speed': args.speed, 'language': args.language, 'whisper': args.whisper, 'lines': {}}
+    report = {'engine': args.engine, 'voice': args.voice, 'speed': args.speed, 'noise': args.noise, 'language': args.language, 'whisper': args.whisper, 'lines': {}}
     for line_id, line in lines.items():
         text = line['text'] if isinstance(line, dict) else line
         spoken = line.get('say', text) if isinstance(line, dict) else text
         spoken = MARK.sub('', spoken)
         shown = re.sub(r'\s+', ' ', MARK.sub('', text)).strip()
-        key = [args.engine, args.voice, args.speed, args.whisper, spoken, text]
+        key = [args.engine, args.voice, args.speed, args.noise, args.whisper, spoken, text]
         path = os.path.join(args.out, f'{line_id}.wav')
         if line_id in old and old[line_id].get('key') == key and os.path.exists(path):
             report['lines'][line_id] = old[line_id]
             print(f'{line_id}: unchanged ({old[line_id]["seconds"]:.2f} s)', file=sys.stderr)
             continue
         if engine is None:
-            engine = ENGINES[args.engine](args.voice, args.speed)
+            noise = [float(n) for n in args.noise.split(',')] if args.noise else None
+            engine = ENGINES[args.engine](args.voice, args.speed, noise)
             from faster_whisper import WhisperModel
             whisper = WhisperModel(args.whisper, device='cpu', compute_type='int8')
         audio, rate = engine.speak(spoken)
