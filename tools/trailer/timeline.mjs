@@ -107,16 +107,18 @@ export const TAKES = {
   // Firing is key_pressed(): a press every few frames while turning.
   'vector-asteroids': game('vector-asteroids', 10, { steps: asteroidsPlay() }),
 
-  // The playground: Chicken Cannon is fired, its gravity is changed from
-  // 600 to 1800 in the code, Run, and the same shot drops short.
+  // The playground: Chicken Cannon fires a chicken into the fort, its
+  // gravity is changed from 600 to 200 in the code, Run, and the same
+  // shot (aimed with the keys this time) floats high over it. Regions (take pixels) for the layouts:
+  // code (the editor), line (the GRAV line), screen (the game).
   'live-edit': {
     ...UI,
     url: 'playground/#p=chicken-cannon',
-    seconds: 13,
+    seconds: 10,
     ready: async (ctx) =>
     {
       await inGame(ctx);
-      // Line 30 (GRAV) in the middle of the editor.
+      // The GRAV line in the middle of the editor.
       await ctx.page.evaluate(() =>
       {
         const line = [...document.querySelectorAll('.cm-line')].find((l) => l.textContent.includes('GRAV = 600'));
@@ -129,10 +131,10 @@ export const TAKES = {
       const { page, clock, run } = ctx;
       const code = await region(page, '.cm-editor', UI.scale);
       const screen = await region(page, '#game', UI.scale);
-      await run([['drag', 400, 300, 330, 190, 400], ['wait', 900]]);
-      const number = await page.evaluate(() =>
+      const found = await page.evaluate(() =>
       {
         const line = [...document.querySelectorAll('.cm-line')].find((l) => l.textContent.includes('GRAV = 600'));
+        line.id = 'trailer-line';
         const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT);
         for (let node = walker.nextNode(); node; node = walker.nextNode())
         {
@@ -148,28 +150,40 @@ export const TAKES = {
         }
         return null;
       });
-      await pointTo(ctx, number, 20);
+      const line = await region(page, '#trailer-line', UI.scale);
+      // The first shot, as the game was written.
+      await run([['drag', 400, 300, 330, 190, 400], ['wait', 300]]);
+      // While it flies: select 600 and type 200.
+      await pointTo(ctx, found, 24);
       await page.mouse.dblclick(ctx.mouse.x, ctx.mouse.y);
-      await clock.wait(400);
-      for (const ch of '1800')
+      // The pointer steps aside so the new number can be read.
+      await pointTo(ctx, { x: found.x + 40, y: found.y + 34, width: 0, height: 0 }, 8);
+      await clock.wait(150);
+      for (const ch of '200')
       {
         await page.keyboard.type(ch);
-        await clock.wait(130);
+        await clock.wait(160);
       }
-      await clock.wait(500);
+      await clock.wait(300);
       const runButton = await page.$eval('#runBtn', (b) =>
       {
         const r = b.getBoundingClientRect();
         return { x: r.x, y: r.y, width: r.width, height: r.height };
       });
-      await pointTo(ctx, runButton, 18);
-      await clock.wait(200);
+      await pointTo(ctx, runButton, 14);
       await page.mouse.click(ctx.mouse.x, ctx.mouse.y);
-      await clock.wait(300);
-      await page.click('#game', { position: { x: 5, y: 5 } });
-      await run([['wait', 700], ['press', 'Space'], ['wait', 900]]);
-      await run([['drag', 400, 300, 330, 190, 400], ['wait', 1200], ['drag', 400, 300, 340, 170, 400]]);
-      return { code, screen };
+      // The program starts again on its title screen: a click on it starts
+      // the game (and gives it the keyboard). The same shot is then aimed
+      // with the keys (full power) and fired with Space.
+      const title = await page.$eval('#game', (c) =>
+      {
+        const r = c.getBoundingClientRect();
+        return { x: r.x + 400 * r.width / c.width - 1, y: r.y + 215 * r.height / c.height - 1, width: 2, height: 2 };
+      });
+      await pointTo(ctx, title, 30);
+      await page.mouse.click(ctx.mouse.x, ctx.mouse.y);
+      await run([['wait', 1100], ['hold', 'ArrowRight', 1100], ['press', 'Space'], ['wait', 3000]]);
+      return { code, screen, line };
     }
   },
 
