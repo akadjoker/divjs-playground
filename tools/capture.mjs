@@ -9,173 +9,16 @@
 //            --check  also saves <id>-end.png, the game's last frame
 //
 // Needs Playwright's Chromium (npx playwright install chromium) and the
-// gifenc package (a dev dependency).
+// gifenc package (a dev dependency). The play scripts are in
+// tools/game-shots.mjs.
 
-import http from 'node:http';
-import { readFile, stat, mkdir, writeFile } from 'node:fs/promises';
-import { extname, join, normalize } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { chromium } from 'playwright';
 import gifenc from 'gifenc';
+import { ROOT, SHOTS, startServer, runSteps, option } from './game-shots.mjs';
 
 const { GIFEncoder, quantize, applyPalette } = gifenc;
-const ROOT = fileURLToPath(new URL('..', import.meta.url));
-
-// Steps: ['wait', ms], ['press', key], ['down', key], ['up', key],
-// ['hold', key, ms], ['drag', x1, y1, x2, y2, ms] and ['click', x, y] in
-// the game's own coordinates. `setup` runs before recording, `play` while
-// it records for `seconds`.
-const hold = (key, ms) => ['hold', key, ms];
-const SHOTS = {
-  fighter: {
-    seconds: 7,
-    setup: [['wait', 1500], ['press', 'Enter'], ['wait', 900], ['press', 'Enter'], ['wait', 900], ['press', 'Enter'], ['wait', 900], ['press', 'Enter'], ['wait', 2600]],
-    play: [hold('ArrowRight', 500), ['press', 'a'], ['wait', 150], ['press', 's'], ['wait', 150], ['press', 'd'], ['wait', 300],
-      ['press', 'z'], ['wait', 200], ['press', 'c'], ['wait', 400], hold('ArrowRight', 300), ['press', 'x'], ['wait', 300],
-      ['down', 'ArrowDown'], ['wait', 50], ['down', 'ArrowRight'], ['wait', 50], ['up', 'ArrowDown'], ['press', 'd'], ['up', 'ArrowRight'],
-      ['wait', 700], hold('ArrowUp', 100), ['wait', 300], ['press', 'c'], ['wait', 600], ['press', 'a'], ['press', 's'], ['press', 'd']]
-  },
-  bomber: {
-    seconds: 7,
-    setup: [['wait', 1500], ['press', 'Enter'], ['wait', 900], ['press', 'Enter'], ['wait', 1500]],
-    play: [['press', 'Space'], hold('ArrowDown', 400), hold('ArrowRight', 500), ['wait', 1600], hold('ArrowLeft', 500),
-      ['press', 'Space'], hold('ArrowUp', 400), hold('ArrowRight', 300), ['wait', 1500], hold('ArrowDown', 500)]
-  },
-  strike: {
-    seconds: 7,
-    setup: [['wait', 7000], ['press', 'Space'], ['wait', 900], ['press', 'Space'], ['wait', 1200]],
-    play: [['down', 'ArrowUp'], ['down', 'Space'], ['wait', 1200], hold('ArrowLeft', 500), ['wait', 800], ['press', 'z'],
-      ['wait', 500], ['press', 'z'], hold('d', 600), ['up', 'Space'], ['wait', 600], ['press', 'x'], hold('ArrowRight', 600), ['up', 'ArrowUp']]
-  },
-  'bad-cat': {
-    seconds: 7,
-    setup: [['wait', 1500], ['press', 'Enter'], ['wait', 1500]],
-    play: [hold('ArrowRight', 600), hold('ArrowUp', 200), ['press', 'x'], hold('ArrowRight', 400), hold('Space', 250), ['press', 'x'],
-      ['wait', 150], ['press', 'x'], hold('ArrowLeft', 700), hold('ArrowUp', 300), ['press', 'x'], ['wait', 800], hold('ArrowRight', 900), ['press', 'x']]
-  },
-  'chicken-cannon': {
-    seconds: 7,
-    setup: [['wait', 1500], ['press', 'Space'], ['wait', 1200]],
-    play: [['drag', 400, 300, 330, 190, 400], ['wait', 3000], ['press', '3'], ['drag', 400, 300, 360, 200, 400], ['wait', 900], ['click', 400, 200]]
-  },
-  'wobbly-walker': {
-    seconds: 7,
-    setup: [['wait', 1200]],
-    play: [hold('q', 300), hold('o', 200), hold('w', 300), hold('p', 200), hold('q', 300), hold('o', 200), hold('w', 300), hold('p', 200),
-      hold('q', 300), hold('o', 200), hold('w', 300), hold('p', 200), hold('q', 400), hold('o', 300)]
-  },
-  'ghost-squad': {
-    seconds: 7,
-    setup: [['wait', 1500], ['press', 'Space'], ['wait', 2600]],
-    play: [hold('ArrowLeft', 700), hold('ArrowUp', 600), ['press', '2'], hold('ArrowRight', 700), hold('ArrowDown', 500), ['press', '3'],
-      hold('ArrowUp', 800), ['press', '4'], hold('ArrowLeft', 900), hold('ArrowDown', 700)]
-  },
-  'net-tanks': {
-    seconds: 6,
-    setup: [['wait', 1000], ['press', '5'], ['wait', 800]],
-    play: [['down', 'w'], ['down', 'ArrowUp'], ['wait', 700], ['press', 'Space'], ['press', 'Enter'], hold('a', 300), hold('ArrowLeft', 300),
-      ['wait', 600], ['press', 'Space'], ['press', 'Enter'], hold('d', 400), ['wait', 700], ['press', 'Space'], ['up', 'w'], ['up', 'ArrowUp']]
-  },
-  racer: {
-    seconds: 6,
-    setup: [['wait', 1500], ['press', 'Space'], ['wait', 1500]],
-    play: [['down', 'ArrowUp'], ['wait', 1200], hold('ArrowLeft', 400), ['wait', 800], hold('ArrowRight', 500), ['wait', 900], hold('ArrowLeft', 300), ['up', 'ArrowUp']]
-  },
-  pinball: {
-    seconds: 6,
-    setup: [['wait', 1500], ['press', 'Space'], ['wait', 800]],
-    play: [hold('Space', 1000), ['wait', 1200], ['press', 'z'], ['press', 'm'], ['wait', 600], ['press', 'z'], ['wait', 400], ['press', 'm'],
-      ['wait', 500], ['press', 'z'], ['press', 'm']]
-  },
-  'vector-asteroids': {
-    seconds: 6,
-    setup: [['wait', 1200], ['press', 'Enter'], ['wait', 800]],
-    play: [['down', 'Space'], hold('ArrowLeft', 500), hold('ArrowUp', 400), hold('ArrowRight', 700), hold('ArrowUp', 300), ['wait', 600],
-      hold('ArrowLeft', 900), ['up', 'Space']]
-  }
-};
-
-function option(name, fallback)
-{
-  const i = process.argv.indexOf(`--${name}`);
-  return i > 0 ? process.argv[i + 1] : fallback;
-}
-
-const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.div': 'text/plain', '.md': 'text/markdown' };
-
-function startServer()
-{
-  const server = http.createServer(async (req, res) =>
-  {
-    try
-    {
-      let file = normalize(join(ROOT, decodeURIComponent(new URL(req.url, 'http://x').pathname)));
-      if (!file.startsWith(ROOT))
-      {
-        res.writeHead(403).end();
-        return;
-      }
-      if ((await stat(file)).isDirectory())
-      {
-        file = join(file, 'index.html');
-      }
-      res.writeHead(200, { 'Content-Type': MIME[extname(file)] || 'application/octet-stream' });
-      res.end(await readFile(file));
-    }
-    catch
-    {
-      res.writeHead(404).end();
-    }
-  });
-  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
-}
-
-async function runSteps(page, steps)
-{
-  const box = async () => page.$eval('#game', (c) =>
-  {
-    const r = c.getBoundingClientRect();
-    return { x: r.x, y: r.y, sx: r.width / c.width, sy: r.height / c.height };
-  });
-  for (const step of steps)
-  {
-    const [kind, a, b, c, d, e] = step;
-    if (kind === 'wait')
-    {
-      await page.waitForTimeout(a);
-    }
-    else if (kind === 'press')
-    {
-      await page.keyboard.press(a);
-    }
-    else if (kind === 'down')
-    {
-      await page.keyboard.down(a);
-    }
-    else if (kind === 'up')
-    {
-      await page.keyboard.up(a);
-    }
-    else if (kind === 'hold')
-    {
-      await page.keyboard.down(a);
-      await page.waitForTimeout(b);
-      await page.keyboard.up(a);
-    }
-    else if (kind === 'drag' || kind === 'click')
-    {
-      const g = await box();
-      await page.mouse.move(g.x + a * g.sx, g.y + b * g.sy);
-      await page.mouse.down();
-      if (kind === 'drag')
-      {
-        await page.mouse.move(g.x + c * g.sx, g.y + d * g.sy, { steps: 10 });
-        await page.waitForTimeout(e);
-      }
-      await page.mouse.up();
-    }
-  }
-}
 
 async function record(page, seconds, fps, width)
 {
@@ -259,7 +102,7 @@ try
     const shot = SHOTS[id];
     if (!shot)
     {
-      console.log(`skip ${id}: no script for it in tools/capture.mjs`);
+      console.log(`skip ${id}: no script for it in tools/game-shots.mjs`);
       continue;
     }
     const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });

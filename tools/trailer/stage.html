@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>DivJS trailer stage</title>
+<style>
+  html, body { margin: 0; background: #000; }
+  canvas { display: block; image-rendering: pixelated; }
+</style>
+</head>
+<body>
+<!-- Runs one DIV program for tools/trailer (its text cards). The recorder
+     calls startStage(source, width, height) and reads #game. -->
+<canvas id="game"></canvas>
+<script type="module">
+import { runDivDemo } from '../../engine/divjs.js';
+
+window.startStage = (source, width, height, clearColor) =>
+{
+  window.stageErrors = [];
+  window.stage = runDivDemo({
+    canvas: 'game',
+    source,
+    width,
+    height,
+    clearColor,
+    onError: (err) => window.stageErrors.push(String(err && err.message || err))
+  });
+  return window.stageErrors;
+};
+</script>
+</body>
+</html>

@@ -82,6 +82,36 @@ npx playwright install chromium    # once
 npm run test:browser               # every page, the playground, online play, sound
 ```
 
+## The trailers
+
+`npm run trailer` makes two videos from real gameplay: a vertical Short
+(1080x1920) and a 16:9 trailer (1920x1080), each as a full-quality `.mp4`
+and a `-share.mp4` under 15 MB. Everything is in `tools/trailer/`.
+
+```bash
+npm run trailer -- short                  # or: trailer, all
+npm run trailer -- all --both --check     # with and without narration, then checked
+```
+
+- **What is cut where** is `tools/trailer/timeline.mjs`: the order of the
+  segments, their length in beats (120 bpm, 2 beats = 1 s), where each one
+  starts in its recording (`from`) and its texts. Change it and run again;
+  only recordings that changed are made again (`--fresh` redoes them all).
+- **Recording**: the games play by the scripts in `tools/game-shots.mjs`
+  (shared with `npm run capture`). The pages run on a virtual clock, so each
+  engine frame is exactly one video frame at 60 fps, and their sound is
+  rendered offline in step with the pictures.
+- **Text screens and music** are DIV programs run by DivJS itself (the 6x8
+  system font, the engine's sequencer and sound effects).
+- **Narration** is optional: `--vo` speaks `tools/trailer/vo_lines.json`
+  with `tools/trailer/vo.py`, which needs a Python with `kokoro`,
+  `soundfile` and `faster-whisper` (pass it with `--vo-python <path>` or
+  `$DIVJS_VO_PYTHON`; `--voice`, default `bm_george`). Segments grow to fit
+  their line, the music ducks 8 dB under the voice, and each line is
+  transcribed back to check it.
+
+Output goes to `dist/trailer/` unless `--out <dir>` says otherwise.
+
 ## Support
 
 If DivJS made you smile, you can [buy me a coffee](https://buymeacoffee.com/akadjoker) - thank you!
