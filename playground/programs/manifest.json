@@ -603,6 +603,17 @@
       "clearColor": "#000000",
       "description": "Pac-Man turned around: you are the four ghosts and a computer Pac-Man runs a new generated maze every round, fleeing you and going for the power pills. Catch him 3 times before he eats every dot.",
       "controls": "Arrows move your ghost, 1-4 pick a ghost, TAB or Space next ghost, N new maze; Space/Enter on screens"
+    },
+    {
+      "id": "sparkroll",
+      "title": "Sparkroll",
+      "category": "procedural",
+      "file": "sparkroll.div",
+      "width": 480,
+      "height": 270,
+      "clearColor": "#000000",
+      "description": "A high-speed momentum platformer: Kip the pangolin builds up speed on slopes, runs round loop-the-loops, curls into a spinning ball to pop Baron Rust's robots and races through Coral Coast and Rivet Works to the goal. Get hit and your sparks scatter - grab them back quick!",
+      "controls": "Arrows run, Down rolls (or crouches), Space/Z/X jump; charge dash: hold Down, tap jump, let go; Enter on screens"
     }
   ],
   "categories": [
