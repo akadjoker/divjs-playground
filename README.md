@@ -46,8 +46,7 @@ DIV tutorials, and over 30 games to play, read and change.
   `manifest.json`) - every one of them is plain DIV source.
 - **Demos and examples** (`demos/`, `examples/`) - pages that run a program
   on their own.
-- **itch.io pages** (`itch/`) and the tools that make the GIFs and the uploads
-  (`npm run capture`, `npm run itch`).
+- **The GIFs** of the games are made by `npm run capture`.
 
 ## The engine
 

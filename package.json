@@ -16,7 +16,7 @@
     "trailer": "node tools/trailer/index.mjs"
   },
   "dependencies": {
-    "divjs": "github:akadjoker/divjs#9a9dd250ea27485fb9bfcb2f13304e94518c0d2b"
+    "divjs": "github:akadjoker/divjs#91b82f9f4d87bd28394ff2a8e8d581c8ee7572b6"
   },
   "devDependencies": {
     "@codemirror/autocomplete": "^6.20.3",
