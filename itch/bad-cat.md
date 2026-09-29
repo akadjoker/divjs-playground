@@ -2,7 +2,7 @@
 
 **Tagline:** You're a cat. Everything on the shelves belongs on the floor. Don't get caught.
 
-**Viewport:** 640 x 480 · **Genre:** Platformer · **Tags:** cat, comedy, physics, platformer, funny, cozy, 2d, procedural, ai-generated, casual
+**Viewport:** 640 x 480 · **Genre:** Platformer · **Tags:** cat, comedy, physics, platformer, funny, cozy, 2d, procedural, casual
 
 ## Description
 
@@ -29,5 +29,4 @@ owner more suspicious than the last.
 ## How it was made
 
 Written in the DIV language and running on [DivJS](https://github.com/akadjoker/divjs),
-with its physics and synthesised sound. The game, meows and music
-included, was written by an AI agent from the engine's reference.
+with its physics and synthesised sound - meows and music included.

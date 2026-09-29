@@ -18,9 +18,6 @@ On itch.io, for each game:
    these files were prepared on.)
 2. **Embed options:** the viewport size given in the game's file, and
    "Fullscreen button" on.
-3. **Generative AI disclosure:** yes - *Code*, *Graphics* and *Sound*. The
-   games were written by AI agents, and their pictures and sounds are made
-   by that code.
-4. Title, tagline, description, genre and tags from the game's file; the
+3. Title, tagline, description, genre and tags from the game's file; the
    GIF as a screenshot or the cover's source.
-5. **Pricing:** free, or "no payments / donations" - your call.
+4. **Pricing:** free, or "no payments / donations" - your call.

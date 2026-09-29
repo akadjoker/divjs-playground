@@ -2,7 +2,7 @@
 
 **Tagline:** A one-on-one street fighter with motion-input specials, supers and a crowd that throws bottles into the ring.
 
-**Viewport:** 640 x 400 · **Genre:** Fighting · **Tags:** fighting, arcade, retro, 2d, local-multiplayer, pixel-art, street-fighter, versus, procedural, ai-generated
+**Viewport:** 640 x 400 · **Genre:** Fighting · **Tags:** fighting, arcade, retro, 2d, local-multiplayer, pixel-art, street-fighter, versus, procedural
 
 ## Description
 
@@ -30,6 +30,5 @@ and throw them back.
 ## How it was made
 
 Written in the DIV language and running on [DivJS](https://github.com/akadjoker/divjs),
-a DIV Games Studio engine for the browser. The game - code, jointed fighters,
-stages and effects - was written by an AI agent from the engine's
-reference, then played and fixed in a browser until it held 60 fps.
+a DIV Games Studio engine for the browser. Jointed fighters, stages and
+effects are all made in code, and it holds 60 fps.

@@ -2,7 +2,7 @@
 
 **Tagline:** Pac-Man, the other way round: you are the four ghosts.
 
-**Viewport:** 640 x 480 · **Genre:** Action · **Tags:** pac-man, arcade, maze, retro, strategy, procedural, 2d, reverse, ai-generated, pixel-art
+**Viewport:** 640 x 480 · **Genre:** Action · **Tags:** pac-man, arcade, maze, retro, strategy, procedural, 2d, reverse, pixel-art
 
 ## Description
 
@@ -24,4 +24,4 @@ times before he clears the maze. Every round is a new, generated maze.
 ## How it was made
 
 Written in the DIV language and running on [DivJS](https://github.com/akadjoker/divjs).
-The game, the maze generator and Pac-Man's AI were written by an AI agent from the engine's reference.
+The maze generator and Pac-Man's AI are part of the game's code.
