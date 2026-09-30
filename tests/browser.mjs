@@ -1010,16 +1010,29 @@ try
         const x1 = await phone.g('fx', 0);
         await phone.up(1);
         assert(Math.abs(x1 - x0) > 5, `the pad should walk the fighter: ${x0} -> ${x1}`);
-        await phone.page.waitForTimeout(400);
-        await phone.down(2, await phone.centre('[data-touch-key="z"]'));
+        // The CPU fights back: a press while the player is knocked down,
+        // hit or blocking can't start an attack. Wait until the player's
+        // fighter is free (state 0), then press; try a few times.
+        const kick = await phone.centre('[data-touch-key="z"]');
         let attacking = -1;
-        for (let i = 0; i < 10 && attacking !== 4; i++)
+        const seen = [];
+        for (let attempt = 0; attempt < 5 && attacking !== 4; attempt++)
         {
-          attacking = await phone.g('fs', 0);
-          await phone.page.waitForTimeout(30);
+          for (let i = 0; i < 60 && (await phone.g('fs', 0)) !== 0; i++)
+          {
+            await phone.page.waitForTimeout(50);
+          }
+          await phone.down(2, kick);
+          for (let i = 0; i < 10 && attacking !== 4; i++)
+          {
+            attacking = await phone.g('fs', 0);
+            await phone.page.waitForTimeout(30);
+          }
+          await phone.up(2);
+          seen.push(attacking);
+          await phone.page.waitForTimeout(400);
         }
-        await phone.up(2);
-        assert(attacking === 4, `LK should attack (state 4), state ${attacking}`);
+        assert(attacking === 4, `LK should attack (state 4) from a free fighter, states seen ${seen.join(', ')}`);
         assert(phone.problems.length === 0, phone.problems.join('\n'));
       }
       finally
