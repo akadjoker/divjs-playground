@@ -926,7 +926,7 @@ BEGIN
   my_gen = gen; z = 10;
   graph = g_bal[col];
   fy = y; ph = rand(0, 359) * 1000;
-  sp = 0.9 + fdiv(rand(0, 20), 100);
+  sp = 1;                     // one speed for all: gaps in a lane never shrink
   s_str = bpart(11, g_string);
   s_halo = bpart(12, g_halo);
   s_sym = 0;
@@ -985,7 +985,8 @@ BEGIN
     END
     FRAME;
   END
-  b_used[slot] = 0; b_tap[slot] = 0; b_id[slot] = 0;
+  // free the slot - unless a new scene has already given it to another
+  IF (b_id[slot] == id) b_used[slot] = 0; b_tap[slot] = 0; b_id[slot] = 0; END
   signal(s_str, s_kill); signal(s_halo, s_kill);
   IF (s_sym) signal(s_sym, s_kill); END
 END

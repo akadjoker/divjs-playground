@@ -103,7 +103,7 @@ const SHOTS = {
   },
   'balloon-pop': {
     seconds: 7,
-    setup: [['wait', 2500], ['click', 520, 234], ['wait', 2600]],
+    setup: [['wait', 2500], ['click', 420, 396], ['wait', 2600]],
     play: [['click', 76, 330], ['wait', 500], ['click', 198, 330], ['wait', 500], ['click', 320, 330], ['wait', 500], ['click', 442, 330],
       ['wait', 500], ['click', 564, 330], ['wait', 600], ['click', 76, 280], ['wait', 500], ['click', 198, 280], ['wait', 500],
       ['click', 320, 280], ['wait', 500], ['click', 442, 280], ['wait', 500], ['click', 564, 280]]
