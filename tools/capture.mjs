@@ -101,6 +101,20 @@ const SHOTS = {
       ['wait', 250], hold('z', 300), ['wait', 600], ['down', 'x'], ['wait', 400], hold('z', 330), ['wait', 500], hold('z', 330),
       ['wait', 500], hold('z', 300), ['up', 'x'], ['up', 'ArrowRight']]
   },
+  'sky-shield': {
+    seconds: 8,
+    setup: [['wait', 1500], ['press', 'Enter'], ['wait', 5200]],
+    play: [['click', 150, 230], ['wait', 350], ['click', 330, 190], ['wait', 350], ['click', 500, 250], ['wait', 900],
+      ['click', 250, 300], ['wait', 300], ['click', 420, 320], ['wait', 1200], ['click', 120, 280], ['wait', 300],
+      ['click', 560, 300], ['wait', 900], ['click', 320, 260], ['wait', 400], ['click', 200, 330]]
+  },
+  'balloon-pop': {
+    seconds: 7,
+    setup: [['wait', 2500], ['click', 420, 396], ['wait', 2600]],
+    play: [['click', 76, 330], ['wait', 500], ['click', 198, 330], ['wait', 500], ['click', 320, 330], ['wait', 500], ['click', 442, 330],
+      ['wait', 500], ['click', 564, 330], ['wait', 600], ['click', 76, 280], ['wait', 500], ['click', 198, 280], ['wait', 500],
+      ['click', 320, 280], ['wait', 500], ['click', 442, 280], ['wait', 500], ['click', 564, 280]]
+  },
   'beat-bash': {
     seconds: 9,
     setup: [['wait', 2500]],

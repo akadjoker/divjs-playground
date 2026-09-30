@@ -1,0 +1,1702 @@
+PROGRAM balloon_pop;
+
+// BALLOON POP - a first game for small children (4 to 8). Balloons float
+// up from the meadow; the card at the top shows, as a big picture, which
+// balloons to pop. Tap them! A right balloon pops into confetti and fills
+// a star; five stars and Bun the bunny comes out to wave under fireworks,
+// then a new picture. A wrong balloon only wobbles with a soft "boing":
+// nothing is ever lost, there is no timer and no game over.
+//
+// Five games, picked from the picture menu (no reading needed):
+//   rainbow     COLOURS       pop the balloons of the colour on the card
+//   shapes      SHAPES        circle, square, triangle, star, heart, diamond
+//   1 2 3       NUMBERS       1 to 10 (the card also shows that many dots)
+//   A B C       LETTERS       capital letters A to Z
+//   bunch       POP THEM ALL  free play: every balloon pops
+//
+// The game adapts gently: a run of right taps brings a few more balloons
+// and a little more speed, two wrong taps in a row (or right balloons
+// that float away) make it calmer again and make the right balloons
+// glow as a hint. They also glow after a while without a pop.
+//
+// For grown-ups: hold the little house (top left) for a moment, or press
+// Esc, to go back to the menu. The speaker next to it (or M) turns all
+// sound off and on. Digits 1-5 pick a game on the menu.
+//
+// Controls are a tap (or a mouse click) - the first finger on a touch
+// screen is the mouse. The big numbers, letters and shapes are drawn
+// here with thick strokes (the system font is small and cannot be
+// relied on); every picture, sound and the music are made in code.
+
+GLOBAL
+  SW = 640; SH = 480;
+  STRIP = 118;                 // bottom of the cloud shelf at the top
+  NAVY_R = 40; NAVY_G = 46; NAVY_B = 98;
+
+  // ---- modes
+  M_COLOUR = 0; M_SHAPE = 1; M_NUMBER = 2; M_LETTER = 3; M_FREE = 4;
+  ST_LOAD = 0; ST_MENU = 1; ST_PLAY = 2; ST_CELEB = 3;
+  state = 0; mode = 0; gen = 0; frame_no = 0;
+
+  // ---- balloon colours: red, orange, yellow, green, blue, purple, pink
+  NCOL = 7;
+  pal_r[6] = 236, 255, 255, 76, 58, 150, 255;
+  pal_g[6] = 62, 146, 208, 190, 132, 94, 122;
+  pal_b[6] = 62, 40, 46, 84, 236, 214, 190;
+
+  // ---- lanes the balloons rise in (never side by side in one lane)
+  NLANE = 5;
+  lane_x[4] = 76, 198, 320, 442, 564;
+
+  // ---- balloon register (the balloons write here; MAIN reads the taps)
+  MAXB = 15;
+  b_used[15]; b_x[15]; b_y[15]; b_v[15]; b_lane[15]; b_tap[15]; b_id[15];
+
+  // ---- the round
+  target = 0; prev_target = -1;
+  dis[25]; ndis = 0;           // the other values that may come up
+  lvl = 0;                     // 0 calm .. 4 busy
+  streak = 0; wrong_run = 0; escapes = 0; idle_t = 0; hint_t = 0;
+  stars_pending = 0; stars_filled = 0; celeb_t = 0; celeb_wait = 0;
+  spawn_cool = 0; card_pulse = 0; card_flip = 0; mascot_mood = 0; mood_t = 0;
+  cur_speed = 0.55;
+  home_hold = 0; prev_l = 0; muted = 0; menu_pick = -1; menu_t = 0;
+  menu_respawn[3]; menu_slot[3];
+
+  // ---- measurements (read by the tests)
+  n_right[4]; n_wrong[4]; n_celeb[4]; n_escape[4]; n_pops = 0;
+  fps_now = 0; fps_min = 999;
+
+  // ---- glyph pen (see gl / ga)
+  q_g = 0; q_ox = 0.0; q_oy = 0.0; q_s = 1.0; q_rad = 7.0; q_dx = 0;
+  q_r = 255; q_gc = 255; q_b = 255;
+
+  // ---- graphics
+  g_sky = 0; g_strip = 0; g_cloud[2]; g_bal[6]; g_burst[6]; g_string = 0;
+  g_glyph[35]; g_shape[5]; g_dots[10]; g_card[1]; g_star[1]; g_bigstar = 0;
+  g_bun[4]; g_home = 0; g_ring[11]; g_snd[1]; g_conf[6]; g_spark[6];
+  g_twinkle = 0; g_halo = 0; g_tile[4]; g_icon[4];
+
+  // ---- sounds and music
+  s_pop = 0; s_chime = 0; s_chime2 = 0; s_boing = 0; s_star = 0; s_tap = 0;
+  s_whoosh = 0; s_bang = 0; s_tada = 0; s_hop = 0;
+  mus_bg = 0; mus_celeb = 0;
+
+// =====================================================================
+// Small helpers
+// =====================================================================
+
+// a / b as a real division. Two whole numbers divide as integers (and
+// 1.0 is a whole number at runtime), so the divisor gets a tiny fraction.
+FUNCTION fdiv(a, b);
+BEGIN
+  IF (b == 0) RETURN 0; END
+  RETURN a * (1 / (b + 0.0000001));
+END
+
+// Filled ellipse, one row at a time.
+FUNCTION ell(g, cx, cy, rx, ry, r, gg, b);
+PRIVATE dy, half;
+BEGIN
+  FOR dy = -ry TO ry
+    half = rx * sqrt(ry * ry - dy * dy) * (1.0 / (ry + 0.0001));
+    gfx_rect(g, cx - half, cy + dy, half * 2 + 1, 1, r, gg, b);
+  END
+  RETURN 0;
+END
+
+// Filled triangle: one row of pixels at a time between its edges, then
+// the three edges as (smooth) lines.
+FUNCTION tri(g, x1, y1, x2, y2, x3, y3, r, gg, b);
+PRIVATE t, yy, y0, ye, xa, xb;
+BEGIN
+  // sort the corners by y
+  IF (y2 < y1) t = x1; x1 = x2; x2 = t; t = y1; y1 = y2; y2 = t; END
+  IF (y3 < y1) t = x1; x1 = x3; x3 = t; t = y1; y1 = y3; y3 = t; END
+  IF (y3 < y2) t = x2; x2 = x3; x3 = t; t = y2; y2 = y3; y3 = t; END
+  y0 = int(y1 + 0.5); ye = int(y3 - 0.5);
+  FOR yy = y0 TO ye
+    xa = x1 + (x3 - x1) * fdiv(yy + 0.5 - y1, y3 - y1);
+    IF (yy + 0.5 < y2)
+      xb = x1 + (x2 - x1) * fdiv(yy + 0.5 - y1, y2 - y1);
+    ELSE
+      xb = x2 + (x3 - x2) * fdiv(yy + 0.5 - y2, y3 - y2);
+    END
+    IF (xa > xb) t = xa; xa = xb; xb = t; END
+    gfx_rect(g, xa, yy, xb - xa, 1, r, gg, b);
+  END
+  gfx_line(g, x1, y1, x2, y2, r, gg, b);
+  gfx_line(g, x2, y2, x3, y3, r, gg, b);
+  gfx_line(g, x3, y3, x1, y1, r, gg, b);
+  RETURN 0;
+END
+
+// A thick line with round ends: a row of overlapping circles.
+FUNCTION thick(g, x1, y1, x2, y2, rad, r, gg, b);
+PRIVATE i, n, st;
+BEGIN
+  st = rad * 0.4;
+  IF (st < 0.7) st = 0.7; END
+  n = int(sqrt((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1)) / st) + 1;
+  FOR i = 0 TO n
+    gfx_circle(g, x1 + (x2 - x1) * fdiv(i, n), y1 + (y2 - y1) * fdiv(i, n), rad, r, gg, b);
+  END
+  RETURN 0;
+END
+
+// Rectangle with rounded corners.
+FUNCTION rrect(g, x, y, w, h, rad, r, gg, b);
+BEGIN
+  gfx_rect(g, x + rad, y, w - rad * 2, h, r, gg, b);
+  gfx_rect(g, x, y + rad, w, h - rad * 2, r, gg, b);
+  gfx_circle(g, x + rad, y + rad, rad, r, gg, b);
+  gfx_circle(g, x + w - rad - 1, y + rad, rad, r, gg, b);
+  gfx_circle(g, x + rad, y + h - rad - 1, rad, r, gg, b);
+  gfx_circle(g, x + w - rad - 1, y + h - rad - 1, rad, r, gg, b);
+  RETURN 0;
+END
+
+// Colour channel k (0 r, 1 g, 2 b) of palette colour c, lightened (+) or
+// darkened (-) by amount 0..100.
+FUNCTION pc(c, k, amount);
+PRIVATE v;
+BEGIN
+  IF (k == 0) v = pal_r[c]; END
+  IF (k == 1) v = pal_g[c]; END
+  IF (k == 2) v = pal_b[c]; END
+  IF (amount > 0) RETURN int(v + (255 - v) * fdiv(amount, 100)); END
+  RETURN int(v * fdiv(100 + amount, 100));
+END
+
+// =====================================================================
+// The stroke font: numbers 1-10 and capital letters, drawn as thick
+// lines (gl) and arcs (ga) on a grid 80 units tall. Angles of ga are in
+// degrees, 0 = right, growing clockwise on screen (y down).
+// =====================================================================
+
+FUNCTION gl(x1, y1, x2, y2);
+BEGIN
+  thick(q_g, q_ox + (x1 + q_dx) * q_s, q_oy + y1 * q_s, q_ox + (x2 + q_dx) * q_s, q_oy + y2 * q_s, q_rad, q_r, q_gc, q_b);
+  RETURN 0;
+END
+
+FUNCTION ga(cx, cy, rx, ry, a0, a1);
+PRIVATE i, n, a, st, len;
+BEGIN
+  st = q_rad * 0.4;
+  IF (st < 0.7) st = 0.7; END
+  len = (a1 - a0) * 0.01745 * max(rx, ry) * q_s;
+  n = int(len / st) + 1;
+  FOR i = 0 TO n
+    a = (a0 + (a1 - a0) * fdiv(i, n)) * 1000;
+    gfx_circle(q_g, q_ox + (cx + q_dx + cos(a) * rx) * q_s, q_oy + (cy + sin(a) * ry) * q_s, q_rad, q_r, q_gc, q_b);
+  END
+  RETURN 0;
+END
+
+// Width in units of glyph c (0..9 = the numbers 1..10, 10..35 = A..Z)
+FUNCTION glyph_w(c);
+BEGIN
+  IF (c == 0) RETURN 36; END
+  IF (c == 9) RETURN 94; END
+  IF (c == 22) RETURN 58; END          // M
+  IF (c == 32) RETURN 64; END          // W
+  RETURN 50;
+END
+
+FUNCTION glyph(c);
+BEGIN
+  SWITCH (c)
+    CASE 0  gl(6, 16, 22, 2); gl(22, 2, 22, 78); gl(6, 78, 36, 78);                       // 1
+    CASE 1  ga(25, 24, 21, 21, 185, 400); gl(41, 38, 5, 78); gl(5, 78, 46, 78);          // 2
+    CASE 2  ga(25, 21, 19, 19, 205, 450); ga(25, 59, 21, 20, 270, 515);                  // 3
+    CASE 3  gl(35, 78, 35, 2); gl(35, 2, 3, 56); gl(3, 56, 47, 56);                       // 4
+    CASE 4  gl(44, 2, 10, 2); gl(10, 2, 7, 38); ga(24, 55, 22, 23, 222, 500);            // 5
+    CASE 5  ga(25, 56, 21, 22, 0, 360); gl(38, 3, 6, 50);                                // 6
+    CASE 6  gl(4, 2, 46, 2); gl(46, 2, 18, 78);                                          // 7
+    CASE 7  ga(25, 20, 17, 18, 0, 360); ga(25, 58, 21, 20, 0, 360);                      // 8
+    CASE 8  ga(25, 24, 21, 22, 0, 360); gl(45, 28, 14, 78);                              // 9
+    CASE 9  gl(6, 16, 22, 2); gl(22, 2, 22, 78); gl(6, 78, 36, 78);                       // 10
+            q_dx += 44; ga(25, 40, 21, 38, 0, 360); q_dx -= 44;
+    CASE 10 gl(3, 78, 25, 2); gl(25, 2, 47, 78); gl(11, 52, 39, 52);                      // A
+    CASE 11 gl(6, 2, 6, 78); gl(6, 2, 25, 2); ga(25, 20, 18, 18, 270, 450);               // B
+            gl(25, 38, 6, 38); gl(6, 38, 27, 38); ga(27, 58, 20, 20, 270, 450); gl(27, 78, 6, 78);
+    CASE 12 ga(27, 40, 23, 38, 42, 318);                                                 // C
+    CASE 13 gl(6, 2, 6, 78); gl(6, 2, 16, 2); ga(16, 40, 30, 38, 270, 450); gl(16, 78, 6, 78);   // D
+    CASE 14 gl(44, 2, 6, 2); gl(6, 2, 6, 78); gl(6, 78, 44, 78); gl(6, 40, 36, 40);      // E
+    CASE 15 gl(44, 2, 6, 2); gl(6, 2, 6, 78); gl(6, 40, 36, 40);                         // F
+    CASE 16 ga(27, 40, 23, 38, 18, 320); gl(30, 48, 49, 48); gl(49, 48, 49, 66);         // G
+    CASE 17 gl(5, 2, 5, 78); gl(45, 2, 45, 78); gl(5, 40, 45, 40);                       // H
+    CASE 18 gl(25, 2, 25, 78); gl(12, 2, 38, 2); gl(12, 78, 38, 78);                     // I
+    CASE 19 gl(22, 2, 44, 2); gl(40, 2, 40, 56); ga(22, 56, 18, 22, 0, 165);             // J
+    CASE 20 gl(6, 2, 6, 78); gl(44, 2, 7, 46); gl(20, 32, 46, 78);                       // K
+    CASE 21 gl(8, 2, 8, 78); gl(8, 78, 44, 78);                                          // L
+    CASE 22 gl(5, 78, 5, 2); gl(5, 2, 29, 52); gl(29, 52, 53, 2); gl(53, 2, 53, 78);     // M
+    CASE 23 gl(6, 78, 6, 2); gl(6, 2, 44, 78); gl(44, 78, 44, 2);                        // N
+    CASE 24 ga(25, 40, 22, 38, 0, 360);                                                  // O
+    CASE 25 gl(6, 78, 6, 2); gl(6, 2, 26, 2); ga(26, 22, 20, 20, 270, 450); gl(26, 42, 6, 42);   // P
+    CASE 26 ga(25, 40, 22, 38, 0, 360); gl(30, 58, 48, 80);                              // Q
+    CASE 27 gl(6, 78, 6, 2); gl(6, 2, 26, 2); ga(26, 22, 20, 20, 270, 450); gl(26, 42, 6, 42);   // R
+            gl(24, 42, 46, 78);
+    CASE 28 ga(25, 21, 20, 19, 90, 335); ga(25, 59, 21, 19, 270, 515);                   // S
+    CASE 29 gl(3, 2, 47, 2); gl(25, 2, 25, 78);                                          // T
+    CASE 30 gl(5, 2, 5, 54); ga(25, 54, 20, 24, 0, 180); gl(45, 54, 45, 2);              // U
+    CASE 31 gl(3, 2, 25, 78); gl(25, 78, 47, 2);                                         // V
+    CASE 32 gl(2, 2, 16, 78); gl(16, 78, 32, 24); gl(32, 24, 48, 78); gl(48, 78, 62, 2); // W
+    CASE 33 gl(4, 2, 46, 78); gl(46, 2, 4, 78);                                          // X
+    CASE 34 gl(3, 2, 25, 40); gl(47, 2, 25, 40); gl(25, 40, 25, 78);                     // Y
+    CASE 35 gl(4, 2, 46, 2); gl(46, 2, 4, 78); gl(4, 78, 46, 78);                        // Z
+  END
+  RETURN 0;
+END
+
+// Glyph c at (x0, y0) = its top-left corner, scale sc, white with a navy
+// outline, or filled with colour (r, gg, b).
+FUNCTION put_glyph(g, c, x0, y0, sc, r, gg, b);
+BEGIN
+  q_g = g; q_s = sc; q_ox = x0; q_oy = y0; q_dx = 0;
+  q_rad = 11 * sc; q_r = NAVY_R; q_gc = NAVY_G; q_b = NAVY_B;
+  glyph(c);
+  q_rad = 7 * sc; q_r = r; q_gc = gg; q_b = b;
+  glyph(c);
+  RETURN 0;
+END
+
+// A 130x110 graphic with glyph c centred on it
+FUNCTION make_glyph(c);
+PRIVATE g;
+BEGIN
+  g = new_graphic(130, 110);
+  put_glyph(g, c, (130 - glyph_w(c)) / 2.0, 15, 1.0, 255, 255, 255);
+  RETURN g;
+END
+
+// =====================================================================
+// Shapes: 0 circle, 1 square, 2 triangle, 3 star, 4 heart, 5 diamond,
+// about 96 units across, centred on (cx, cy). The outline (grow > 0) is
+// drawn first, a little larger, then the fill over it.
+// =====================================================================
+
+FUNCTION shape_pass(g, k, cx, cy, sc, grow, r, gg, b);
+PRIVATE i, a1, a2, rr1, rr2, px1, py1, px2, py2;
+BEGIN
+  SWITCH (k)
+    CASE 0
+      gfx_circle(g, cx, cy, 44 * sc + grow, r, gg, b);
+    CASE 1
+      rrect(g, cx - 40 * sc - grow, cy - 40 * sc - grow, 80 * sc + grow * 2, 80 * sc + grow * 2, 9 * sc + grow, r, gg, b);
+    CASE 2
+      tri(g, cx, cy - 44 * sc, cx + 47 * sc, cy + 38 * sc, cx - 47 * sc, cy + 38 * sc, r, gg, b);
+      IF (grow > 0)
+        thick(g, cx, cy - 44 * sc, cx + 47 * sc, cy + 38 * sc, grow, r, gg, b);
+        thick(g, cx + 47 * sc, cy + 38 * sc, cx - 47 * sc, cy + 38 * sc, grow, r, gg, b);
+        thick(g, cx - 47 * sc, cy + 38 * sc, cx, cy - 44 * sc, grow, r, gg, b);
+      END
+    CASE 3
+      FOR i = 0 TO 9
+        a1 = -90000 + i * 36000; a2 = a1 + 36000;
+        rr1 = 50; rr2 = 21;
+        IF (i % 2 == 1) rr1 = 21; rr2 = 50; END
+        px1 = cx + cos(a1) * rr1 * sc; py1 = cy + 4 * sc + sin(a1) * rr1 * sc;
+        px2 = cx + cos(a2) * rr2 * sc; py2 = cy + 4 * sc + sin(a2) * rr2 * sc;
+        tri(g, cx, cy + 4 * sc, px1, py1, px2, py2, r, gg, b);
+        IF (grow > 0) thick(g, px1, py1, px2, py2, grow, r, gg, b); END
+      END
+    CASE 4
+      gfx_circle(g, cx - 18 * sc, cy - 14 * sc, 24 * sc + grow, r, gg, b);
+      gfx_circle(g, cx + 18 * sc, cy - 14 * sc, 24 * sc + grow, r, gg, b);
+      tri(g, cx, cy + 42 * sc, cx - 40 * sc, cy - 5 * sc, cx + 40 * sc, cy - 5 * sc, r, gg, b);
+      IF (grow > 0)
+        thick(g, cx - 40 * sc, cy - 5 * sc, cx, cy + 42 * sc, grow, r, gg, b);
+        thick(g, cx + 40 * sc, cy - 5 * sc, cx, cy + 42 * sc, grow, r, gg, b);
+      END
+    CASE 5
+      tri(g, cx, cy - 48 * sc, cx - 40 * sc, cy, cx + 40 * sc, cy, r, gg, b);
+      tri(g, cx, cy + 48 * sc, cx - 40 * sc, cy, cx + 40 * sc, cy, r, gg, b);
+      IF (grow > 0)
+        thick(g, cx, cy - 48 * sc, cx + 40 * sc, cy, grow, r, gg, b);
+        thick(g, cx + 40 * sc, cy, cx, cy + 48 * sc, grow, r, gg, b);
+        thick(g, cx, cy + 48 * sc, cx - 40 * sc, cy, grow, r, gg, b);
+        thick(g, cx - 40 * sc, cy, cx, cy - 48 * sc, grow, r, gg, b);
+      END
+  END
+  RETURN 0;
+END
+
+FUNCTION put_shape(g, k, cx, cy, sc, r, gg, b);
+BEGIN
+  shape_pass(g, k, cx, cy, sc, 5, NAVY_R, NAVY_G, NAVY_B);
+  shape_pass(g, k, cx, cy, sc, 0, r, gg, b);
+  RETURN 0;
+END
+
+// =====================================================================
+// Pictures
+// =====================================================================
+
+// The sky, the far and near hills and their flowers (the background).
+FUNCTION make_sky();
+PRIVATE g, yy, t, xx, h, k, fx, fy, c;
+BEGIN
+  g = new_graphic(SW, SH);
+  FOR yy = 0 TO SH - 1 STEP 4
+    t = clamp(fdiv(yy, 420), 0, 1);
+    gfx_rect(g, 0, yy, SW, 4, int(112 + 96 * t), int(192 + 48 * t), int(246 + 9 * t));
+  END
+  FOR xx = 0 TO SW - 1 STEP 2
+    h = 392 + 13 * sin(xx * 520 + 20000) + 7 * sin(xx * 1500);
+    gfx_rect(g, xx, h, 2, SH - h, 160, 222, 130);
+    gfx_rect(g, xx, h, 2, 3, 184, 234, 150);
+  END
+  FOR xx = 0 TO SW - 1 STEP 2
+    h = 428 + 11 * sin(xx * 900 + 60000) + 6 * sin(xx * 2300 + 10000);
+    gfx_rect(g, xx, h, 2, SH - h, 104, 192, 92);
+    gfx_rect(g, xx, h, 2, 4, 132, 212, 112);
+  END
+  FOR k = 0 TO 34
+    fx = rand(8, SW - 8);
+    fy = 428 + 11 * sin(fx * 900 + 60000) + 6 * sin(fx * 2300 + 10000) + rand(10, 40);
+    c = rand(0, 2);
+    FOR t = 0 TO 4
+      IF (c == 0) gfx_circle(g, fx + cos(t * 72000) * 3.5, fy + sin(t * 72000) * 3.5, 2.6, 255, 170, 200); END
+      IF (c == 1) gfx_circle(g, fx + cos(t * 72000) * 3.5, fy + sin(t * 72000) * 3.5, 2.6, 255, 255, 255); END
+      IF (c == 2) gfx_circle(g, fx + cos(t * 72000) * 3.5, fy + sin(t * 72000) * 3.5, 2.6, 190, 170, 255); END
+    END
+    gfx_circle(g, fx, fy, 2.2, 255, 214, 60);
+  END
+  RETURN g;
+END
+
+// A fluffy cloud (w x h), puffs with a soft blue shade underneath.
+FUNCTION make_cloud(w, h, puffs);
+PRIVATE g, i, px, pr;
+BEGIN
+  g = new_graphic(w, h);
+  FOR i = 0 TO puffs - 1
+    px = w * fdiv(i + 1, puffs + 1);
+    pr = h * 0.30 + h * 0.14 * sin(i * 110000 + 30000);
+    gfx_circle(g, px, h * 0.60 + 3, pr, 214, 232, 250);
+  END
+  gfx_rect(g, w * 0.14, h * 0.58, w * 0.72, h * 0.24, 214, 232, 250);
+  FOR i = 0 TO puffs - 1
+    px = w * fdiv(i + 1, puffs + 1);
+    pr = h * 0.30 + h * 0.14 * sin(i * 110000 + 30000);
+    gfx_circle(g, px, h * 0.60, pr, 255, 255, 255);
+  END
+  gfx_rect(g, w * 0.14, h * 0.56, w * 0.72, h * 0.22, 255, 255, 255);
+  RETURN g;
+END
+
+// The cloud shelf across the top: the balloons float up behind it.
+FUNCTION make_strip();
+PRIVATE g, i, px, pr, py;
+BEGIN
+  g = new_graphic(SW, 130);
+  gfx_rect(g, 0, 0, SW, 90, 250, 252, 255);
+  FOR i = 0 TO 16
+    px = i * 40 - 4; pr = 25 + 6 * sin(i * 77000); py = 88 + 5 * sin(i * 131000);
+    gfx_circle(g, px, py + 6, pr, 200, 222, 246);
+  END
+  FOR i = 0 TO 16
+    px = i * 40 - 4; pr = 25 + 6 * sin(i * 77000); py = 88 + 5 * sin(i * 131000);
+    gfx_circle(g, px, py, pr, 250, 252, 255);
+  END
+  set_point(0, g, 0, SW / 2, 0);
+  RETURN g;
+END
+
+// A balloon body of colour c: 112x136, pivot at the middle of the round
+// part (56, 64); the knot hangs at y 128.
+FUNCTION make_balloon(c);
+PRIVATE g;
+BEGIN
+  g = new_graphic(112, 138);
+  ell(g, 56, 64, 54, 64, pc(c, 0, -45), pc(c, 1, -45), pc(c, 2, -45));
+  tri(g, 56, 118, 46, 134, 66, 134, pc(c, 0, -45), pc(c, 1, -45), pc(c, 2, -45));
+  ell(g, 56, 64, 52, 62, pc(c, 0, -22), pc(c, 1, -22), pc(c, 2, -22));
+  ell(g, 53, 60, 47, 56, pal_r[c], pal_g[c], pal_b[c]);
+  tri(g, 56, 120, 49, 132, 63, 132, pc(c, 0, -22), pc(c, 1, -22), pc(c, 2, -22));
+  ell(g, 36, 36, 12, 20, pc(c, 0, 45), pc(c, 1, 45), pc(c, 2, 45));
+  ell(g, 34, 32, 6, 11, pc(c, 0, 80), pc(c, 1, 80), pc(c, 2, 80));
+  gfx_circle(g, 46, 20, 3.5, 255, 255, 255);
+  set_point(0, g, 0, 56, 64);
+  RETURN g;
+END
+
+// The string (pivot at its top, where it meets the knot).
+FUNCTION make_string();
+PRIVATE g, i, x1, y1, x2, y2;
+BEGIN
+  g = new_graphic(24, 110);
+  FOR i = 0 TO 20
+    x1 = 12 + 5 * sin(i * 30000); y1 = i * 5;
+    x2 = 12 + 5 * sin((i + 1) * 30000); y2 = (i + 1) * 5;
+    thick(g, x1, y1, x2, y2, 1.2, 120, 120, 140);
+  END
+  set_point(0, g, 0, 12, 0);
+  RETURN g;
+END
+
+// The pop: a star-shaped burst in the balloon's colour.
+FUNCTION make_burst(c);
+PRIVATE g, i, a, ln;
+BEGIN
+  g = new_graphic(150, 150);
+  FOR i = 0 TO 11
+    a = i * 30000;
+    ln = 62; IF (i % 2 == 1) ln = 44; END
+    tri(g, 75 + cos(a) * ln, 75 + sin(a) * ln, 75 + cos(a + 9000) * 18, 75 + sin(a + 9000) * 18,
+        75 + cos(a - 9000) * 18, 75 + sin(a - 9000) * 18, pal_r[c], pal_g[c], pal_b[c]);
+  END
+  gfx_circle(g, 75, 75, 22, pc(c, 0, 40), pc(c, 1, 40), pc(c, 2, 40));
+  gfx_circle(g, 75, 75, 12, 255, 255, 255);
+  RETURN g;
+END
+
+// A five-point star: gold (on = 1) or pale (on = 0), radius rr.
+FUNCTION make_star(on, rr);
+PRIVATE g, i, a1, a2, r1, r2, c;
+BEGIN
+  c = rr + 6;
+  g = new_graphic(c * 2, c * 2);
+  FOR i = 0 TO 9
+    a1 = -90000 + i * 36000; a2 = a1 + 36000;
+    r1 = rr; r2 = rr * 0.45;
+    IF (i % 2 == 1) r1 = rr * 0.45; r2 = rr; END
+    IF (on)
+      thick(g, c + cos(a1) * r1, c + 2 + sin(a1) * r1, c + cos(a2) * r2, c + 2 + sin(a2) * r2, 3, 222, 128, 24);
+    ELSE
+      thick(g, c + cos(a1) * r1, c + 2 + sin(a1) * r1, c + cos(a2) * r2, c + 2 + sin(a2) * r2, 3, 168, 186, 214);
+    END
+  END
+  FOR i = 0 TO 9
+    a1 = -90000 + i * 36000; a2 = a1 + 36000;
+    r1 = rr; r2 = rr * 0.45;
+    IF (i % 2 == 1) r1 = rr * 0.45; r2 = rr; END
+    IF (on)
+      tri(g, c, c + 2, c + cos(a1) * r1, c + 2 + sin(a1) * r1, c + cos(a2) * r2, c + 2 + sin(a2) * r2, 255, 210, 50);
+    ELSE
+      tri(g, c, c + 2, c + cos(a1) * r1, c + 2 + sin(a1) * r1, c + cos(a2) * r2, c + 2 + sin(a2) * r2, 226, 234, 246);
+    END
+  END
+  IF (on) gfx_circle(g, c - rr * 0.22, c - rr * 0.12, rr * 0.16, 255, 246, 190); END
+  RETURN g;
+END
+
+// The target card: w wide, a soft shadow, a sunny border.
+FUNCTION make_card(w);
+PRIVATE g;
+BEGIN
+  g = new_graphic(w + 8, 112);
+  rrect(g, 4, 8, w, 102, 20, 196, 214, 238);
+  rrect(g, 0, 2, w, 102, 20, 255, 176, 58);
+  rrect(g, 6, 8, w - 12, 90, 15, 255, 247, 214);
+  set_point(0, g, 0, w / 2, 53);
+  RETURN g;
+END
+
+// n dots in two rows of five (the numbers game shows them on the card).
+FUNCTION make_dots(n);
+PRIVATE g, i, dx, dy;
+BEGIN
+  g = new_graphic(112, 50);
+  FOR i = 0 TO n - 1
+    dx = 12 + (i % 5) * 22; dy = 13 + (i / 5) * 24;
+    gfx_circle(g, dx, dy, 10, NAVY_R, NAVY_G, NAVY_B);
+    gfx_circle(g, dx, dy, 7, 255, 132, 40);
+    gfx_circle(g, dx - 2, dy - 2, 2.2, 255, 214, 170);
+  END
+  RETURN g;
+END
+
+// Bun the bunny, 180x220. fr: 0 idle, 1 and 2 waving, 3 cheering, 4 blink
+FUNCTION make_bunny(fr);
+PRIVATE g, fr_r, fr_g, fr_b, o_r, o_g, o_b, ax, ay, i;
+BEGIN
+  g = new_graphic(180, 224);
+  fr_r = 250; fr_g = 242; fr_b = 232;           // fur
+  o_r = 110; o_g = 90; o_b = 100;               // outline
+  // ears
+  ell(g, 64, 42, 18, 41, o_r, o_g, o_b);
+  ell(g, 116, 42, 18, 41, o_r, o_g, o_b);
+  ell(g, 64, 42, 15, 38, fr_r, fr_g, fr_b);
+  ell(g, 116, 42, 15, 38, fr_r, fr_g, fr_b);
+  ell(g, 64, 46, 7, 27, 255, 182, 200);
+  ell(g, 116, 46, 7, 27, 255, 182, 200);
+  // raised arms go behind the body's outline at the shoulder
+  IF (fr == 1 OR fr == 3)
+    thick(g, 126, 162, 156, 120, 13, o_r, o_g, o_b);
+    thick(g, 126, 162, 156, 120, 10, fr_r, fr_g, fr_b);
+  END
+  IF (fr == 2)
+    thick(g, 126, 162, 164, 134, 13, o_r, o_g, o_b);
+    thick(g, 126, 162, 164, 134, 10, fr_r, fr_g, fr_b);
+  END
+  IF (fr == 3)
+    thick(g, 54, 162, 24, 120, 13, o_r, o_g, o_b);
+    thick(g, 54, 162, 24, 120, 10, fr_r, fr_g, fr_b);
+  END
+  // body, belly and feet
+  ell(g, 90, 174, 45, 41, o_r, o_g, o_b);
+  ell(g, 90, 174, 42, 38, fr_r, fr_g, fr_b);
+  ell(g, 90, 182, 26, 24, 255, 253, 250);
+  ell(g, 66, 210, 20, 12, o_r, o_g, o_b);
+  ell(g, 114, 210, 20, 12, o_r, o_g, o_b);
+  ell(g, 66, 210, 17, 9, fr_r, fr_g, fr_b);
+  ell(g, 114, 210, 17, 9, fr_r, fr_g, fr_b);
+  ell(g, 66, 212, 7, 4, 255, 190, 205);
+  ell(g, 114, 212, 7, 4, 255, 190, 205);
+  // head
+  gfx_circle(g, 90, 98, 49, o_r, o_g, o_b);
+  gfx_circle(g, 90, 98, 46, fr_r, fr_g, fr_b);
+  // cheeks
+  gfx_circle(g, 62, 114, 9, 255, 196, 204);
+  gfx_circle(g, 118, 114, 9, 255, 196, 204);
+  // eyes
+  IF (fr == 3)
+    thick(g, 65, 99, 73, 90, 2.6, 50, 40, 60); thick(g, 73, 90, 81, 99, 2.6, 50, 40, 60);
+    thick(g, 99, 99, 107, 90, 2.6, 50, 40, 60); thick(g, 107, 90, 115, 99, 2.6, 50, 40, 60);
+  ELSE
+    IF (fr == 4)
+      thick(g, 66, 97, 80, 97, 2.4, 50, 40, 60);
+      thick(g, 100, 97, 114, 97, 2.4, 50, 40, 60);
+    ELSE
+      ell(g, 73, 96, 7, 9, 44, 36, 56);
+      ell(g, 107, 96, 7, 9, 44, 36, 56);
+      gfx_circle(g, 75.5, 92, 2.8, 255, 255, 255);
+      gfx_circle(g, 109.5, 92, 2.8, 255, 255, 255);
+    END
+  END
+  // mouth and nose; cheering, a big open smile
+  IF (fr == 3)
+    ell(g, 90, 116, 13, 12, 150, 50, 70);
+    gfx_rect(g, 74, 102, 32, 14, fr_r, fr_g, fr_b);
+    ell(g, 90, 124, 7, 3, 255, 150, 170);
+  END
+  ell(g, 90, 110, 6, 4, 240, 120, 150);
+  IF (fr != 3)
+    thick(g, 90, 113, 90, 118, 1.6, o_r, o_g, o_b);
+    FOR i = 0 TO 6
+      gfx_circle(g, 90 - 7 * cos(i * 15000), 118 + 3 * sin(i * 15000), 1.6, o_r, o_g, o_b);
+      gfx_circle(g, 90 + 7 * cos(i * 15000), 118 + 3 * sin(i * 15000), 1.6, o_r, o_g, o_b);
+    END
+  END
+  // arms and paws in front
+  IF (fr == 0 OR fr == 4 OR fr == 1 OR fr == 2)
+    ell(g, 52, 176, 13, 20, o_r, o_g, o_b);
+    ell(g, 52, 176, 10, 17, fr_r, fr_g, fr_b);
+  END
+  IF (fr == 0 OR fr == 4)
+    ell(g, 128, 176, 13, 20, o_r, o_g, o_b);
+    ell(g, 128, 176, 10, 17, fr_r, fr_g, fr_b);
+  END
+  IF (fr == 1 OR fr == 3) ax = 157; ay = 116; END
+  IF (fr == 2) ax = 166; ay = 131; END
+  IF (fr == 1 OR fr == 2 OR fr == 3)
+    gfx_circle(g, ax, ay, 14, o_r, o_g, o_b);
+    gfx_circle(g, ax, ay, 11, fr_r, fr_g, fr_b);
+    gfx_circle(g, ax, ay + 2, 4, 255, 190, 205);
+  END
+  IF (fr == 3)
+    gfx_circle(g, 23, 116, 14, o_r, o_g, o_b);
+    gfx_circle(g, 23, 116, 11, fr_r, fr_g, fr_b);
+    gfx_circle(g, 23, 118, 4, 255, 190, 205);
+  END
+  RETURN g;
+END
+
+// Round white button face with a blue rim.
+FUNCTION button_face(g, c);
+BEGIN
+  gfx_circle(g, c, c + 2, 26, 176, 200, 230);
+  gfx_circle(g, c, c, 26, 92, 150, 220);
+  gfx_circle(g, c, c, 22, 255, 255, 255);
+  RETURN 0;
+END
+
+FUNCTION make_home();
+PRIVATE g;
+BEGIN
+  g = new_graphic(64, 64);
+  button_face(g, 32);
+  tri(g, 32, 17, 17, 31, 47, 31, 236, 90, 70);
+  gfx_rect(g, 21, 30, 22, 15, 255, 196, 90);
+  gfx_rect(g, 29, 35, 7, 10, 150, 96, 60);
+  RETURN g;
+END
+
+// The speaker, with sound waves (on = 1) or a small cross.
+FUNCTION make_speaker(on);
+PRIVATE g, i;
+BEGIN
+  g = new_graphic(64, 64);
+  button_face(g, 32);
+  gfx_rect(g, 17, 27, 8, 11, NAVY_R, NAVY_G, NAVY_B);
+  tri(g, 17, 32, 33, 18, 33, 46, NAVY_R, NAVY_G, NAVY_B);
+  IF (on)
+    FOR i = 0 TO 8
+      gfx_circle(g, 34 + 7 * cos(-40000 + i * 10000), 32 + 7 * sin(-40000 + i * 10000), 1.7, 60, 150, 230);
+      gfx_circle(g, 34 + 13 * cos(-40000 + i * 10000), 32 + 13 * sin(-40000 + i * 10000), 1.7, 60, 150, 230);
+    END
+  ELSE
+    thick(g, 38, 26, 48, 38, 2.2, 200, 90, 90);
+    thick(g, 48, 26, 38, 38, 2.2, 200, 90, 90);
+  END
+  RETURN g;
+END
+
+// The ring that fills while the home button is held (k = 0..11).
+FUNCTION make_ring(k);
+PRIVATE g, i, n, a;
+BEGIN
+  g = new_graphic(72, 72);
+  n = (k + 1) * 6;
+  FOR i = 0 TO n
+    a = -90000 + i * 5000;
+    gfx_circle(g, 36 + cos(a) * 31, 36 + sin(a) * 31, 4, 255, 150, 30);
+  END
+  RETURN g;
+END
+
+// A small balloon drawn straight into a picture (the menu icons).
+FUNCTION mini_balloon(g, cx, cy, rx, ry, c);
+BEGIN
+  thick(g, cx, cy + ry + 4, cx + 3, cy + ry + 30, 1, 120, 120, 140);
+  ell(g, cx, cy, rx + 2, ry + 2, pc(c, 0, -45), pc(c, 1, -45), pc(c, 2, -45));
+  tri(g, cx, cy + ry - 2, cx - 5, cy + ry + 6, cx + 5, cy + ry + 6, pc(c, 0, -45), pc(c, 1, -45), pc(c, 2, -45));
+  ell(g, cx, cy, rx, ry, pal_r[c], pal_g[c], pal_b[c]);
+  ell(g, cx - rx * 0.35, cy - ry * 0.4, rx * 0.22, ry * 0.3, pc(c, 0, 55), pc(c, 1, 55), pc(c, 2, 55));
+  RETURN 0;
+END
+
+// Menu tile backgrounds (k = game) and their pictures.
+FUNCTION make_tile(k);
+PRIVATE g, br, bgc, bb, fr, fg, fb;
+BEGIN
+  SWITCH (k)
+    CASE 0 br = 236; bgc = 90; bb = 140; fr = 255; fg = 232; fb = 240;
+    CASE 1 br = 70; bgc = 170; bb = 90; fr = 226; fg = 248; fb = 220;
+    CASE 2 br = 60; bgc = 130; bb = 226; fr = 222; fg = 238; fb = 255;
+    CASE 3 br = 240; bgc = 150; bb = 40; fr = 255; fg = 246; fb = 206;
+    CASE 4 br = 150; bgc = 100; bb = 214; fr = 238; fg = 228; fb = 255;
+  END
+  g = new_graphic(188, 148);
+  rrect(g, 4, 8, 180, 138, 24, 150, 182, 222);
+  rrect(g, 0, 2, 180, 138, 24, br, bgc, bb);
+  rrect(g, 7, 9, 166, 124, 18, fr, fg, fb);
+  set_point(0, g, 0, 90, 71);
+  RETURN g;
+END
+
+FUNCTION make_icon(k);
+PRIVATE g, i, a;
+BEGIN
+  g = new_graphic(170, 124);
+  SWITCH (k)
+    CASE 0                                        // a rainbow
+      q_g = g; q_s = 1.0; q_ox = 0; q_oy = 0; q_dx = 0; q_rad = 5;
+      FOR i = 0 TO 5
+        q_r = pal_r[i]; q_gc = pal_g[i]; q_b = pal_b[i];
+        ga(85, 96, 68 - i * 9, 68 - i * 9, 180, 360);
+      END
+      gfx_circle(g, 18, 100, 13, 255, 255, 255); gfx_circle(g, 32, 104, 11, 255, 255, 255);
+      gfx_circle(g, 6, 106, 9, 255, 255, 255);
+      gfx_circle(g, 152, 100, 13, 255, 255, 255); gfx_circle(g, 138, 104, 11, 255, 255, 255);
+      gfx_circle(g, 164, 106, 9, 255, 255, 255);
+    CASE 1                                        // circle, triangle, square
+      put_shape(g, 0, 36, 76, 0.42, 236, 62, 62);
+      put_shape(g, 2, 86, 50, 0.44, 255, 208, 46);
+      put_shape(g, 1, 134, 78, 0.40, 58, 132, 236);
+    CASE 2                                        // 1 2 3
+      put_glyph(g, 0, 18, 22, 0.62, 255, 255, 255);
+      put_glyph(g, 1, 64, 38, 0.62, 255, 255, 255);
+      put_glyph(g, 2, 116, 22, 0.62, 255, 255, 255);
+    CASE 3                                        // A B C
+      put_glyph(g, 10, 12, 22, 0.62, 255, 255, 255);
+      put_glyph(g, 11, 66, 38, 0.62, 255, 255, 255);
+      put_glyph(g, 12, 118, 22, 0.62, 255, 255, 255);
+    CASE 4                                        // a bunch of balloons popping
+      mini_balloon(g, 50, 46, 19, 23, 0);
+      mini_balloon(g, 120, 46, 19, 23, 4);
+      mini_balloon(g, 85, 36, 19, 23, 2);
+      mini_balloon(g, 66, 70, 17, 21, 3);
+      mini_balloon(g, 104, 70, 17, 21, 5);
+      FOR i = 0 TO 7
+        a = i * 45000;
+        thick(g, 148 + cos(a) * 9, 20 + sin(a) * 9, 148 + cos(a) * 17, 20 + sin(a) * 17, 2.2, 255, 176, 40);
+      END
+      gfx_circle(g, 148, 20, 5, 255, 214, 60);
+  END
+  RETURN g;
+END
+
+// Confetti, sparks, the tap twinkle and the hint glow.
+FUNCTION make_bits();
+PRIVATE i, g, c;
+BEGIN
+  FOR i = 0 TO NCOL - 1
+    g = new_graphic(12, 8);
+    gfx_rect(g, 0, 0, 12, 8, pal_r[i], pal_g[i], pal_b[i]);
+    gfx_rect(g, 0, 0, 12, 2, pc(i, 0, 50), pc(i, 1, 50), pc(i, 2, 50));
+    g_conf[i] = g;
+    g = new_graphic(22, 22);
+    gfx_circle(g, 11, 11, 10.5, pc(i, 0, 40), pc(i, 1, 40), pc(i, 2, 40));
+    gfx_circle(g, 11, 11, 8, pal_r[i], pal_g[i], pal_b[i]);
+    gfx_circle(g, 11, 11, 4, 255, 255, 255);
+    g_spark[i] = g;
+  END
+  g = new_graphic(30, 30);
+  FOR i = 0 TO 3
+    tri(g, 15, 15, 15 + cos(i * 90000) * 14, 15 + sin(i * 90000) * 14, 15 + cos(i * 90000 + 45000) * 4, 15 + sin(i * 90000 + 45000) * 4, 255, 236, 120);
+    tri(g, 15, 15, 15 + cos(i * 90000) * 14, 15 + sin(i * 90000) * 14, 15 + cos(i * 90000 - 45000) * 4, 15 + sin(i * 90000 - 45000) * 4, 255, 236, 120);
+  END
+  gfx_circle(g, 15, 15, 4, 255, 255, 255);
+  g_twinkle = g;
+  g = new_graphic(170, 190);
+  FOR i = 0 TO 7
+    c = 8 - i;
+    ell(g, 85, 95, 58 + c * 3, 70 + c * 3, 255, 244 - i * 2, 150 + i * 10);
+  END
+  set_point(0, g, 0, 85, 95);
+  g_halo = g;
+  RETURN 0;
+END
+
+// =====================================================================
+// Sound and music (all made by the engine's synthesiser)
+// =====================================================================
+
+FUNCTION make_sounds();
+BEGIN
+  s_pop = sfx_tone(wave_noise, 2600, 700, 70, 40);
+  s_chime = sfx_tone(wave_sine, 1047, 1060, 260, 42);
+  s_chime2 = sfx_tone(wave_triangle, 2093, 2100, 160, 22);
+  s_boing = sfx_tone(wave_sine, 300, 170, 240, 38);
+  s_hop = sfx_tone(wave_sine, 180, 260, 120, 26);
+  s_star = sfx_tone(wave_triangle, 1568, 2093, 170, 36);
+  s_tap = sfx_tone(wave_sine, 880, 1320, 70, 28);
+  s_whoosh = sfx_tone(wave_noise, 500, 1800, 380, 16);
+  s_bang = sfx_tone(wave_noise, 1400, 250, 420, 24);
+  s_tada = sfx_tone(wave_triangle, 784, 1568, 260, 34);
+
+  // the tune: soft and happy, C major, a triangle melody over a pad
+  mus_bg = song_new(100);
+  song_track(mus_bg, inst_triangle,
+    "E5 - G5 - C6 - - - G5 - E5 - G5 - - - | A5 - G5 - F5 - A5 - C6 - - - A5 - - - |" +
+    "G5 - F5 - D5 - F5 - B5 - A5 - G5 - - - | E5 - G5 - E5 - D5 - C5 - - - . . . . |" +
+    "C5 - E5 - A5 - - - G5 - E5 - C5 - - - | F5 - A5 - C6 - - - A5 - G5 - F5 - - - |" +
+    "D5 - G5 - B5 - - - A5 - G5 - F5 - D5 - | C5 - E5 - G5 - E5 - C5 - - - . . . .", 24);
+  song_track(mus_bg, inst_bass,
+    "C3 - - - G3 - - - E3 - - - G3 - - - | F3 - - - C4 - - - A3 - - - C4 - - - |" +
+    "G3 - - - D4 - - - B3 - - - D4 - - - | C3 - - - G3 - - - C3 - - - . . . . |" +
+    "A3 - - - E4 - - - C4 - - - E4 - - - | F3 - - - C4 - - - A3 - - - C4 - - - |" +
+    "G3 - - - D4 - - - B3 - - - D4 - - - | C3 - - - G3 - - - C3 - - - . . . .", 30);
+  song_track(mus_bg, inst_pad,
+    "E4 - - - - - - - - - - - - - - - | A4 - - - - - - - - - - - - - - - |" +
+    "B4 - - - - - - - - - - - - - - - | G4 - - - - - - - - - - - - - - - |" +
+    "C5 - - - - - - - - - - - - - - - | A4 - - - - - - - - - - - - - - - |" +
+    "B4 - - - - - - - - - - - - - - - | E4 - - - - - - - - - - - - - - -", 14);
+  song_track(mus_bg, inst_pluck,
+    "C5 . . . G4 . . . C5 . . . G4 . . . | C5 . . . A4 . . . C5 . . . A4 . . . |" +
+    "B4 . . . G4 . . . B4 . . . G4 . . . | C5 . . . G4 . . . C5 . . . . . . . |" +
+    "A4 . . . E4 . . . A4 . . . E4 . . . | C5 . . . A4 . . . C5 . . . A4 . . . |" +
+    "B4 . . . G4 . . . B4 . . . G4 . . . | C5 . . . G4 . . . C5 . . . . . . .", 12);
+
+  // five stars: a little fanfare
+  mus_celeb = song_new(150);
+  song_track(mus_celeb, inst_triangle,
+    "C5 E5 G5 C6 - - G5 - C6 - E6 - - - - - D6 - E6 - F6 - E6 - D6 - C6 - - - - -", 34);
+  song_track(mus_celeb, inst_pluck,
+    "E5 G5 C6 E6 - - C6 - E6 - G6 - - - - - F6 - G6 - A6 - G6 - F6 - E6 - - - - -", 16);
+  song_track(mus_celeb, inst_bass,
+    "C3 - - - - - - - G3 - - - - - - - F3 - - - G3 - - - C3 - - - - - - -", 34);
+  song_track(mus_celeb, inst_drums,
+    "k . . . s . . . k . . . s . . . k . k . s . s . k . . . . . . .", 18);
+  RETURN 0;
+END
+
+// Plays a sound unless the grown-ups turned the sound off.
+FUNCTION snd(s, vol, pitch);
+BEGIN
+  IF (muted == 0) play_sound(s, vol, pitch, 0); END
+  RETURN 0;
+END
+
+FUNCTION set_mute(m);
+BEGIN
+  muted = m;
+  IF (m) music_volume(0); sound_volume(0); ELSE music_volume(55); sound_volume(100); END
+  RETURN 0;
+END
+
+// =====================================================================
+// Scenery processes
+// =====================================================================
+
+PROCESS cloud(x, y, graph, spd);
+PRIVATE my_gen, fx;
+BEGIN
+  my_gen = gen; z = 50; fx = x;
+  LOOP
+    IF (my_gen != gen) BREAK; END
+    fx += spd;
+    IF (fx > SW + 110) fx = -110; END
+    x = fx;
+    FRAME;
+  END
+END
+
+// Anything that just sits there (the cloud shelf, parts moved by their
+// owner).
+PROCESS prop(x, y, z, graph);
+PRIVATE my_gen;
+BEGIN
+  my_gen = gen;
+  LOOP
+    IF (my_gen != gen) BREAK; END
+    FRAME;
+  END
+END
+
+// A part of a balloon (its string, picture, glow): the balloon moves it.
+PROCESS bpart(z, graph);
+BEGIN
+  alpha = 0;
+  LOOP FRAME; END
+END
+
+// Bun on the meadow: blinks, waves now and then, cheers on a right
+// balloon and tilts his head kindly on a wrong one.
+PROCESS mascot();
+PRIVATE my_gen, t, fr, hop, blink, wave_t;
+BEGIN
+  my_gen = gen; z = 20; size = 52;
+  x = 58; y = 424; graph = g_bun[0];
+  LOOP
+    IF (my_gen != gen) BREAK; END
+    t++;
+    fr = 0;
+    blink = t % 200;
+    IF (blink > 190) fr = 4; END
+    wave_t = t % 540;
+    IF (wave_t < 70) fr = 1 + (wave_t / 10) % 2; END
+    angle = 0; hop = 0;
+    IF (mood_t > 0)
+      mood_t--;
+      IF (mascot_mood == 1) fr = 3; hop = -abs(sin(mood_t * 9000)) * 16; END
+      IF (mascot_mood == 2) angle = sin(mood_t * 7000) * 9000; END
+    END
+    graph = g_bun[fr];
+    y = 424 + hop + sin(t * 3000) * 2;
+    alpha = 100;
+    IF (state == ST_CELEB) alpha = 0; END
+    FRAME;
+  END
+END
+
+// The big Bun who comes up to wave when five stars are full.
+PROCESS big_bun();
+PRIVATE my_gen, t, ty;
+BEGIN
+  my_gen = gen; z = -40; size = 118;
+  x = SW / 2; y = 640;
+  LOOP
+    IF (my_gen != gen OR state != ST_CELEB) BREAK; END
+    t++;
+    ty = 330;
+    IF (celeb_t > 250) ty = 660; END
+    y += (ty - y) * 0.12;
+    graph = g_bun[1 + (t / 12) % 2];
+    IF ((t / 48) % 3 == 2) graph = g_bun[3]; END
+    angle = sin(t * 4000) * 5000;
+    FRAME;
+  END
+END
+
+// =====================================================================
+// Balloons
+// =====================================================================
+
+// A balloon rising in lane xl. slot: its line in the register; col: its
+// colour; v: what it shows (the value tested against the target); sg: the
+// picture on it (0 none); fixed: 1 = the menu's, bobbing in place.
+PROCESS balloon(slot, col, v, sg, xl, y, fixed);
+PRIVATE my_gen, t, fy, ph, s_str, s_sym, s_halo, wob, hop, vy, a, al, i, k, sp, ang_s;
+BEGIN
+  my_gen = gen; z = 10;
+  graph = g_bal[col];
+  fy = y; ph = rand(0, 359) * 1000;
+  sp = 1;                     // one speed for all: gaps in a lane never shrink
+  s_str = bpart(11, g_string);
+  s_halo = bpart(12, g_halo);
+  s_sym = 0;
+  IF (sg) s_sym = bpart(9, sg); s_sym.size = 64; END
+  IF (mode == M_NUMBER AND v == 10 AND fixed == 0) s_sym.size = 56; END
+  b_used[slot] = 1; b_v[slot] = v; b_tap[slot] = 0; b_id[slot] = id;
+  LOOP
+    IF (my_gen != gen) BREAK; END
+    t++;
+    IF (fixed == 0)
+      IF (state == ST_CELEB) fy -= 4.5; ELSE fy -= cur_speed * sp; END
+    END
+    // a wrong tap: a squashy wobble and a little hop
+    IF (b_tap[slot] == 2) b_tap[slot] = 0; wob = 40; vy = -3.2; END
+    IF (wob > 0) wob--; END
+    hop += vy; vy += 0.25;
+    IF (hop > 0) hop = 0; vy = 0; END
+    scale_x = int(100 + sin(wob * 26000) * wob * 0.45);
+    scale_y = int(100 - sin(wob * 26000) * wob * 0.45);
+    x = xl + sin(ph + t * 1400) * 6 + sin(wob * 40000) * wob * 0.2;
+    y = fy + hop + sin(ph + t * 2200) * 2;
+    angle = sin(ph + t * 1400 + 90000) * 3000;
+    b_x[slot] = x; b_y[slot] = y;
+
+    // tapped right: pop!
+    IF (b_tap[slot] == 1)
+      pop_fx(x, y, col);
+      falling_string(x, y + 62, angle);
+      BREAK;
+    END
+
+    // fading into the cloud shelf
+    al = 100;
+    IF (fixed == 0 AND y < 206) al = clamp((y - 118) * 100 / 88, 0, 100); END
+    alpha = al;
+    ang_s = angle;
+    s_str.x = x + sin(ang_s) * 62; s_str.y = y + cos(ang_s) * 0.62 * scale_y;
+    s_str.angle = ang_s; s_str.alpha = al;
+    IF (s_sym)
+      s_sym.x = x; s_sym.y = y - 2; s_sym.angle = ang_s; s_sym.alpha = al;
+      s_sym.scale_x = scale_x; s_sym.scale_y = scale_y;
+    END
+    // the hint glow round the right balloons
+    s_halo.x = x; s_halo.y = y + 4;
+    a = 0;
+    IF (hint_t > 0 AND fixed == 0 AND state == ST_PLAY AND mode != M_FREE AND v == target)
+      a = int((48 + sin(t * 8000) * 22) * al / 100);
+    END
+    s_halo.alpha = a;
+
+    IF (fixed == 0 AND y < 120)
+      IF (state == ST_PLAY AND mode != M_FREE AND v == target)
+        escapes++; n_escape[mode]++;
+      END
+      BREAK;
+    END
+    FRAME;
+  END
+  // free the slot - unless a new scene has already given it to another
+  IF (b_id[slot] == id) b_used[slot] = 0; b_tap[slot] = 0; b_id[slot] = 0; END
+  signal(s_str, s_kill); signal(s_halo, s_kill);
+  IF (s_sym) signal(s_sym, s_kill); END
+END
+
+// The pop: a burst, confetti and a puff of sparks.
+FUNCTION pop_fx(px, py, col);
+PRIVATE i;
+BEGIN
+  burst(px, py, col);
+  FOR i = 0 TO 15
+    confetti(px + rand(-30, 30), py + rand(-36, 30), rand(0, NCOL - 1));
+  END
+  RETURN 0;
+END
+
+PROCESS burst(x, y, col);
+PRIVATE t;
+BEGIN
+  z = 5; graph = g_burst[col]; size = 60;
+  FOR t = 0 TO 11
+    size = 60 + t * 7; alpha = 100 - t * 8;
+    angle += 3000;
+    FRAME;
+  END
+END
+
+PROCESS confetti(x, y, c);
+PRIVATE my_gen, vx, vy, t, spin, fx, fy;
+BEGIN
+  my_gen = gen; z = 4;
+  graph = g_conf[c];
+  vx = fdiv(rand(-40, 40), 10); vy = fdiv(rand(-60, -15), 10);
+  spin = rand(-12, 12) * 1000; angle = rand(0, 359) * 1000;
+  fx = x; fy = y;
+  FOR t = 0 TO 89
+    IF (my_gen != gen) BREAK; END
+    vy += 0.12; IF (vy > 2.2) vy = 2.2; END
+    vx *= 0.97;
+    fx += vx + sin(t * 9000 + spin) * 0.6; fy += vy;
+    x = fx; y = fy;
+    angle += spin;
+    scale_y = int(abs(cos(t * 12000 + spin)) * 100);
+    IF (t > 60) alpha = (90 - t) * 100 / 30; END
+    FRAME;
+  END
+END
+
+PROCESS falling_string(x, y, angle);
+PRIVATE t, vy;
+BEGIN
+  z = 11; graph = g_string;
+  FOR t = 0 TO 44
+    vy += 0.3; y += vy;
+    alpha = 100 - t * 2;
+    FRAME;
+  END
+END
+
+// The twinkle where a tap hit only sky.
+PROCESS twinkle(x, y);
+PRIVATE t;
+BEGIN
+  z = 3; graph = g_twinkle;
+  FOR t = 0 TO 17
+    size = 60 + t * 5; alpha = 100 - t * 5; angle += 5000;
+    FRAME;
+  END
+END
+
+// A star flies from the popped balloon to its place up on the shelf.
+PROCESS flystar(x, y, k);
+PRIVATE my_gen, t, x0, y0, x1, y1, e;
+BEGIN
+  my_gen = gen; z = -70; graph = g_bigstar;
+  x0 = x; y0 = y; x1 = 466 + k * 38; y1 = 40;
+  FOR t = 0 TO 36
+    e = hermite(0, 1, fdiv(t, 36));
+    x = x0 + (x1 - x0) * e;
+    y = y0 + (y1 - y0) * e - sin(e * 180000) * 60;
+    size = 130 - e * 70;
+    angle += 12000;
+    FRAME;
+    IF (my_gen != gen) RETURN; END
+  END
+  stars_filled = k + 1;
+  snd(s_star, 70, 100 + k * 12);
+  sparkle(x1, y1, 6);
+END
+
+// A small ring of sparks (a star landing, a firework).
+FUNCTION sparkle(px, py, n);
+PRIVATE i;
+BEGIN
+  FOR i = 0 TO n - 1
+    spark(px, py, i * 360000 / n, 2.2, rand(0, NCOL - 1), -75, 0.02);
+  END
+  RETURN 0;
+END
+
+PROCESS spark(x, y, a, spd, c, z, grav);
+PRIVATE t, vx, vy, fx, fy, life;
+BEGIN
+  graph = g_spark[c];
+  vx = cos(a) * spd; vy = sin(a) * spd; fx = x; fy = y;
+  life = 50 + rand(0, 16);
+  FOR t = 0 TO life
+    vx *= 0.975; vy = vy * 0.975 + grav;
+    fx += vx; fy += vy; x = fx; y = fy;
+    alpha = 100 - t * 100 / (life + 1);
+    size = 100 - t * 40 / life;
+    FRAME;
+  END
+END
+
+// A firework: a soft whoosh up, then a round burst of sparks.
+PROCESS firework(x, y);
+PRIVATE t, ty, c, i, n;
+BEGIN
+  z = 2; ty = y; y = SH + 10; graph = g_spark[rand(0, NCOL - 1)];
+  snd(s_whoosh, 40, 100);
+  FOR t = 0 TO 29
+    y += (ty - y) * 0.16;
+    FRAME;
+  END
+  graph = 0;
+  snd(s_bang, 40, 80 + rand(0, 40));
+  c = rand(0, NCOL - 1);
+  n = 26;
+  FOR i = 0 TO n - 1
+    spark(x, y, i * 360000 / n, 3.2 + fdiv(rand(0, 10), 10), c, 2, 0.035);
+    IF (i % 3 == 0) spark(x, y, i * 360000 / n + 6000, 1.6, (c + 2) % NCOL, 2, 0.035); END
+  END
+END
+
+// =====================================================================
+// The shelf: target card, stars, buttons
+// =====================================================================
+
+// The target card. It flips in for a new target and pulses to remind
+// the child what to look for after a wrong tap.
+PROCESS card();
+PRIVATE my_gen, t, s_sym, s_dots, shown, sc, pulse;
+BEGIN
+  my_gen = gen; z = -60; x = SW / 2; y = 56;
+  graph = g_card[0];
+  IF (mode == M_NUMBER) graph = g_card[1]; END
+  s_sym = bpart(-61, 0);
+  s_dots = bpart(-61, 0);
+  shown = -99;
+  LOOP
+    IF (my_gen != gen) BREAK; END
+    t++;
+    IF (shown != target)
+      shown = target;
+      s_dots.graph = 0; s_sym.size = 84;
+      SWITCH (mode)
+        CASE 0 s_sym.graph = g_bal[target]; s_sym.size = 62;
+        CASE 1 s_sym.graph = g_shape[target]; s_sym.size = 82;
+        CASE 2 s_sym.graph = g_glyph[target - 1]; s_dots.graph = g_dots[target]; s_sym.size = 80;
+        CASE 3 s_sym.graph = g_glyph[10 + target];
+        CASE 4 s_sym.graph = g_icon[4]; s_sym.size = 80;
+      END
+    END
+    sc = 100;
+    IF (card_flip > 0) card_flip--; sc = abs(cos(card_flip * 6000)) * 100; END
+    pulse = 0;
+    IF (card_pulse > 0) card_pulse--; pulse = sin(card_pulse * 18000) * card_pulse * 0.4; END
+    size = 100 + pulse;
+    scale_x = int(sc);
+    s_sym.scale_x = int(sc); s_sym.alpha = 100; s_dots.alpha = 100;
+    s_sym.y = y - 1 + sin(t * 3000) * 2;
+    IF (mode == M_NUMBER)
+      s_sym.x = x - 0.58 * sc;
+      s_dots.x = x + 0.56 * sc; s_dots.y = y + 12; s_dots.scale_x = int(sc);
+      IF (target == 10) s_sym.size = 66; END
+    ELSE
+      s_sym.x = x;
+    END
+    FRAME;
+  END
+  signal(s_sym, s_kill); signal(s_dots, s_kill);
+END
+
+PROCESS star_slot(k);
+PRIVATE my_gen, was, pop;
+BEGIN
+  my_gen = gen; z = -60; x = 466 + k * 38; y = 40;
+  graph = g_star[0];
+  LOOP
+    IF (my_gen != gen) BREAK; END
+    IF (stars_filled > k)
+      IF (was == 0) pop = 16; END
+      was = 1; graph = g_star[1];
+    ELSE
+      was = 0; graph = g_star[0];
+    END
+    size = 100;
+    IF (pop > 0) pop--; size = 100 + pop * 4; END
+    IF (state == ST_CELEB) size = 100 + sin(celeb_t * 9000 + k * 50000) * 14; END
+    FRAME;
+  END
+END
+
+// Home (hold it) and sound buttons; ring shows the hold.
+PROCESS home_btn();
+PRIVATE my_gen, s_ring;
+BEGIN
+  my_gen = gen; z = -60; x = 34; y = 34; graph = g_home;
+  s_ring = bpart(-62, g_ring[0]);
+  s_ring.x = x; s_ring.y = y;
+  LOOP
+    IF (my_gen != gen) BREAK; END
+    IF (home_hold > 0)
+      s_ring.graph = g_ring[min(11, home_hold * 12 / 45)]; s_ring.alpha = 100;
+    ELSE
+      s_ring.alpha = 0;
+    END
+    FRAME;
+  END
+  signal(s_ring, s_kill);
+END
+
+PROCESS sound_btn(x, y);
+PRIVATE my_gen;
+BEGIN
+  my_gen = gen; z = -60;
+  LOOP
+    IF (my_gen != gen) BREAK; END
+    graph = g_snd[1 - muted];
+    FRAME;
+  END
+END
+
+// =====================================================================
+// Menu
+// =====================================================================
+
+PROCESS tile(k, x, y);
+PRIVATE my_gen, s_icon, t;
+BEGIN
+  my_gen = gen; z = -20; graph = g_tile[k];
+  s_icon = bpart(-21, g_icon[k]);
+  s_icon.x = x; s_icon.y = y + 2; s_icon.alpha = 100;
+  LOOP
+    IF (my_gen != gen) BREAK; END
+    t++;
+    size = 100;
+    IF (menu_pick == k) size = 92 + menu_t; END
+    s_icon.size = size;
+    s_icon.y = y + 2 + sin(t * 3000 + k * 70000) * 2;
+    FRAME;
+  END
+  signal(s_icon, s_kill);
+END
+
+PROCESS menu_bun();
+PRIVATE my_gen, t, fr;
+BEGIN
+  my_gen = gen; z = -10; size = 60; x = SW / 2; y = 80;
+  LOOP
+    IF (my_gen != gen) BREAK; END
+    t++;
+    fr = 1 + (t / 14) % 2;
+    IF ((t / 120) % 2 == 1) fr = 0; IF (t % 120 > 110) fr = 4; END END
+    graph = g_bun[fr];
+    y = 80 + sin(t * 3000) * 3;
+    FRAME;
+  END
+END
+
+FUNCTION menu_balloon(k);
+PRIVATE bx, by, s;
+BEGIN
+  s = free_slot();
+  IF (s < 0) RETURN 0; END
+  bx = 150; by = 76;
+  IF (k == 1) bx = 230; by = 58; END
+  IF (k == 2) bx = 410; by = 58; END
+  IF (k == 3) bx = 490; by = 76; END
+  menu_slot[k] = s;
+  balloon(s, (k * 2 + rand(0, 1)) % NCOL, -1, 0, bx, by, 1);
+  RETURN 0;
+END
+
+// =====================================================================
+// The game
+// =====================================================================
+
+FUNCTION free_slot();
+PRIVATE i;
+BEGIN
+  FOR i = 0 TO MAXB
+    IF (b_used[i] == 0) RETURN i; END
+  END
+  RETURN -1;
+END
+
+// The range of values of the current game.
+FUNCTION v_min();
+BEGIN
+  IF (mode == M_NUMBER) RETURN 1; END
+  RETURN 0;
+END
+
+FUNCTION v_max();
+BEGIN
+  SWITCH (mode)
+    CASE 0 RETURN NCOL - 1;
+    CASE 1 RETURN 5;
+    CASE 2 RETURN 10;
+    CASE 3 RETURN 25;
+  END
+  RETURN 0;
+END
+
+// The other values that may come up with the target: few when calm.
+FUNCTION pick_distractors();
+PRIVATE want, v, i, ok, tries;
+BEGIN
+  want = min(2 + lvl * 2, v_max() - v_min());
+  ndis = 0; tries = 0;
+  WHILE (ndis < want AND tries < 400)
+    tries++;
+    v = rand(v_min(), v_max());
+    ok = (v != target);
+    FOR i = 0 TO ndis - 1
+      IF (dis[i] == v) ok = 0; END
+    END
+    IF (ok) dis[ndis] = v; ndis++; END
+  END
+  RETURN 0;
+END
+
+FUNCTION new_target();
+BEGIN
+  prev_target = target;
+  IF (mode != M_FREE)
+    REPEAT
+      target = rand(v_min(), v_max());
+    UNTIL (target != prev_target)
+  END
+  pick_distractors();
+  card_flip = 30; hint_t = 0; idle_t = 0; escapes = 0; wrong_run = 0;
+  snd(s_tada, 60, 100);
+  RETURN 0;
+END
+
+FUNCTION set_level(n);
+BEGIN
+  lvl = clamp(n, 0, 4);
+  cur_speed = 0.55 + lvl * 0.13;
+  pick_distractors();
+  RETURN 0;
+END
+
+FUNCTION target_alive();
+PRIVATE i, n;
+BEGIN
+  n = 0;
+  FOR i = 0 TO MAXB
+    IF (b_used[i] AND b_v[i] == target AND b_y[i] > 250) n++; END
+  END
+  RETURN n;
+END
+
+FUNCTION count_balloons();
+PRIVATE i, n;
+BEGIN
+  n = 0;
+  FOR i = 0 TO MAXB
+    IF (b_used[i]) n++; END
+  END
+  RETURN n;
+END
+
+// 1 when lane l has room for a new balloon at height sy (a balloon and
+// its string take about 200 pixels).
+FUNCTION lane_free(l, sy);
+PRIVATE i;
+BEGIN
+  FOR i = 0 TO MAXB
+    IF (b_used[i] AND b_lane[i] == l AND abs(b_y[i] - sy) < 206) RETURN 0; END
+  END
+  RETURN 1;
+END
+
+// A new balloon in a free lane, starting at height sy.
+FUNCTION spawn(sy);
+PRIVATE s, l, tries, v, col, sg, k;
+BEGIN
+  s = free_slot();
+  IF (s < 0) RETURN 0; END
+  l = rand(0, NLANE - 1); tries = 0;
+  WHILE (lane_free(l, sy) == 0 AND tries < 12) l = rand(0, NLANE - 1); tries++; END
+  IF (lane_free(l, sy) == 0) RETURN 0; END
+  // the right one comes often, and always when none is on the way
+  v = target;
+  IF (target_alive() > 0 AND rand(0, 99) >= 55 - lvl * 4 AND ndis > 0)
+    v = dis[rand(0, ndis - 1)];
+  END
+  col = rand(0, NCOL - 1); sg = 0;
+  SWITCH (mode)
+    CASE 0 col = v;
+    CASE 1 sg = g_shape[v];
+    CASE 2 sg = g_glyph[v - 1];
+    CASE 3 sg = g_glyph[10 + v];
+    CASE 4
+      v = -1; k = rand(0, 3);
+      IF (k == 1) sg = g_shape[rand(0, 5)]; END
+      IF (k == 2) sg = g_glyph[rand(10, 35)]; END
+      IF (k == 3) sg = g_glyph[rand(0, 8)]; END
+  END
+  b_lane[s] = l; b_y[s] = sy; b_used[s] = 1;
+  balloon(s, col, v, sg, lane_x[l], sy, 0);
+  RETURN 1;
+END
+
+// What a tap at (px, py) hit, the nearest balloon under it or -1.
+FUNCTION balloon_at(px, py);
+PRIVATE i, best, bd, dx, dy, d;
+BEGIN
+  best = -1; bd = 99;
+  FOR i = 0 TO MAXB
+    IF (b_used[i] AND b_tap[i] != 1 AND b_id[i] != 0)
+      dx = px - b_x[i]; dy = py - b_y[i];
+      d = fdiv(dx * dx, 3481) + fdiv(dy * dy, 4900);        // ellipse 59 x 70
+      IF (d <= 1.0 AND d < bd) bd = d; best = i; END
+    END
+  END
+  RETURN best;
+END
+
+FUNCTION right_tap(s);
+BEGIN
+  b_tap[s] = 1; n_pops++;
+  snd(s_pop, 70, 90 + rand(0, 30));
+  IF (state == ST_CELEB OR stars_pending >= 5)
+    snd(s_chime2, 50, 100 + rand(0, 3) * 25);
+    RETURN 0;
+  END
+  n_right[mode]++;
+  snd(s_chime, 60, 100 + stars_pending * 12);
+  snd(s_chime2, 40, 100 + stars_pending * 12);
+  flystar(b_x[s], b_y[s], stars_pending);
+  stars_pending++;
+  mascot_mood = 1; mood_t = 40;
+  wrong_run = 0; hint_t = 0; idle_t = 0;
+  streak++;
+  IF (streak >= 4) streak = 0; IF (lvl < 4) set_level(lvl + 1); END END
+  RETURN 0;
+END
+
+FUNCTION wrong_tap(s);
+BEGIN
+  b_tap[s] = 2;
+  n_wrong[mode]++;
+  snd(s_boing, 55, 100);
+  card_pulse = 36;
+  mascot_mood = 2; mood_t = 50;
+  streak = 0; wrong_run++;
+  IF (wrong_run >= 2)
+    wrong_run = 0; hint_t = 300;
+    IF (lvl > 0) set_level(lvl - 1); END
+  END
+  RETURN 0;
+END
+
+// Everything of the old scene goes.
+FUNCTION clear_scene();
+PRIVATE i;
+BEGIN
+  gen++;
+  FOR i = 0 TO MAXB b_used[i] = 0; b_tap[i] = 0; b_id[i] = 0; b_y[i] = 999; END
+  signal(TYPE bpart, s_kill);
+  RETURN 0;
+END
+
+FUNCTION sky_scene();
+BEGIN
+  cloud(90, 190, g_cloud[0], 0.12);
+  cloud(420, 250, g_cloud[1], 0.08);
+  cloud(250, 320, g_cloud[2], 0.1);
+  cloud(600, 170, g_cloud[2], 0.14);
+  RETURN 0;
+END
+
+FUNCTION go_menu();
+PRIVATE i;
+BEGIN
+  clear_scene();
+  state = ST_MENU; menu_pick = -1; menu_t = 0;
+  sky_scene();
+  menu_bun();
+  FOR i = 0 TO 3 menu_balloon(i); menu_respawn[i] = 0; END
+  tile(0, 120, 234); tile(1, 320, 234); tile(2, 520, 234);
+  tile(3, 220, 396); tile(4, 420, 396);
+  sound_btn(604, 34);
+  home_hold = 0;
+  RETURN 0;
+END
+
+FUNCTION start_game(m);
+BEGIN
+  clear_scene();
+  mode = m; state = ST_PLAY;
+  stars_pending = 0; stars_filled = 0; streak = 0; wrong_run = 0;
+  celeb_t = 0; celeb_wait = 0; spawn_cool = 50; home_hold = 0;
+  sky_scene();
+  mascot();
+  target = -1;
+  set_level(0);
+  new_target();
+  prop(SW / 2, 0, -50, g_strip);
+  card();
+  star_slot(0); star_slot(1); star_slot(2); star_slot(3); star_slot(4);
+  home_btn(); sound_btn(92, 34);
+  // a few already on their way, so nobody waits
+  spawn(300); spawn(420); spawn(540);
+  RETURN 0;
+END
+
+FUNCTION start_celebration();
+BEGIN
+  state = ST_CELEB; celeb_t = 0;
+  n_celeb[mode]++;
+  IF (muted == 0) song_play(mus_celeb, 0); END
+  big_bun();
+  RETURN 0;
+END
+
+FUNCTION end_celebration();
+BEGIN
+  state = ST_PLAY;
+  stars_pending = 0; stars_filled = 0;
+  new_target();
+  song_play(mus_bg);
+  spawn_cool = 20;
+  RETURN 0;
+END
+
+// =====================================================================
+// MAIN
+// =====================================================================
+
+PRIVATE i, s, tap, mx, my, k, n_want, leave;
+BEGIN
+  set_mode(640, 480);
+  set_fps(60, 0);
+  touch_controls(0);
+  screen_color('#9fd6f8');
+  rand_seed();
+
+  // pictures (a few per frame: each frame may run 100,000 instructions)
+  g_sky = make_sky(); put_screen(0, g_sky);
+  FRAME;
+  g_cloud[0] = make_cloud(180, 80, 4); g_cloud[1] = make_cloud(240, 90, 5); g_cloud[2] = make_cloud(130, 64, 3);
+  g_strip = make_strip();
+  FRAME;
+  FOR i = 0 TO NCOL - 1
+    g_bal[i] = make_balloon(i);
+    g_burst[i] = make_burst(i);
+    FRAME;
+  END
+  g_string = make_string();
+  make_bits();
+  FRAME;
+  FOR i = 0 TO 35
+    g_glyph[i] = make_glyph(i);
+    IF (i % 2 == 1) FRAME; END
+  END
+  FOR i = 0 TO 5
+    g_shape[i] = new_graphic(110, 110);
+    put_shape(g_shape[i], i, 55, 55, 1.0, 255, 255, 255);
+    FRAME;
+  END
+  FOR i = 1 TO 10 g_dots[i] = make_dots(i); END
+  g_card[0] = make_card(180); g_card[1] = make_card(236);
+  g_star[0] = make_star(0, 16); g_star[1] = make_star(1, 16); g_bigstar = make_star(1, 22);
+  FRAME;
+  FOR i = 0 TO 4 g_bun[i] = make_bunny(i); FRAME; END
+  g_home = make_home(); g_snd[0] = make_speaker(0); g_snd[1] = make_speaker(1);
+  FOR i = 0 TO 11 g_ring[i] = make_ring(i); END
+  FRAME;
+  FOR i = 0 TO 4 g_tile[i] = make_tile(i); g_icon[i] = make_icon(i); FRAME; END
+  make_sounds();
+  song_play(mus_bg);
+  set_mute(0);
+  go_menu();
+
+  LOOP
+    frame_no++;
+    fps_now = get_fps();
+    IF (frame_no > 240 AND fps_now > 0 AND fps_now < fps_min) fps_min = fps_now; END
+    tap = (mouse.left AND prev_l == 0);
+    prev_l = mouse.left;
+    mx = mouse.x; my = mouse.y;
+
+    IF (key_pressed(_m)) set_mute(1 - muted); END
+
+    IF (state == ST_MENU)
+      IF (menu_pick < 0)
+        k = -1;
+        IF (tap)
+          IF (fget_distance(mx, my, 604, 34) < 32)
+            set_mute(1 - muted); snd(s_tap, 60, 100); tap = 0;
+          END
+        END
+        IF (tap)
+          IF (my > 164 AND my < 306)
+            IF (mx > 30 AND mx < 210) k = 0; END
+            IF (mx > 230 AND mx < 410) k = 1; END
+            IF (mx > 430 AND mx < 610) k = 2; END
+          END
+          IF (my > 326 AND my < 468)
+            IF (mx > 130 AND mx < 310) k = 3; END
+            IF (mx > 330 AND mx < 510) k = 4; END
+          END
+          IF (k < 0)
+            s = balloon_at(mx, my);
+            IF (s >= 0)
+              b_tap[s] = 1; snd(s_pop, 70, 100); snd(s_chime2, 45, 100 + rand(0, 4) * 20);
+              FOR i = 0 TO 3
+                IF (menu_slot[i] == s AND menu_respawn[i] == 0) menu_respawn[i] = 150; menu_slot[i] = -1; END
+              END
+            ELSE
+              twinkle(mx, my);
+            END
+          END
+        END
+        IF (key_pressed(_1)) k = 0; END
+        IF (key_pressed(_2)) k = 1; END
+        IF (key_pressed(_3)) k = 2; END
+        IF (key_pressed(_4)) k = 3; END
+        IF (key_pressed(_5)) k = 4; END
+        IF (k >= 0) menu_pick = k; menu_t = 0; snd(s_tap, 70, 100); snd(s_chime, 50, 100); END
+      ELSE
+        menu_t++;
+        IF (menu_t > 14) start_game(menu_pick); END
+      END
+      // popped menu balloons come back
+      FOR i = 0 TO 3
+        IF (menu_respawn[i] > 0)
+          menu_respawn[i]--;
+          IF (menu_respawn[i] == 0 AND state == ST_MENU) menu_balloon(i); END
+        END
+      END
+    ELSE
+      // ---- playing (or celebrating)
+      leave = key_pressed(_esc);
+      IF (mouse.left AND fget_distance(mx, my, 34, 34) < 34)
+        home_hold++;
+        IF (home_hold >= 45) leave = 1; END
+      ELSE
+        home_hold = 0;
+      END
+      IF (leave) go_menu(); tap = 0; END
+      IF (tap)
+        IF (fget_distance(mx, my, 34, 34) < 34)
+          tap = 0;
+        ELSE
+          IF (fget_distance(mx, my, 92, 34) < 30)
+            set_mute(1 - muted); snd(s_tap, 60, 100); tap = 0;
+          END
+        END
+      END
+      IF (tap AND my > STRIP - 6)
+        s = balloon_at(mx, my);
+        IF (s < 0)
+          twinkle(mx, my);
+          IF (state == ST_CELEB) firework(mx, my); END
+        ELSE
+          IF (state == ST_CELEB OR mode == M_FREE OR b_v[s] == target)
+            right_tap(s);
+          ELSE
+            wrong_tap(s);
+          END
+        END
+      END
+
+      IF (state == ST_PLAY AND leave == 0)
+        idle_t++;
+        IF (hint_t > 0) hint_t--; END
+        IF (idle_t > 600 AND mode != M_FREE) idle_t = 0; hint_t = 240; END
+        // right balloons floating away unpopped: a calmer pace
+        IF (escapes >= 2)
+          escapes = 0; hint_t = 240;
+          IF (lvl > 0) set_level(lvl - 1); END
+        END
+        n_want = 3 + lvl;
+        IF (mode == M_FREE) n_want = 5 + lvl / 2; END
+        IF (spawn_cool > 0) spawn_cool--; END
+        IF (spawn_cool <= 0 AND stars_pending < 5 AND count_balloons() < n_want)
+          IF (spawn(560)) spawn_cool = 64 - lvl * 7; ELSE spawn_cool = 12; END
+        END
+        IF (stars_filled >= 5)
+          celeb_wait++;
+          IF (celeb_wait > 20) celeb_wait = 0; start_celebration(); END
+        END
+      END
+
+      IF (state == ST_CELEB)
+        celeb_t++;
+        IF (celeb_t % 26 == 1 AND celeb_t < 230)
+          IF ((celeb_t / 26) % 2 == 0) k = rand(80, 210); ELSE k = rand(430, 560); END
+          firework(k, rand(160, 290));
+        END
+        IF (celeb_t % 3 == 0 AND celeb_t < 240) confetti(rand(20, SW - 20), 110, rand(0, NCOL - 1)); END
+        IF (celeb_t > 300) end_celebration(); END
+      END
+    END
+    FRAME;
+  END
+END

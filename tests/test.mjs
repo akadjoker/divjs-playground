@@ -268,6 +268,82 @@ for (const name of readdirSync(programsDir)) {
 	}
 }
 
+// Sky Shield: the missile defence game compiles with the processes and
+// functions its enemies, interceptors, blasts and waves are built from.
+{
+	const problems = [];
+	try
+	{
+		const { bytecode } = compileSource(readFileSync(join(programsDir, 'sky-shield.div'), 'utf-8'));
+		for (const name of ['missile', 'zipper', 'bomber', 'carrier', 'interceptor', 'blast', 'painter', 'district', 'battery', 'repaint'])
+		{
+			if (!bytecode.processTable.has(name))
+			{
+				problems.push(`no PROCESS ${name}`);
+			}
+		}
+		for (const name of ['fire_at', 'fire_from', 'blast_hit', 'enemy_down', 'impact', 'start_wave', 'wave_step', 'tally_update', 'draw_sky', 'draw_city'])
+		{
+			if (!bytecode.functionTable.has(name))
+			{
+				problems.push(`no FUNCTION ${name}`);
+			}
+		}
+	}
+	catch (err)
+	{
+		problems.push(err?.message || String(err));
+	}
+	if (problems.length > 0)
+	{
+		console.log(`FAIL  ${'sky-shield (compile)'.padEnd(35)} ${problems.join(', ')}`);
+		fail += 1;
+	}
+	else
+	{
+		console.log(`OK    ${'sky-shield (compile)'.padEnd(35)} processes and functions present`);
+		ok += 1;
+	}
+}
+
+// Balloon Pop: the children's game compiles with the processes and
+// functions its balloons, target card, stars and stroke font are made of.
+{
+	const problems = [];
+	try
+	{
+		const { bytecode } = compileSource(readFileSync(join(programsDir, 'balloon-pop.div'), 'utf-8'));
+		for (const name of ['balloon', 'bpart', 'card', 'star_slot', 'flystar', 'confetti', 'firework', 'mascot', 'big_bun', 'tile'])
+		{
+			if (!bytecode.processTable.has(name))
+			{
+				problems.push(`no PROCESS ${name}`);
+			}
+		}
+		for (const name of ['glyph', 'put_glyph', 'shape_pass', 'spawn', 'balloon_at', 'right_tap', 'wrong_tap', 'new_target', 'pick_distractors', 'set_level'])
+		{
+			if (!bytecode.functionTable.has(name))
+			{
+				problems.push(`no FUNCTION ${name}`);
+			}
+		}
+	}
+	catch (err)
+	{
+		problems.push(err?.message || String(err));
+	}
+	if (problems.length > 0)
+	{
+		console.log(`FAIL  ${'balloon-pop (compile)'.padEnd(35)} ${problems.join(', ')}`);
+		fail += 1;
+	}
+	else
+	{
+		console.log(`OK    ${'balloon-pop (compile)'.padEnd(35)} processes and functions present`);
+		ok += 1;
+	}
+}
+
 // Beat Bash: the rhythm game compiles with the processes and functions its
 // songs, charts and judging are built from.
 {
