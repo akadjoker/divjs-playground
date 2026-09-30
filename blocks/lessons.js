@@ -6,7 +6,9 @@
 // with a few small helpers so a lesson reads almost like the blocks.
 // A lesson's title, goal and hints are in i18n.js (LESSON_<ID>_TITLE,
 // _GOAL, _HINTS), in each language; lesson.title and the others read them
-// in the page's current language.
+// in the page's current language. So do lesson.start and lesson.solution:
+// each read builds the blocks again, with the texts the game shows (the
+// "show text" blocks of the last lesson's example) in that language.
 
 import { t as text } from './i18n.js';
 
@@ -195,34 +197,34 @@ const enemyBlocks = () => [
 export const LESSONS = [
   {
     id: 'shape',
-    start: workspace([
+    start: () => workspace([
       at(20, 20, start()),
       at(20, 160, sprite('player'))
     ]),
-    solution: workspace([
+    solution: () => workspace([
       at(20, 20, start(create('player', 160, 120))),
       at(20, 160, sprite('player', playerLooks()))
     ])
   },
   {
     id: 'arrows',
-    start: workspace([
+    start: () => workspace([
       at(20, 20, start(create('player', 160, 120))),
       at(20, 160, sprite('player', playerLooks()))
     ]),
-    solution: workspace([
+    solution: () => workspace([
       at(20, 20, start(create('player', 160, 120))),
       at(20, 160, sprite('player', playerLooks(), arrowKeys()))
     ])
   },
   {
     id: 'coin',
-    start: workspace([
+    start: () => workspace([
       at(20, 20, start(create('player', 160, 120))),
       at(20, 170, sprite('player', playerLooks(), arrowKeys())),
       at(440, 20, sprite('coin'))
     ], [SCORE]),
-    solution: workspace([
+    solution: () => workspace([
       at(20, 20, start(
         create('player', 160, 120),
         create('coin', 60, 60),
@@ -234,7 +236,7 @@ export const LESSONS = [
   },
   {
     id: 'enemy',
-    start: workspace([
+    start: () => workspace([
       at(20, 20, start(
         create('player', 160, 120),
         create('coin', 60, 60),
@@ -244,7 +246,7 @@ export const LESSONS = [
       at(440, 20, sprite('coin', ...coinBlocks())),
       at(440, 250, sprite('enemy'))
     ], [SCORE]),
-    solution: workspace([
+    solution: () => workspace([
       at(20, 20, start(
         create('player', 160, 120),
         create('coin', 60, 60),
@@ -258,10 +260,10 @@ export const LESSONS = [
   },
   {
     id: 'free',
-    start: workspace([
+    start: () => workspace([
       at(20, 20, start())
     ]),
-    solution: workspace([
+    solution: () => workspace([
       at(20, 20, start(
         create('ship', 160, 120),
         b('div_repeat', undefined, {
@@ -273,7 +275,7 @@ export const LESSONS = [
         }),
         forever(
           b('div_say', undefined, {
-            TEXT: v(b('div_join', undefined, { A: t('rocks hit: '), B: v(b('div_var_get', variable(HITS[1]))) })),
+            TEXT: v(b('div_join', undefined, { A: t(text('LESSON_FREE_GAME_HITS')), B: v(b('div_var_get', variable(HITS[1]))) })),
             X: n(8),
             Y: n(8)
           }),
@@ -282,14 +284,14 @@ export const LESSONS = [
               A: { block: b('div_compare', { OP: '>=' }, { A: v(b('div_var_get', variable(HITS[1]))), B: n(5) }) },
               B: { block: b('div_not', undefined, { A: { block: key('_h') } }) }
             }) },
-            DO: { block: b('div_say', undefined, { TEXT: t('You win! (hold H to hide this)'), X: n(80), Y: n(110) }) },
-            ELSE: { block: b('div_say', undefined, { TEXT: t('arrows: fly  space: fire  C: centre'), X: n(8), Y: n(224) }) }
+            DO: { block: b('div_say', undefined, { TEXT: t(text('LESSON_FREE_GAME_WIN')), X: n(80), Y: n(110) }) },
+            ELSE: { block: b('div_say', undefined, { TEXT: t(text('LESSON_FREE_GAME_HELP')), X: n(8), Y: n(224) }) }
           }),
           ifThen(b('div_logic', { OP: 'OR' }, {
             A: { block: b('div_mouse_down') },
             B: { block: key('_m') }
           }), b('div_say', undefined, {
-            TEXT: t('click!'),
+            TEXT: t(text('LESSON_FREE_GAME_CLICK')),
             X: v(b('div_mouse_x')),
             Y: v(b('div_arith', { OP: '-' }, { A: v(b('div_mouse_y')), B: n(12) }))
           }))
@@ -339,7 +341,10 @@ export const LESSONS = [
 for (const lesson of LESSONS)
 {
   const key = `LESSON_${lesson.id.toUpperCase()}`;
+  const { start: makeStart, solution: makeSolution } = lesson;
   Object.defineProperties(lesson, {
+    start: { get: makeStart, enumerable: true },
+    solution: { get: makeSolution, enumerable: true },
     title: { get: () => text(`${key}_TITLE`), enumerable: true },
     goal: { get: () => text(`${key}_GOAL`), enumerable: true },
     hints: { get: () => text(`${key}_HINTS`), enumerable: true }

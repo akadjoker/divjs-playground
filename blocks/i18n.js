@@ -267,7 +267,13 @@ const EN = {
     'Every block has a tip: hold the mouse over it.',
     '"Open in the playground" takes the DIV code of your blocks to the text editor, to go on in real code.',
     'Your blocks are saved in this browser, for each lesson.'
-  ]
+  ],
+  // Texts the example game shows on its screen: the game's font draws
+  // Latin-1 only (no character above 255).
+  LESSON_FREE_GAME_HITS: 'rocks hit: ',
+  LESSON_FREE_GAME_WIN: 'You win! (hold H to hide this)',
+  LESSON_FREE_GAME_HELP: 'arrows: fly  space: fire  C: centre',
+  LESSON_FREE_GAME_CLICK: 'click!'
 };
 
 const PT = {
@@ -514,7 +520,11 @@ const PT = {
     'Cada bloco tem uma dica: deixa o rato parado em cima dele.',
     '"Abrir no playground" leva o código DIV dos teus blocos para o editor de texto, para continuares em código a sério.',
     'Os teus blocos ficam guardados neste browser, para cada lição.'
-  ]
+  ],
+  LESSON_FREE_GAME_HITS: 'rochas atingidas: ',
+  LESSON_FREE_GAME_WIN: 'Ganhaste! (mantém H para esconder)',
+  LESSON_FREE_GAME_HELP: 'setas: voar  espaço: disparar  C: centro',
+  LESSON_FREE_GAME_CLICK: 'clique!'
 };
 
 export const STRINGS = { en: EN, pt: PT };

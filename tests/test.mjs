@@ -610,6 +610,98 @@ for (const name of readdirSync(programsDir)) {
 			report(`blocks: every text in ${language}`, problems, `${BLOCK_TYPES.length} blocks, ${LESSONS.length} lessons`);
 		}
 
+		// The texts a lesson's game shows ("show text" blocks, and the names
+		// "show variable" writes) are in the page's language - none left in
+		// English on another language's page - and use only characters the
+		// game's 6x8 font draws: Latin-1, nothing above 255. The blocks
+		// still make code that compiles, with no warnings.
+		{
+			const problems = [];
+			const drawable = (text) => [...text].every((ch) =>
+			{
+				const code = ch.codePointAt(0);
+				return (code >= 32 && code < 127) || (code >= 160 && code <= 255);
+			});
+			const shownTexts = (state) =>
+			{
+				const names = new Map((state.variables || []).map((v) => [v.id, v.name]));
+				const texts = [];
+				const walk = (node) =>
+				{
+					if (Array.isArray(node))
+					{
+						node.forEach(walk);
+					}
+					else if (node && typeof node === 'object')
+					{
+						if (node.type === 'div_text')
+						{
+							texts.push({ text: node.fields.TEXT, translated: true });
+						}
+						if (node.type === 'div_var_show')
+						{
+							texts.push({ text: names.get(node.fields.VAR.id), translated: false });
+						}
+						Object.values(node).forEach(walk);
+					}
+				};
+				walk(state.blocks);
+				return texts;
+			};
+			let count = 0;
+			for (const lesson of LESSONS)
+			{
+				for (const which of ['start', 'solution'])
+				{
+					setLanguage('en');
+					const english = new Set(shownTexts(lesson[which]).filter((x) => x.translated).map((x) => x.text));
+					for (const language of LANGUAGES)
+					{
+						setLanguage(language);
+						const state = lesson[which];
+						for (const { text, translated } of shownTexts(state))
+						{
+							count += 1;
+							if (!drawable(text))
+							{
+								problems.push(`${lesson.id} ${which} in ${language}: "${text}" has characters the game's font cannot draw`);
+							}
+							if (language !== 'en' && translated && english.has(text))
+							{
+								problems.push(`${lesson.id} ${which} in ${language}: "${text}" is in English`);
+							}
+						}
+						try
+						{
+							const { code, warnings } = generate(state);
+							compile(code);
+							if (warnings.length > 0)
+							{
+								problems.push(`${lesson.id} ${which} in ${language}: warnings: ${warnings.map((w) => w.text).join(' / ')}`);
+							}
+						}
+						catch (err)
+						{
+							problems.push(`${lesson.id} ${which} in ${language}: ${err?.message || String(err)}`);
+						}
+					}
+				}
+			}
+			// The new text blocks start with texts the font draws too.
+			for (const language of LANGUAGES)
+			{
+				for (const key of ['NEW_SAY', 'NEW_JOIN', 'NEW_TEXT'])
+				{
+					if (!drawable(STRINGS[language][key]))
+					{
+						problems.push(`${key} in ${language} has characters the game's font cannot draw`);
+					}
+				}
+			}
+			setLanguage('en');
+			report('blocks: game texts in every language', problems, `${count} texts, Latin-1`);
+		}
+
 		// The same blocks make the same DIV code in every language, byte
 		// for byte once the comments are taken out; the comments are in the
 		// page's language (none of them left in English), and the code

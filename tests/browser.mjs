@@ -1484,6 +1484,34 @@ try
     assert(backCode === before.code, 'the code changed after switching back');
   });
 
+  // On the Portuguese page, the last lesson's example game shows its texts
+  // in Portuguese, drawn by the game (Latin-1 characters such as ç and é).
+  await check('blocks: lesson 5 in Portuguese - the game\'s texts are in Portuguese', async () =>
+  {
+    const { STRINGS } = await import('../blocks/i18n.js');
+    const context = await browser.newContext();
+    const page = await context.newPage({ viewport: { width: 1280, height: 800 } });
+    const problems = watch(page);
+    await page.goto(`${BASE}/blocks/?lang=pt`);
+    await page.waitForFunction(() => window.divBlocks, null, { timeout: 15000 });
+    await page.click('#lessonNav button[data-index="4"]');
+    await page.click('#solutionBtn');
+    await page.click('#runBtn');
+    await page.waitForTimeout(800);
+    const code = await page.evaluate(() => window.divBlocks.getCode());
+    const status = await page.textContent('#status');
+    const consoleText = await page.textContent('#console');
+    await context.close();
+    assert(problems.length === 0, problems.join('\n'));
+    for (const key of ['LESSON_FREE_GAME_HITS', 'LESSON_FREE_GAME_WIN', 'LESSON_FREE_GAME_HELP', 'LESSON_FREE_GAME_CLICK'])
+    {
+      assert(code.includes(`'${STRINGS.pt[key]}'`), `the code has no '${STRINGS.pt[key]}'`);
+      assert(!code.includes(`'${STRINGS.en[key]}'`), `the code still has '${STRINGS.en[key]}'`);
+    }
+    assert(status === STRINGS.pt.STATUS_RUNNING, `status "${status}"`);
+    assert(consoleText === '', `console: ${consoleText}`);
+  });
+
   // Blockly's floating widgets must never be cut off by the page layout: a
   // dropdown that opens upwards from a block in the lower part of the
   // workspace, the context menu and a tooltip of a block at its bottom
