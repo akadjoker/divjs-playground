@@ -682,6 +682,18 @@
       "description": "A side-scrolling jump-and-stomp platformer: Rusty the fox runs, jumps and stomps through three worlds (Clover Meadow, Glowroot Cavern, Cloudtop Heights). Break bricks, open gift crates for glimmers, the Sun Berry that makes Rusty big and the Acorn Sling, light the lanterns and reach each Waystone. All pixel art, sound and music are made in code.",
       "controls": "Left/Right or A/D move, X or Shift run (hold), Z/Space/Up/W jump (hold for higher), X throws acorns once you have the sling; Enter/Space on screens",
       "touch": { "pad": "dpad", "buttons": "z:Jump,x:Run", "menu": "enter:Start" }
+    },
+    {
+      "id": "beat-bash",
+      "title": "Beat Bash",
+      "category": "procedural",
+      "file": "beat-bash.div",
+      "width": 480,
+      "height": 270,
+      "clearColor": "#08060f",
+      "description": "A four-lane rhythm game: notes slide down to the hit line in time with three songs played by the engine's own synth (Paper Lanterns at 100 BPM, Night Tram at 128, Comet Chase at 160), each with a hand-written NORMAL and HARD chart. PERFECT/GOOD/MISS timing, combos and a score multiplier, a groove bar that ends the song when it runs dry, grades, best scores, pause, and an audio offset set by tapping along with a click. Every sound, note and picture is made in code.",
+      "controls": "D F J K or the arrow keys hit the four lanes; on the song list Up/Down pick a song, Left/Right the level, Enter plays, S scroll speed, C audio offset; Esc or P pauses",
+      "touch": { "pad": "none", "buttons": "d:1,f:2,j:3,k:4", "menu": "enter:Start,esc:Pause" }
     }
   ],
   "categories": [

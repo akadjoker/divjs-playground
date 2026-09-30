@@ -1,0 +1,2424 @@
+PROGRAM beat_bash;
+
+// ---------------------------------------------------------------------
+// BEAT BASH - a four-lane rhythm game.
+//
+// Notes slide down four lanes towards the hit line; press the lane's key
+// as a note crosses it, in time with the music. Three songs, each with a
+// NORMAL and a HARD chart:
+//   PAPER LANTERNS  100 BPM  a warm, calm tune in D major
+//   NIGHT TRAM      128 BPM  city-lights synth pop in E minor
+//   COMET CHASE     160 BPM  a fast space chase in A minor
+//
+// * Timing: PERFECT within 45 ms, GOOD within 105 ms, later is a MISS.
+//   Hits fill the GROOVE bar and misses drain it: the song is lost when
+//   it runs dry. Every 10 notes of combo raise the score multiplier (up
+//   to x4). The results give accuracy, a grade and the best score of
+//   each song and level (kept until the page is closed).
+// * AUDIO OFFSET (C on the song list): tap along with a click to measure
+//   how late your speakers or headphones play, so the notes line up with
+//   what you hear.
+//
+// How it is made
+// * The music is the engine's own step sequencer: every song is built
+//   bar by bar from note lines (lead, arpeggio, bass, two pad voices and
+//   drums), one step per sixteenth note. Each bar also carries its two
+//   charts as numbers: one digit per step, 0 nothing, 1-4 a lane, 5-9 two
+//   lanes at once (see ch_a / ch_b), written as 1dddddddd so the leading
+//   zeros survive (the first digit is only a marker). The charts are
+//   written by hand on the melody, the arpeggio and the drum fills.
+// * The engine has no song clock, so the game keeps its own: song_play()
+//   starts the song 50 ms after the call (the sequencer's lead time) and
+//   get_time() - the frame clock, which follows the real time of every
+//   frame - tells how far into it we are. Notes are placed from that
+//   time, never from frame counts, so a slow frame does not shift them.
+// * A key press is seen on the frame after it happened: the game takes
+//   it as half a frame earlier than that frame's time.
+// * Pausing stops the song; resuming rewinds to the start of the bar the
+//   pause was in and plays the rest of the song from there, after a bar
+//   of clicks to count you back in.
+// * Every picture is drawn in code (new_graphic + gfx_*), and the pixel
+//   font is a 5x7 font turned into BDF fonts at three sizes at start-up.
+// ---------------------------------------------------------------------
+
+GLOBAL
+  SW = 480; SH = 270;
+  HIT_Y = 232;                 // the hit line
+  lane_x[3] = 186, 222, 258, 294;
+  lane_r[3] = 255, 255, 70, 80;
+  lane_g[3] = 92, 196, 230, 170;
+  lane_b[3] = 110, 64, 150, 255;
+  lane_col[3] = '#ff5c6e', '#ffc440', '#46e696', '#50aaff';
+  lane_key[3] = 'D', 'F', 'J', 'K';
+  lane_glow[3];                // glow of each lane (0-70), fades every frame
+  lane_down[3];                // 1 while the lane's key is held
+  lane_flash[3];               // frames of the receptor's hit flash
+  lane_red[3];                 // frames of a lane's red miss glow
+  // two-lane chart digits: 5 = 1+2, 6 = 3+4, 7 = 1+3, 8 = 2+4, 9 = 1+4
+  ch_a[9] = 0, 0, 0, 0, 0, 0, 2, 0, 1, 0;
+  ch_b[9] = 0, 0, 0, 0, 0, 1, 3, 2, 3, 3;
+  p10[7] = 1, 10, 100, 1000, 10000, 100000, 1000000, 10000000;
+
+  // ---- screens
+  SC_LOAD = 0; SC_TITLE = 1; SC_SELECT = 2; SC_PLAY = 3; SC_PAUSE = 4;
+  SC_RESULT = 5; SC_FAIL = 6; SC_CALIB = 7;
+  scr = 0;                     // the screen showing
+  st = 0;                      // frames since it started
+  menu_i = 0;                  // highlighted line of a menu
+
+  // ---- songs: metadata, then every bar of every song
+  NSONG = 3;
+  s_name[2] = 'PAPER LANTERNS', 'NIGHT TRAM', 'COMET CHASE';
+  s_mood[2] = 'WARM AND CALM', 'CITY LIGHTS POP', 'FAST SPACE CHASE';
+  s_bpm[2] = 100, 128, 160;
+  s_ar[2] = 255, 80, 255;      // accent colour of each song
+  s_ag[2] = 150, 200, 90;
+  s_ab[2] = 80, 255, 210;
+  s_lv[5] = 1, 3, 2, 4, 3, 5;  // level stars: song * 2 + difficulty
+  s_b0[2]; s_nb[2]; s_pv[2];   // first bar, bars, first bar of the preview
+  s_cnt[5];                    // notes of each chart
+  s_song[2]; s_prev[2];        // the engine songs (whole song, preview loop)
+  MAXB = 140;
+  b_ld[139]; b_ar[139]; b_bs[139]; b_p1[139]; b_p2[139]; b_dr[139];
+  b_n1[139]; b_n2[139]; b_h1[139]; b_h2[139];
+  nbar = 0;                    // bars written so far
+  // the bar being written
+  cur_ld = ""; cur_dr = ""; style = 0; arp_on = 1; bass_on = 1; pad_on = 1;
+  c_bs = ""; c_t1 = ""; c_t2 = ""; c_t3 = "";
+  REST = ". . . . . . . . . . . . . . . . ";
+  // drum patterns
+  DC = "h . . . h . . . h . . . h . . . ";           // count-in
+  DE = "ks . . . . . . . . . . . . . . . ";          // the last hit
+  D10 = "k . . . h . . . k . . . h . . . ";
+  D11 = "k . h . s . h . k . h k s . h . ";
+  D12 = "k . h . s . h . k . s . s s s s ";
+  D13 = "k . . . . . h . k . . . s . h . ";
+  D14 = "k . . . s . . . s . s . s s s s ";
+  D20 = "k . . . k . . . k . . . k . . . ";
+  D21 = "k . h . ks . h . k . h . ks . h . ";
+  D22 = "k . h h ks . h . k . h h ks . h h ";
+  D23 = "k . h . ks . h . k . s . s s s s ";
+  D24 = "k . h . h . h . h . h . h . h . ";
+  D30 = "k . h . k . h . k . h . k . h . ";
+  D31 = "k . s . k . s . s . s s s s s s ";
+  D32 = "k . h . s . h k . k h . s . h . ";
+  D33 = "k . h h s . h k . k h h s . h h ";
+  D34 = "k . h . ks . h . k . h . ks . h h ";
+  D35 = "k . h . s . h k s . s s s s s s ";
+  m_title = 0; m_metro = 0; m_clear = 0; m_fail = 0; m_resume = 0;
+
+  // ---- the chart being played
+  MAXN = 1000;
+  n_t[999];                    // time of the note in the song (seconds)
+  n_ln[999];                   // lane 0-3
+  n_st[999];                   // 0 waiting, 1 PERFECT, 2 GOOD, 3 MISS
+  n_ch[999];                   // 1 when part of a two-lane chord
+  n_err[999];                  // hit time minus note time (ms)
+  nnotes = 0; nspawn = 0; nfirst = 0; nbeat = 0;
+  cur_song = 0; cur_diff = 0;  // chosen song and level (0 NORMAL, 1 HARD)
+  bpm = 100; spb = 0.6; step_s = 0.15; bar_s = 2.4; song_len = 60.0;
+  view_s = 1.3;                // seconds a note takes from the top to the line
+  px_s = 180.0;                // pixels a second
+  speed = 1;                   // scroll speed setting 0-3
+  speed_mul[3] = 100, 125, 150, 175;
+
+  // ---- the clock
+  t_base = 0.0;                // get_time() at which the song's time is 0
+  song_t = 0.0;                // song time now (seconds, offset applied)
+  off_ms = 0;                  // audio offset from the calibration (ms)
+  clock_on = 0;                // 1 while a song or preview beats
+  beat_n = -1;                 // last beat seen (for the pulses)
+  pulse = 0.0;                 // 1 on a beat, fading to 0
+  bar_pulse = 0.0;             // the same on the first beat of a bar
+  cin_from = 0.0;              // song time of the count-in bar showing
+  play_run = 0; line_run = 0;  // bumped to retire old notes / beat lines
+  eq_h[23];                    // equalizer bar heights
+
+  // ---- play state
+  score = 0; combo = 0; max_combo = 0; mult = 1;
+  cnt_p = 0; cnt_g = 0; cnt_m = 0;
+  groove = 60;                 // 0-100: empty and the song is lost
+  W_PERF = 0.045; W_GOOD = 0.105;
+  pop_k = -1; pop_t = 0; pop_err = 0;  // last judgement shown
+  mult_t = 0; combo_t = 0; miles_t = 0; miles_n = 0; danger_t = 0;
+  fail_at = 0.0;               // song time the groove ran out
+  new_best = 0;
+  roll = 0;                    // results: frames of counting up
+
+  // ---- bests (this session)
+  best_score[5]; best_acc[5]; best_grade[5]; best_fc[5]; best_played[5];
+  grade = 0;                   // 0 S, 1 A, 2 B, 3 C, 4 D
+
+  // ---- calibration
+  cal_err[7]; cal_n = 0; cal_i = 0; cal_last = -1;
+
+  // ---- graphics
+  f1 = 0; f2 = 0; f3 = 0; fbuf = "";
+  g_note[3]; g_notec[3]; g_rec[3]; g_rec_on[3]; g_glow[2];
+  g_hw = 0; g_ring = 0; g_bigring = 0; g_disc = 0; g_dot = 0; g_dot2 = 0;
+  g_bline = 0; g_bline2 = 0; g_star = 0; g_lantern = 0; g_halo = 0; g_streak = 0;
+  g_tram = 0; g_bg[2]; g_word[16]; g_logo[5]; g_flash = 0;
+  bg_song = 0;                 // backdrop showing (song index)
+
+  // ---- sounds
+  s_move = 0; s_ok = 0; s_back = 0; s_miss = 0; s_fail = 0; s_tap = 0; s_best = 0;
+
+  // ---- pixel font: character code, then 7 rows of 5 pixels written
+  // as binary digits (10001 = pixels at both ends)
+  NGLYPH = 53;
+  gdat[423] =
+    32, 0, 0, 0, 0, 0, 0, 0,
+    33, 100, 100, 100, 100, 100, 0, 100,
+    37, 11001, 11010, 10, 100, 1000, 1011, 10011,
+    39, 100, 100, 1000, 0, 0, 0, 0,
+    40, 10, 100, 1000, 1000, 1000, 100, 10,
+    41, 1000, 100, 10, 10, 10, 100, 1000,
+    42, 0, 10101, 1110, 11111, 1110, 10101, 0,
+    43, 0, 100, 100, 11111, 100, 100, 0,
+    44, 0, 0, 0, 0, 1100, 100, 1000,
+    45, 0, 0, 0, 1110, 0, 0, 0,
+    46, 0, 0, 0, 0, 0, 1100, 1100,
+    47, 1, 10, 10, 100, 1000, 1000, 10000,
+    48, 1110, 10001, 10011, 10101, 11001, 10001, 1110,
+    49, 100, 1100, 100, 100, 100, 100, 1110,
+    50, 1110, 10001, 1, 110, 1000, 10000, 11111,
+    51, 11110, 1, 1, 1110, 1, 1, 11110,
+    52, 10, 110, 1010, 10010, 11111, 10, 10,
+    53, 11111, 10000, 11110, 1, 1, 10001, 1110,
+    54, 110, 1000, 10000, 11110, 10001, 10001, 1110,
+    55, 11111, 1, 10, 100, 1000, 1000, 1000,
+    56, 1110, 10001, 10001, 1110, 10001, 10001, 1110,
+    57, 1110, 10001, 10001, 1111, 1, 10, 1100,
+    58, 0, 1100, 1100, 0, 1100, 1100, 0,
+    60, 10, 100, 1000, 10000, 1000, 100, 10,
+    61, 0, 0, 11111, 0, 11111, 0, 0,
+    62, 1000, 100, 10, 1, 10, 100, 1000,
+    63, 1110, 10001, 1, 110, 100, 0, 100,
+    65, 1110, 10001, 10001, 11111, 10001, 10001, 10001,
+    66, 11110, 10001, 10001, 11110, 10001, 10001, 11110,
+    67, 1111, 10000, 10000, 10000, 10000, 10000, 1111,
+    68, 11110, 10001, 10001, 10001, 10001, 10001, 11110,
+    69, 11111, 10000, 10000, 11110, 10000, 10000, 11111,
+    70, 11111, 10000, 10000, 11110, 10000, 10000, 10000,
+    71, 1111, 10000, 10000, 10011, 10001, 10001, 1111,
+    72, 10001, 10001, 10001, 11111, 10001, 10001, 10001,
+    73, 11111, 100, 100, 100, 100, 100, 11111,
+    74, 111, 1, 1, 1, 10001, 10001, 1110,
+    75, 10001, 10010, 10100, 11000, 10100, 10010, 10001,
+    76, 10000, 10000, 10000, 10000, 10000, 10000, 11111,
+    77, 10001, 11011, 10101, 10101, 10001, 10001, 10001,
+    78, 10001, 11001, 10101, 10011, 10001, 10001, 10001,
+    79, 1110, 10001, 10001, 10001, 10001, 10001, 1110,
+    80, 11110, 10001, 10001, 11110, 10000, 10000, 10000,
+    81, 1110, 10001, 10001, 10001, 10101, 10010, 1101,
+    82, 11110, 10001, 10001, 11110, 10100, 10010, 10001,
+    83, 1111, 10000, 10000, 1110, 1, 1, 11110,
+    84, 11111, 100, 100, 100, 100, 100, 100,
+    85, 10001, 10001, 10001, 10001, 10001, 10001, 1110,
+    86, 10001, 10001, 10001, 10001, 10001, 1010, 100,
+    87, 10001, 10001, 10001, 10101, 10101, 10101, 1010,
+    88, 10001, 10001, 1010, 100, 1010, 10001, 10001,
+    89, 10001, 10001, 1010, 100, 100, 100, 100,
+    90, 11111, 1, 10, 100, 1000, 10000, 11111;
+  gidx[127];                   // character code -> glyph
+  hexd[15] = '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F';
+  // words painted into graphics (character codes): PERFECT GOOD MISS
+  // BEAT BASH S A B C D 3 2 1 GO! E T H
+  wtxt[37] = 80, 69, 82, 70, 69, 67, 84,  71, 79, 79, 68,  77, 73, 83, 83,
+    66, 69, 65, 84,  66, 65, 83, 72,  83, 65, 66, 67, 68,  51, 50, 49,  71, 79, 33,
+    69, 84, 72;
+  wd_at[16] = 0, 7, 11, 15, 19, 23, 24, 25, 26, 27, 28, 29, 30, 31, 34, 35, 36;
+  wd_len[16] = 7, 4, 4, 4, 4, 1, 1, 1, 1, 1, 1, 1, 1, 3, 1, 1, 1;
+  load_n = 0;
+
+// =====================================================================
+// Small helpers
+// =====================================================================
+
+// a / b as a real division (DIV divides whole numbers as integers)
+FUNCTION fdiv(a, b);
+BEGIN
+  IF (b == 0) RETURN 0; END
+  // (a + 0.25) is never whole, so this divides as real numbers
+  RETURN (a + 0.25) / b - 0.25 / b;
+END
+
+FUNCTION rgb(r, g, b);
+BEGIN
+  RETURN "rgb(" + int(r) + "," + int(g) + "," + int(b) + ")";
+END
+
+// colour with opacity a (0-100)
+FUNCTION rgba(r, g, b, a);
+BEGIN
+  RETURN "rgba(" + int(r) + "," + int(g) + "," + int(b) + "," + fdiv(clamp(int(a), 0, 100), 100) + ")";
+END
+
+// a whole number with at least n digits ("0042")
+FUNCTION zpad(v, n);
+PRIVATE s;
+BEGIN
+  s = "" + int(v);
+  WHILE (n > 1)
+    IF (v < p10[n - 1]) s = "0" + s; END
+    n--;
+  END
+  RETURN s;
+END
+
+// hundredths of a percent (9876) as "98.76%"
+FUNCTION pct(v);
+BEGIN
+  RETURN "" + (v / 100) + "." + zpad(v % 100, 2) + "%";
+END
+
+// milliseconds with a sign ("+12 MS", "-8 MS")
+FUNCTION ms_s(v);
+BEGIN
+  IF (v > 0) RETURN "+" + int(v) + " MS"; END
+  RETURN "" + int(v) + " MS";
+END
+
+// song length (seconds) as "1:19"
+FUNCTION mmss(v);
+BEGIN
+  v = int(v);
+  RETURN "" + (v / 60) + ":" + zpad(v % 60, 2);
+END
+
+// write() in the current colour with a dark shadow under it
+FUNCTION say(f, x, y, al, s, col);
+BEGIN
+  set_color('#0a0616');
+  write(f, x + 1, y + 1, al, s);
+  set_color(col);
+  RETURN write(f, x, y, al, s);
+END
+
+// the lane keys (D F J K or the arrows)
+FUNCTION lane_held(l);
+BEGIN
+  IF (l == 0) RETURN key(_d) OR key(_left); END
+  IF (l == 1) RETURN key(_f) OR key(_down); END
+  IF (l == 2) RETURN key(_j) OR key(_up); END
+  RETURN key(_k) OR key(_right);
+END
+
+FUNCTION lane_hit(l);
+BEGIN
+  IF (l == 0) RETURN key_pressed(_d) OR key_pressed(_left); END
+  IF (l == 1) RETURN key_pressed(_f) OR key_pressed(_down); END
+  IF (l == 2) RETURN key_pressed(_j) OR key_pressed(_up); END
+  RETURN key_pressed(_k) OR key_pressed(_right);
+END
+
+FUNCTION any_lane_hit();
+BEGIN
+  RETURN lane_hit(0) OR lane_hit(1) OR lane_hit(2) OR lane_hit(3);
+END
+
+FUNCTION k_ok();
+BEGIN
+  RETURN key_pressed(_enter) OR key_pressed(_space);
+END
+
+FUNCTION k_back();
+BEGIN
+  RETURN key_pressed(_esc) OR key_pressed(_backspace);
+END
+
+// =====================================================================
+// Pixel font: the 5x7 glyphs become a BDF font with every pixel drawn
+// sc x sc (built over several frames: a frame may run at most 100,000
+// instructions)
+// =====================================================================
+
+FUNCTION hex4(v);
+BEGIN
+  RETURN hexd[(v / 4096) % 16] + hexd[(v / 256) % 16] + hexd[(v / 16) % 16] + hexd[v % 16];
+END
+
+FUNCTION font_start(sc);
+BEGIN
+  fbuf = "STARTFONT 2.1\nFONT beat" + sc + "\nSIZE " + (7 * sc) + " 75 75\nFONTBOUNDINGBOX " + (5 * sc) + " " + (7 * sc) + " 0 0\n";
+  fbuf = fbuf + "CHARS " + (NGLYPH + 26) + "\n";
+  RETURN 0;
+END
+
+FUNCTION font_part(sc, i0, i1);
+PRIVATE s, i, r, k, c, n, bits, code, pass, row_s;
+BEGIN
+  s = "";
+  FOR i = i0 TO min(i1, NGLYPH - 1)
+    FOR pass = 0 TO 1
+      code = gdat[i * 8];
+      IF (pass == 1)
+        // lower case letters look like the capitals
+        IF (code < 65 OR code > 90) CONTINUE; END
+        code = code + 32;
+      END
+      s = s + "STARTCHAR c" + code + "\nENCODING " + code + "\nSWIDTH 500 0\nDWIDTH " + (6 * sc) + " 0\nBBX " + (5 * sc) + " " + (7 * sc) + " 0 0\nBITMAP\n";
+      FOR r = 0 TO 6
+        n = gdat[i * 8 + 1 + r];
+        bits = 0;
+        FOR c = 0 TO 4
+          FOR k = 1 TO sc
+            bits = bits * 2 + (n / p10[4 - c]) % 10;
+          END
+        END
+        row_s = hex4(bits * pow(2, 16 - 5 * sc)) + "\n";
+        FOR k = 1 TO sc
+          s = s + row_s;
+        END
+      END
+      s = s + "ENDCHAR\n";
+    END
+  END
+  fbuf = fbuf + s;
+  RETURN 0;
+END
+
+FUNCTION font_finish();
+BEGIN
+  fbuf = fbuf + "ENDFONT\n";
+  RETURN load_bdf_font_text(fbuf);
+END
+
+// Paints word w (wd_at / wd_len) into a new graphic, every font pixel
+// sc x sc, with a dark outline, a drop shadow and a top-to-bottom colour
+// gradient from (r1,g1,b1) to (r2,g2,b2)
+FUNCTION word_gfx(w, sc, r1, g1, b1, r2, g2, b2);
+PRIVATE n, g, i, gi, row, c, v, px, py, pass, f;
+BEGIN
+  n = wd_len[w];
+  g = new_graphic(n * 6 * sc - sc + 6, 7 * sc + 6 + sc);
+  FOR pass = 0 TO 2
+    FOR i = 0 TO n - 1
+      gi = gidx[wtxt[wd_at[w] + i]];
+      FOR row = 0 TO 6
+        v = gdat[gi * 8 + 1 + row];
+        IF (v == 0) CONTINUE; END
+        f = fdiv(row, 6);
+        FOR c = 0 TO 4
+          IF ((v / p10[4 - c]) % 10 == 1)
+            px = 3 + (i * 6 + c) * sc;
+            py = 3 + row * sc;
+            SWITCH (pass)
+              CASE 0
+                gfx_rect(g, px - 2, py - 2, sc + 4, sc + 4, 14, 8, 28);
+              CASE 1
+                gfx_rect(g, px - 1, py + sc, sc + 2, sc + 2, 14, 8, 28);
+              CASE 2
+                gfx_rect(g, px, py, sc, sc, r1 + (r2 - r1) * f, g1 + (g2 - g1) * f, b1 + (b2 - b1) * f);
+                IF (sc >= 3 AND row == 0)
+                  gfx_rect(g, px, py, sc, 1, 255, 255, 255);
+                END
+            END
+          END
+        END
+      END
+    END
+  END
+  RETURN g;
+END
+
+// =====================================================================
+// Graphics, all drawn in code
+// =====================================================================
+
+// A note: a rounded, shaded capsule in the lane's colour (a white rim
+// for the notes of a two-lane chord)
+FUNCTION make_note(l, chord);
+PRIVATE g, r, gg, b;
+BEGIN
+  r = lane_r[l]; gg = lane_g[l]; b = lane_b[l];
+  g = new_graphic(32, 12);
+  IF (chord)
+    gfx_rect(g, 1, 0, 30, 12, 255, 255, 255);
+    gfx_rect(g, 0, 1, 32, 10, 255, 255, 255);
+  ELSE
+    gfx_rect(g, 1, 0, 30, 12, r * 3 / 10, gg * 3 / 10, b * 3 / 10);
+    gfx_rect(g, 0, 1, 32, 10, r * 3 / 10, gg * 3 / 10, b * 3 / 10);
+  END
+  gfx_rect(g, 2, 1, 28, 10, r * 7 / 10, gg * 7 / 10, b * 7 / 10);
+  gfx_rect(g, 1, 2, 30, 8, r * 7 / 10, gg * 7 / 10, b * 7 / 10);
+  gfx_rect(g, 2, 2, 28, 6, r, gg, b);
+  gfx_rect(g, 3, 2, 26, 2, (r + 255) / 2, (gg + 255) / 2, (b + 255) / 2);
+  gfx_rect(g, 5, 2, 8, 1, 255, 255, 255);
+  gfx_rect(g, 13, 5, 6, 2, (r + 255) / 2, (gg + 255) / 2, (b + 255) / 2);
+  RETURN g;
+END
+
+// The receptor at the bottom of a lane: an outline (on = lit, filled)
+FUNCTION make_receptor(l, on);
+PRIVATE g, r, gg, b;
+BEGIN
+  r = lane_r[l]; gg = lane_g[l]; b = lane_b[l];
+  g = new_graphic(34, 14);
+  IF (on)
+    gfx_rect(g, 1, 0, 32, 14, 255, 255, 255);
+    gfx_rect(g, 0, 1, 34, 12, 255, 255, 255);
+    gfx_rect(g, 2, 2, 30, 10, r, gg, b);
+    gfx_rect(g, 4, 4, 26, 6, (r + 510) / 3, (gg + 510) / 3, (b + 510) / 3);
+  ELSE
+    gfx_rect(g, 1, 0, 32, 14, r * 3 / 5, gg * 3 / 5, b * 3 / 5);
+    gfx_rect(g, 0, 1, 34, 12, r * 3 / 5, gg * 3 / 5, b * 3 / 5);
+    gfx_rect(g, 2, 2, 30, 10, 12, 10, 26);
+    gfx_rect(g, 4, 6, 26, 2, r * 2 / 5, gg * 2 / 5, b * 2 / 5);
+  END
+  RETURN g;
+END
+
+FUNCTION make_ring(rad);
+PRIVATE g;
+BEGIN
+  g = new_graphic(rad * 2 + 2, rad * 2 + 2);
+  gfx_circle_outline(g, rad + 1, rad + 1, rad, 255, 255, 255);
+  gfx_circle_outline(g, rad + 1, rad + 1, rad - 1, 255, 255, 255);
+  RETURN g;
+END
+
+FUNCTION make_gfx();
+PRIVATE g, l, k;
+BEGIN
+  FOR l = 0 TO 3
+    g_note[l] = make_note(l, 0);
+    g_notec[l] = make_note(l, 1);
+    g_rec[l] = make_receptor(l, 0);
+    g_rec_on[l] = make_receptor(l, 1);
+  END
+  // lane glows: white, tinted by the lane's colour when shown; three
+  // heights stacked make the light strongest at the hit line
+  g_glow[0] = new_graphic(34, 150); gfx_fill(g_glow[0], 255, 255, 255);
+  g_glow[1] = new_graphic(34, 70); gfx_fill(g_glow[1], 255, 255, 255);
+  g_glow[2] = new_graphic(34, 26); gfx_fill(g_glow[2], 255, 255, 255);
+  // the highway: dark lanes with thin dividers and a bright hit line
+  g_hw = new_graphic(148, 270);
+  gfx_fill(g_hw, 8, 6, 20);
+  FOR k = 1 TO 3
+    gfx_rect(g_hw, 2 + k * 36, 0, 1, 270, 34, 28, 58);
+  END
+  gfx_rect(g_hw, 0, 0, 2, 270, 120, 100, 200);
+  gfx_rect(g_hw, 146, 0, 2, 270, 120, 100, 200);
+  gfx_rect(g_hw, 2, HIT_Y - 1, 144, 3, 200, 190, 255);
+  gfx_rect(g_hw, 2, HIT_Y, 144, 1, 255, 255, 255);
+  g_ring = make_ring(18);
+  g_bigring = make_ring(60);
+  g_disc = new_graphic(200, 200);
+  gfx_circle(g_disc, 100, 100, 99, 255, 255, 255);
+  g_dot = new_graphic(3, 3); gfx_fill(g_dot, 255, 255, 255);
+  g_dot2 = new_graphic(2, 2); gfx_fill(g_dot2, 255, 255, 255);
+  g_bline = new_graphic(144, 1); gfx_fill(g_bline, 255, 255, 255);
+  g_bline2 = new_graphic(144, 2); gfx_fill(g_bline2, 255, 255, 255);
+  g_flash = new_graphic(144, 40); gfx_fill(g_flash, 255, 255, 255);
+  // a four-pointed sparkle
+  g_star = new_graphic(9, 9);
+  gfx_rect(g_star, 4, 0, 1, 9, 255, 255, 255);
+  gfx_rect(g_star, 0, 4, 9, 1, 255, 255, 255);
+  gfx_rect(g_star, 3, 3, 3, 3, 255, 255, 255);
+  // a paper lantern and its glow
+  g_lantern = new_graphic(8, 12);
+  gfx_rect(g_lantern, 3, 0, 2, 1, 90, 50, 30);
+  gfx_rect(g_lantern, 1, 1, 6, 1, 150, 60, 30);
+  gfx_rect(g_lantern, 0, 2, 8, 8, 255, 140, 60);
+  gfx_rect(g_lantern, 2, 3, 4, 6, 255, 214, 140);
+  gfx_rect(g_lantern, 3, 4, 2, 3, 255, 250, 220);
+  gfx_rect(g_lantern, 1, 10, 6, 1, 150, 60, 30);
+  gfx_rect(g_lantern, 3, 11, 2, 1, 255, 190, 90);
+  g_halo = new_graphic(24, 24);
+  gfx_circle(g_halo, 12, 12, 11, 255, 170, 80);
+  // a comet streak (drawn turned)
+  g_streak = new_graphic(28, 3);
+  gfx_rect(g_streak, 0, 1, 10, 1, 120, 60, 160);
+  gfx_rect(g_streak, 10, 1, 10, 1, 220, 140, 255);
+  gfx_rect(g_streak, 20, 0, 6, 3, 255, 230, 255);
+  gfx_rect(g_streak, 26, 1, 2, 1, 255, 255, 255);
+  // the night tram
+  g_tram = new_graphic(96, 18);
+  gfx_rect(g_tram, 2, 3, 92, 13, 30, 60, 110);
+  gfx_rect(g_tram, 0, 5, 96, 9, 30, 60, 110);
+  gfx_rect(g_tram, 2, 14, 92, 2, 16, 28, 60);
+  FOR k = 0 TO 10
+    gfx_rect(g_tram, 5 + k * 8, 6, 6, 5, 255, 214, 120);
+  END
+  gfx_rect(g_tram, 46, 0, 1, 3, 90, 110, 140);
+  gfx_rect(g_tram, 92, 7, 4, 3, 255, 255, 220);
+  RETURN 0;
+END
+
+// The words: judgements, grades and the count-in (part k: painting them
+// all in one frame is too much work for one frame)
+FUNCTION make_words(k);
+BEGIN
+  IF (k == 0) g_word[0] = word_gfx(0, 3, 255, 255, 255, 110, 220, 255); END
+  IF (k == 1)
+    g_word[1] = word_gfx(1, 3, 220, 255, 140, 60, 200, 90);
+    g_word[2] = word_gfx(2, 3, 255, 150, 150, 210, 40, 70);
+  END
+  IF (k == 2)
+    g_word[5] = word_gfx(5, 9, 255, 250, 190, 255, 160, 30);
+    g_word[6] = word_gfx(6, 9, 190, 255, 210, 40, 200, 120);
+    g_word[7] = word_gfx(7, 9, 180, 225, 255, 60, 120, 255);
+  END
+  IF (k == 3)
+    g_word[8] = word_gfx(8, 9, 235, 205, 255, 150, 90, 230);
+    g_word[9] = word_gfx(9, 9, 225, 225, 225, 130, 130, 145);
+    g_word[10] = word_gfx(10, 6, 255, 255, 255, 255, 200, 90);
+    g_word[11] = word_gfx(11, 6, 255, 255, 255, 255, 200, 90);
+    g_word[12] = word_gfx(12, 6, 255, 255, 255, 255, 200, 90);
+  END
+  IF (k == 4) g_word[13] = word_gfx(13, 6, 255, 255, 255, 90, 230, 160); END
+  RETURN 0;
+END
+
+// Logo letters B E A T S H, each its own graphic so they can dance
+FUNCTION make_logo();
+BEGIN
+  g_logo[0] = word_gfx(7, 6, 255, 240, 200, 255, 92, 110);     // B
+  g_logo[1] = word_gfx(14, 6, 255, 240, 200, 255, 196, 64);    // E
+  g_logo[2] = word_gfx(6, 6, 255, 255, 220, 70, 230, 150);     // A
+  g_logo[3] = word_gfx(15, 6, 230, 245, 255, 80, 170, 255);    // T
+  g_logo[4] = word_gfx(5, 6, 255, 240, 200, 255, 196, 64);     // S
+  g_logo[5] = word_gfx(16, 6, 255, 230, 255, 220, 90, 255);    // H
+  RETURN 0;
+END
+
+// Backdrop of song n, part k: a sky gradient and the song's scenery
+FUNCTION make_bg(n, k);
+PRIVATE g, y, x, h, w, f, r1, g1, b1, r2, g2, b2, i, c;
+BEGIN
+  IF (k == 0)
+    g_bg[n] = new_graphic(SW, SH);
+  END
+  g = g_bg[n];
+  rand_seed(1000 + n * 77 + k);
+  IF (n == 0)
+    r1 = 22; g1 = 12; b1 = 44; r2 = 120; g2 = 50; b2 = 78;
+  END
+  IF (n == 1)
+    r1 = 4; g1 = 8; b1 = 26; r2 = 34; g2 = 48; b2 = 96;
+  END
+  IF (n == 2)
+    r1 = 3; g1 = 2; b1 = 12; r2 = 46; g2 = 8; b2 = 58;
+  END
+  IF (k == 0)
+    // sky: bands of 2 pixels
+    FOR y = 0 TO SH - 1 STEP 2
+      f = fdiv(y, SH);
+      gfx_rect(g, 0, y, SW, 2, r1 + (r2 - r1) * f, g1 + (g2 - g1) * f, b1 + (b2 - b1) * f);
+    END
+    // stars
+    FOR i = 0 TO 70 - n * 20 + (n == 2) * 90
+      c = rand(60, 200);
+      gfx_pixel(g, rand(0, SW - 1), rand(0, 200 - n * 60 + (n == 2) * 60), c, c, c + 30);
+    END
+    RETURN 0;
+  END
+  IF (n == 0)
+    // hills: a far, soft row and a near, dark one
+    FOR x = 0 TO SW - 1 STEP 2
+      h = 40 + sin(x * 900) * 14 + sin(x * 2300 + 40000) * 6;
+      gfx_rect(g, x, SH - h, 2, h, 64, 30, 60);
+      h = 22 + sin(x * 1300 + 90000) * 9 + sin(x * 3700) * 4;
+      gfx_rect(g, x, SH - h, 2, h, 30, 14, 34);
+    END
+    // a big low moon
+    gfx_circle(g, 90, 150, 26, 150, 70, 90);
+    gfx_circle(g, 90, 150, 22, 190, 100, 110);
+  END
+  IF (n == 1)
+    // skyline: blocks with lit windows
+    x = 0;
+    WHILE (x < SW)
+      w = rand(18, 44);
+      h = rand(40, 130);
+      c = rand(12, 22);
+      gfx_rect(g, x, SH - h, w - 2, h, c, c + 6, c + 26);
+      FOR y = SH - h + 6 TO SH - 8 STEP 7
+        FOR i = x + 3 TO x + w - 7 STEP 6
+          IF (rand(0, 9) < 3)
+            gfx_rect(g, i, y, 3, 3, 255, 200 + rand(0, 40), 110 + rand(0, 60));
+          END
+        END
+      END
+      x += w;
+    END
+    gfx_rect(g, 0, SH - 12, SW, 12, 10, 12, 26);
+    gfx_rect(g, 0, SH - 13, SW, 1, 90, 110, 160);
+  END
+  IF (n == 2)
+    // a ringed planet and some coloured dust
+    gfx_circle(g, 400, 70, 52, 60, 20, 90);
+    gfx_circle(g, 392, 64, 46, 110, 40, 130);
+    gfx_circle(g, 386, 58, 34, 150, 70, 160);
+    FOR i = -70 TO 70 STEP 2
+      gfx_rect(g, 400 + i, 70 + i / 5, 2, 2, 230, 170, 255);
+    END
+    FOR i = 0 TO 12
+      c = rand(20, 44);
+      gfx_circle(g, rand(0, SW), rand(120, SH), rand(10, 30), c + 20, c / 2, c + 30);
+    END
+  END
+  RETURN 0;
+END
+
+FUNCTION make_sounds();
+BEGIN
+  s_move = sfx_tone(wave_square, 880, 880, 30, 16);
+  s_ok = sfx_tone(wave_square, 660, 1320, 110, 26);
+  s_back = sfx_tone(wave_triangle, 520, 260, 110, 34);
+  s_miss = sfx_tone(wave_triangle, 150, 70, 130, 44);
+  s_fail = sfx_tone(wave_saw, 420, 50, 1100, 40);
+  s_tap = sfx_tone(wave_sine, 1760, 1760, 30, 26);
+  s_best = sfx_tone(wave_square, 1046, 2093, 240, 22);
+  RETURN 0;
+END
+
+// =====================================================================
+// Songs, bar by bar
+//
+//   cd(bass, t1, t2, t3)  the bar's chord: a bass note and three tones
+//                         (the arpeggio, bass and pads are made from it
+//                         in the song's style)
+//   ld("...")             the lead melody, 16 steps
+//   dr(pattern)           drums (kept until changed)
+//   parts(arp, bass, pad) which of the chord parts play
+//   ch(n1, n2, h1, h2)    ends the bar with its charts: NORMAL steps 0-7
+//                         and 8-15, then HARD. One digit a step after the
+//                         leading 1: 0 nothing, 1-4 a lane, 5 lanes 1+2,
+//                         6 lanes 3+4, 7 lanes 1+3, 8 lanes 2+4, 9 1+4
+// =====================================================================
+
+FUNCTION cd(bs, t1, t2, t3);
+BEGIN
+  c_bs = bs; c_t1 = t1; c_t2 = t2; c_t3 = t3;
+  RETURN 0;
+END
+
+FUNCTION ld(s);
+BEGIN
+  cur_ld = s;
+  RETURN 0;
+END
+
+FUNCTION dr(s);
+BEGIN
+  cur_dr = s;
+  RETURN 0;
+END
+
+FUNCTION parts(a, b, p);
+BEGIN
+  arp_on = a; bass_on = b; pad_on = p;
+  RETURN 0;
+END
+
+FUNCTION arp_line();
+PRIVATE s, k;
+BEGIN
+  IF (NOT arp_on) RETURN REST; END
+  s = "";
+  FOR k = 0 TO 1
+    IF (style == 0)
+      // gentle eighths up and down
+      s = s + c_t1 + " . " + c_t2 + " . " + c_t3 + " . " + c_t2 + " . ";
+    END
+    IF (style == 1)
+      // a rolling sixteenth-note shimmer
+      s = s + c_t1 + " " + c_t2 + " " + c_t3 + " " + c_t2 + " " + c_t1 + " " + c_t2 + " " + c_t3 + " " + c_t2 + " ";
+    END
+    IF (style == 2)
+      s = s + c_t1 + " . " + c_t3 + " . " + c_t2 + " . " + c_t3 + " . ";
+    END
+  END
+  RETURN s;
+END
+
+FUNCTION bass_line();
+PRIVATE b;
+BEGIN
+  IF (NOT bass_on) RETURN REST; END
+  b = c_bs;
+  IF (style == 0)
+    RETURN b + " - - - . . " + b + " . " + b + " - - - . . " + b + " . ";
+  END
+  IF (style == 1)
+    // octaves (the bass plays an octave under what is written)
+    RETURN b + " . " + c_t1 + " . " + b + " . " + c_t1 + " . " + b + " . " + c_t1 + " . " + b + " . " + c_t1 + " . ";
+  END
+  RETURN b + " . " + b + " . " + b + " . " + b + " . " + b + " . " + b + " . " + b + " . " + b + " . ";
+END
+
+FUNCTION pad_line(t);
+BEGIN
+  IF (NOT pad_on) RETURN REST; END
+  RETURN t + " - - - - - - - - - - - - - - - ";
+END
+
+// ends the bar being written
+FUNCTION ch(n1, n2, h1, h2);
+BEGIN
+  IF (nbar >= MAXB) RETURN 0; END
+  b_ld[nbar] = cur_ld;
+  b_ar[nbar] = arp_line();
+  b_bs[nbar] = bass_line();
+  b_p1[nbar] = pad_line(c_t2);
+  b_p2[nbar] = pad_line(c_t3);
+  b_dr[nbar] = cur_dr;
+  b_n1[nbar] = n1 % 100000000;
+  b_n2[nbar] = n2 % 100000000;
+  b_h1[nbar] = h1 % 100000000;
+  b_h2[nbar] = h2 % 100000000;
+  nbar++;
+  cur_ld = REST;
+  RETURN 0;
+END
+
+// every song starts with a bar of clicks
+FUNCTION song_begin(si, sty);
+BEGIN
+  s_b0[si] = nbar;
+  style = sty;
+  cur_ld = REST;
+  parts(0, 0, 0);
+  dr(DC);
+  ch(0, 0, 0, 0);
+  RETURN 0;
+END
+
+FUNCTION song_end(si);
+BEGIN
+  s_nb[si] = nbar - s_b0[si];
+  RETURN 0;
+END
+
+// ---------------------------------------------------------------------
+// PAPER LANTERNS - 100 BPM, D major: a triangle-wave melody over plucked
+// eighths, soft pads and a laid-back beat
+// ---------------------------------------------------------------------
+
+FUNCTION s1_a();
+BEGIN
+  parts(1, 1, 1); dr(D11);
+  cd("D3", "D4", "F#4", "A4");
+  ld("F#5 - - - A5 - - - B5 - A5 - F#5 - - - ");        ch(120003000, 140302000, 120103010, 140302010);
+  cd("B3", "B3", "D4", "F#4");
+  ld("E5 - - - F#5 - D5 - B4 - - - - - - - ");          ch(120003020, 110000000, 120003020, 110203020);
+  cd("G3", "G3", "B3", "D4");
+  ld("D5 - - - E5 - F#5 - G5 - - - F#5 - E5 - ");       ch(110002030, 140003020, 110302030, 140203020);
+  cd("A3", "A3", "C#4", "E4");
+  ld("E5 - - - - - - - . . A4 - C#5 - E5 - ");          ch(130000000, 100102030, 130004030, 120102030);
+  cd("D3", "D4", "F#4", "A4");
+  ld("F#5 - - - A5 - - - D6 - C#6 - A5 - - - ");        ch(110002000, 140302000, 190002030, 140302010);
+  cd("F#3", "F#3", "A3", "C#4");
+  ld("C#6 - - - B5 - A5 - F#5 - - - E5 - - - ");        ch(140003020, 110002000, 140203020, 110302040);
+  cd("G3", "G3", "B3", "D4");
+  ld("D5 - E5 - F#5 - - - G5 - F#5 - E5 - D5 - ");      ch(110203000, 140302010, 110203020, 140302010);
+  cd("A3", "A3", "C#4", "E4"); dr(D12);
+  ld("E5 - - - - - - - C#5 - - - A4 - - - ");           ch(130000000, 120001000, 160002010, 130201234);
+  RETURN 0;
+END
+
+FUNCTION s1_b(last);
+BEGIN
+  parts(1, 1, 1); dr(D11);
+  cd("G3", "G3", "B3", "D4");
+  ld("B5 - - - B5 - A5 - G5 - - - D5 - - - ");          ch(140004030, 120001000, 180104030, 120301020);
+  cd("A3", "A3", "C#4", "E4");
+  ld("C#6 - - - C#6 - B5 - A5 - - - E5 - - - ");        ch(110001020, 130004000, 170401020, 130204030);
+  cd("F#3", "F#3", "A3", "C#4");
+  ld("A5 - - - A5 - B5 - C#6 - - - A5 - F#5 - ");       ch(120002030, 140003020, 120102030, 140103020);
+  cd("B3", "B3", "D4", "F#4");
+  ld("B5 - - - - - - - F#5 - - - D5 - - - ");           ch(140000000, 120001000, 190002030, 120301040);
+  cd("G3", "G3", "B3", "D4");
+  ld("G5 - - - B5 - D6 - - - B5 - G5 - - - ");          ch(110002040, 100301000, 110203040, 120301020);
+  cd("A3", "A3", "C#4", "E4");
+  ld("A5 - - - C#6 - E6 - - - C#6 - A5 - - - ");        ch(140003010, 100204000, 140302010, 130204030);
+  cd("D3", "D4", "F#4", "A4");
+  ld("F#6 - - - E6 - D6 - A5 - - - F#5 - - - ");        ch(140003020, 110002000, 160103020, 110302040);
+  IF (last)
+    ld("D6 - - - - - - - - - - - - - - - ");            ch(140000000, 0, 190002030, 110203040);
+  ELSE
+    dr(D12);
+    ld("D6 - - - - - - - . . . . A5 - C#6 - ");         ch(140000000, 100002030, 190001020, 130102430);
+  END
+  RETURN 0;
+END
+
+FUNCTION song1();
+BEGIN
+  song_begin(0, 0);
+  // intro: plucks and pads
+  parts(1, 0, 1); dr(D10);
+  cd("D3", "D4", "F#4", "A4");                          ch(110004000, 110004000, 110204030, 110204030);
+  cd("A3", "A3", "C#4", "E4");
+  ld(". . . . . . . . . . . . A4 - D5 - ");             ch(110004000, 110002030, 110204030, 110302030);
+  s1_a();
+  s_pv[0] = nbar;
+  s1_b(0);
+  // bridge: E minor, sparse drums, the melody answers itself
+  parts(1, 1, 1); dr(D13);
+  cd("E3", "E4", "G4", "B4");
+  ld(". . . . E5 - G5 - B5 - - - A5 - G5 - ");          ch(100001020, 140003020, 110201020, 140103020);
+  cd("G3", "G3", "B3", "D4");
+  ld("F#5 - - - D5 - - - G5 - - - B5 - - - ");          ch(130001000, 120004000, 130401020, 130104020);
+  cd("E3", "E4", "G4", "B4");
+  ld(". . . . E5 - G5 - B5 - - - D6 - - - ");           ch(100001020, 130004000, 150001020, 130204030);
+  cd("A3", "A3", "C#4", "E4"); dr(D14);
+  ld("C#6 - - - - - - - A5 - B5 - C#6 - E6 - ");        ch(140000000, 110203040, 160002000, 110203243);
+  s1_b(1);
+  // ending
+  dr(D10);
+  cd("D3", "D4", "F#4", "A4");
+  ld("D5 - - - - - - - - - - - - - - - ");              ch(120000000, 110003000, 120104030, 110203040);
+  parts(0, 0, 1); dr(DE);
+  ld("D5 - - - - - - - - - - - . . . . ");              ch(190000000, 0, 190000000, 0);
+  song_end(0);
+  RETURN 0;
+END
+
+// ---------------------------------------------------------------------
+// NIGHT TRAM - 128 BPM, E minor: a square-wave lead, rolling plucks,
+// octave bass and a four-on-the-floor beat
+// ---------------------------------------------------------------------
+
+FUNCTION s2_verse();
+BEGIN
+  parts(1, 1, 1); dr(D21);
+  cd("E3", "E4", "G4", "B4");
+  ld("B4 - . B4 . . E5 - . . G5 - F#5 - E5 - ");        ch(110020030, 100403020, 110020030, 110403020);
+  cd("C3", "C4", "E4", "G4");
+  ld("E5 - D5 - . . C5 - - - B4 - . . . . ");           ch(140300020, 100100000, 140300020, 140102030);
+  cd("G3", "G4", "B4", "D5");
+  ld("D5 - . D5 . . G5 - . . B5 - A5 - G5 - ");         ch(140030020, 100102030, 140030020, 130102030);
+  cd("D3", "D4", "F#4", "A4");
+  ld("F#5 - - - E5 - D5 - - - . . F#4 - A4 - ");        ch(140003020, 100001020, 160003020, 110401020);
+  cd("E3", "E4", "G4", "B4");
+  ld("B4 - . B4 . . E5 - . . G5 - B5 - A5 - ");         ch(110020030, 100204030, 110020030, 110204030);
+  cd("C3", "C4", "E4", "G4");
+  ld("G5 - E5 - . . C5 - - - E5 - G5 - . . ");          ch(140300010, 100203000, 140300010, 140203010);
+  cd("A3", "A4", "C5", "E5");
+  ld("A5 - . G5 . . E5 - . . C5 - D5 - E5 - ");         ch(140030020, 100102030, 190030020, 140102030);
+  cd("B3", "B4", "D#4", "F#4"); dr(D23);
+  ld("D#5 - - - - - - - F#5 - - - B4 - - - ");          ch(120000000, 130001000, 180001000, 130201234);
+  RETURN 0;
+END
+
+FUNCTION s2_chorus();
+BEGIN
+  parts(1, 1, 1); dr(D22);
+  cd("C3", "C4", "E4", "G4");
+  ld("E5 - G5 - C6 - - - B5 - - - G5 - - - ");          ch(110204000, 130002000, 170204010, 130102040);
+  cd("D3", "D4", "F#4", "A4");
+  ld("F#5 - A5 - D6 - - - C6 - B5 - A5 - - - ");        ch(110204000, 130201000, 170204010, 130201030);
+  cd("G3", "G4", "B4", "D5");
+  ld("B5 - - - D6 - - - B5 - G5 - D5 - G5 - ");         ch(130004000, 130201020, 160104020, 130201020);
+  cd("E3", "E4", "G4", "B4");
+  ld("E5 - - - - - - - . . . . E5 - G5 - ");            ch(110000000, 140002030, 150304030, 120102030);
+  cd("C3", "C4", "E4", "G4");
+  ld("E5 - G5 - C6 - - - B5 - - - G5 - - - ");          ch(140301000, 120003000, 180301040, 120403010);
+  cd("D3", "D4", "F#4", "A4");
+  ld("F#5 - A5 - D6 - - - E6 - - - D6 - - - ");         ch(110203000, 140003000, 110203010, 140203010);
+  cd("B3", "B4", "D#4", "F#4");
+  ld("D#6 - - - B5 - A5 - F#5 - - - D#5 - - - ");       ch(140003020, 110002000, 190203020, 110301040);
+  cd("E3", "E4", "G4", "B4"); dr(D23);
+  ld("E5 - - - B4 - - - E5 - - - . . . . ");            ch(130001000, 130002040, 160001000, 130201234);
+  RETURN 0;
+END
+
+FUNCTION song2();
+BEGIN
+  song_begin(1, 1);
+  // intro: plucks, bass and kicks
+  parts(1, 1, 0); dr(D20);
+  cd("E3", "E4", "G4", "B4");                           ch(110002000, 130004000, 110203040, 140302010);
+  cd("C3", "C4", "E4", "G4");                           ch(140003000, 120001000, 140302010, 110203040);
+  cd("G3", "G4", "B4", "D5");                           ch(110002000, 130004000, 110203040, 140302010);
+  cd("D3", "D4", "F#4", "A4"); dr(D23);                 ch(140003000, 120102030, 140302010, 120102340);
+  s2_verse();
+  s_pv[1] = nbar;
+  s2_chorus();
+  // break: hi-hats, plucks and echoes of the lead
+  parts(1, 0, 1); dr(D24);
+  cd("E3", "E4", "G4", "B4");
+  ld(". . . . . . . . B5 - . B5 . . E6 - ");            ch(110002000, 130020040, 110201020, 130020040);
+  cd("C3", "C4", "E4", "G4");
+  ld(". . . . . . . . G5 - . G5 . . C6 - ");            ch(140003000, 120030010, 140304030, 120030010);
+  cd("G3", "G4", "B4", "D5");
+  ld(". . . . . . . . B5 - . B5 . . D6 - ");            ch(110002000, 130020040, 110201020, 130020040);
+  cd("D3", "D4", "F#4", "A4"); dr(D23);
+  ld("A5 - - - F#5 - - - D5 - E5 - F#5 - A5 - ");       ch(140003000, 110203040, 190003020, 110203243);
+  s2_verse();
+  s2_chorus();
+  // ending
+  parts(1, 1, 1); dr(D21);
+  cd("E3", "E4", "G4", "B4");
+  ld("B5 - - - G5 - - - E5 - - - - - - - ");            ch(140003000, 110002000, 140302010, 110203040);
+  parts(0, 0, 1); dr(DE);
+  ld("E5 - - - - - - - . . . . . . . . ");              ch(190000000, 0, 190000000, 0);
+  song_end(1);
+  RETURN 0;
+END
+
+// ---------------------------------------------------------------------
+// COMET CHASE - 160 BPM, A minor: a sawtooth lead, driving eighth-note
+// bass and a syncopated riff in the drop
+// ---------------------------------------------------------------------
+
+FUNCTION s3_a();
+BEGIN
+  parts(1, 1, 1); dr(D32);
+  cd("A3", "A3", "C4", "E4");
+  ld("A5 - . A5 . . C6 - . . B5 - A5 - E5 - ");         ch(110020040, 100302010, 170020043, 102302010);
+  cd("F3", "F3", "A3", "C4");
+  ld("F5 - - - A5 - C6 - . . A5 - F5 - C5 - ");         ch(110002040, 100302010, 150302043, 101302010);
+  cd("C3", "C4", "E4", "G4");
+  ld("G5 - . G5 . . C6 - . . E6 - D6 - C6 - ");         ch(110020030, 100403020, 170020031, 102403020);
+  cd("G3", "G3", "B3", "D4");
+  ld("B5 - - - - - . . D6 - C6 - B5 - G5 - ");          ch(130001000, 140302010, 160001021, 140302010);
+  cd("A3", "A3", "C4", "E4");
+  ld("A5 - . A5 . . C6 - . . E6 - D6 - C6 - ");         ch(110020030, 100403020, 190020031, 102403020);
+  cd("F3", "F3", "A3", "C4");
+  ld("A5 - - - F5 - A5 - C6 - - - A5 - - - ");          ch(130001020, 140002000, 130401021, 140302010);
+  cd("G3", "G3", "B3", "D4");
+  ld("B5 - . B5 . . D6 - . . B5 - G5 - D5 - ");         ch(120030040, 100302010, 180030043, 101302010);
+  dr(D35);
+  ld("G5 - - - - - - - . . . . G5 - A5 - ");            ch(120001000, 110203040, 150001002, 110213243);
+  RETURN 0;
+END
+
+FUNCTION s3_b();
+BEGIN
+  parts(1, 1, 1); dr(D33);
+  cd("D3", "D4", "F4", "A4");
+  ld("F5 - E5 - D5 - . . A5 - . . F5 - D5 - ");         ch(130201000, 140003020, 130201023, 140103020);
+  cd("A3", "A3", "C4", "E4");
+  ld("E5 - - - C5 - - - A4 - C5 - E5 - A5 - ");         ch(140003000, 110203040, 160003020, 110213043);
+  cd("F3", "F3", "A3", "C4");
+  ld("C6 - - - A5 - F5 - C6 - - - D6 - C6 - ");         ch(130002010, 130004030, 170402012, 130104032);
+  cd("E3", "E4", "G#4", "B4");
+  ld("B5 - - - G#5 - - - E5 - - - . . . . ");           ch(140003000, 110002000, 190003020, 110234032);
+  cd("D3", "D4", "F4", "A4");
+  ld("D6 - C6 - A5 - . . F5 - A5 - D6 - F6 - ");        ch(140302000, 110203040, 190302012, 110203040);
+  cd("A3", "A3", "C4", "E4");
+  ld("E6 - - - C6 - A5 - E5 - - - A5 - C6 - ");         ch(140003020, 110002030, 160103020, 110432030);
+  cd("E3", "E4", "G#4", "B4");
+  ld("B5 - A5 - G#5 - E5 - B5 - A5 - G#5 - E5 - ");     ch(140302010, 140302010, 160302010, 190302010);
+  dr(D35);
+  ld("E5 E5 G#5 G#5 B5 B5 E6 - - - - - . . . . ");      ch(110203040, 190002030, 112123450, 160123432);
+  RETURN 0;
+END
+
+FUNCTION s3_drop();
+BEGIN
+  parts(1, 1, 1); dr(D34);
+  cd("A3", "A3", "C4", "E4");
+  ld("A5 . A5 C6 . A5 E6 . A5 . D6 . C6 . B5 . ");      ch(110020040, 110403020, 110230240, 110403020);
+  cd("F3", "F3", "A3", "C4");
+  ld("F5 . F5 A5 . F5 C6 . F5 . D6 . C6 . A5 . ");      ch(140030010, 140102030, 140320310, 140102030);
+  cd("C3", "C4", "E4", "G4");
+  ld("E5 . E5 G5 . E5 C6 . E5 . D6 . C6 . G5 . ");      ch(110020040, 110403020, 110230240, 110403020);
+  cd("G3", "G3", "B3", "D4");
+  ld("D5 . D5 G5 . D5 B5 . D6 - - - B5 - G5 - ");       ch(110020030, 140003020, 110230230, 190003020);
+  cd("A3", "A3", "C4", "E4");
+  ld("A5 . A5 C6 . A5 E6 . A5 . D6 . C6 . B5 . ");      ch(110020040, 110403020, 110230240, 110403020);
+  cd("F3", "F3", "A3", "C4");
+  ld("F5 . F5 A5 . F5 C6 . F5 . D6 . C6 . A5 . ");      ch(140030010, 140102030, 140320310, 140102030);
+  cd("C3", "C4", "E4", "G4");
+  ld("E5 . E5 G5 . E5 C6 . E5 . D6 . C6 . G5 . ");      ch(110020040, 110403020, 110230240, 110403020);
+  cd("G3", "G3", "B3", "D4"); dr(D35);
+  ld("D5 . D5 G5 . D5 B5 . D6 - - - - - - - ");         ch(110020030, 140302010, 110230230, 190232341);
+  RETURN 0;
+END
+
+FUNCTION song3();
+BEGIN
+  song_begin(2, 2);
+  // intro: plucks, bass and a four-beat kick
+  parts(1, 1, 0); dr(D30);
+  cd("A3", "A3", "C4", "E4");                           ch(110002000, 130004000, 110302030, 110402040);
+  cd("F3", "F3", "A3", "C4");                           ch(140003000, 120001000, 140203020, 140102010);
+  cd("C3", "C4", "E4", "G4");                           ch(110002000, 130004000, 110302030, 110402040);
+  cd("G3", "G3", "B3", "D4"); dr(D31);                  ch(140003000, 120102030, 140302010, 120123430);
+  s3_a();
+  s3_b();
+  s_pv[2] = nbar;
+  s3_drop();
+  s3_a();
+  s3_b();
+  // ending
+  parts(1, 1, 1); dr(D32);
+  cd("F3", "F3", "A3", "C4");
+  ld("F5 - - - A5 - - - C6 - - - A5 - - - ");           ch(110002000, 140003000, 110302040, 140302010);
+  cd("G3", "G3", "B3", "D4");
+  ld("G5 - - - B5 - - - D6 - - - B5 - - - ");           ch(140003000, 110002000, 140203010, 110203040);
+  cd("A3", "A3", "C4", "E4");
+  parts(0, 0, 1); dr(DE);
+  ld("A5 - - - - - - - - - - - . . . . ");              ch(190000000, 0, 190000000, 0);
+  song_end(2);
+  RETURN 0;
+END
+
+// ---------------------------------------------------------------------
+// Turning the bars into engine songs and charts
+// ---------------------------------------------------------------------
+
+// The engine song of bars b0..b1 of song si, after a count-in bar when
+// count_in is 1
+FUNCTION make_song(si, b0, b1, count_in);
+PRIVATE s, l, a, bs, p1, p2, d, b, li, lv, av, bv, dv;
+BEGIN
+  l = ""; a = ""; bs = ""; p1 = ""; p2 = ""; d = "";
+  IF (count_in)
+    l = REST; a = REST; bs = REST; p1 = REST; p2 = REST; d = DC;
+  END
+  FOR b = b0 TO b1
+    l = l + b_ld[b]; a = a + b_ar[b]; bs = bs + b_bs[b];
+    p1 = p1 + b_p1[b]; p2 = p2 + b_p2[b]; d = d + b_dr[b];
+  END
+  IF (si == 0) li = inst_triangle; lv = 52; av = 30; bv = 56; dv = 50; END
+  IF (si == 1) li = inst_square; lv = 30; av = 18; bv = 58; dv = 60; END
+  IF (si == 2) li = inst_saw; lv = 28; av = 22; bv = 54; dv = 64; END
+  s = song_new(s_bpm[si]);
+  song_track(s, li, l, lv);
+  song_track(s, inst_pluck, a, av);
+  song_track(s, inst_bass, bs, bv);
+  song_track(s, inst_pad, p1, 16);
+  song_track(s, inst_pad, p2, 14);
+  song_track(s, inst_drums, d, dv);
+  RETURN s;
+END
+
+FUNCTION set_tempo(si);
+BEGIN
+  bpm = s_bpm[si];
+  spb = fdiv(60, bpm);
+  step_s = fdiv(15, bpm);
+  bar_s = spb * 4;
+  song_len = s_nb[si] * bar_s;
+  RETURN 0;
+END
+
+FUNCTION add_note(t, l, c);
+BEGIN
+  IF (nnotes >= MAXN) RETURN 0; END
+  n_t[nnotes] = t; n_ln[nnotes] = l; n_st[nnotes] = 0;
+  n_ch[nnotes] = c; n_err[nnotes] = 0;
+  nnotes++;
+  RETURN 1;
+END
+
+// the notes of 8 steps (one number of a bar) starting at song time t0
+FUNCTION chart_half(v, t0);
+PRIVATE s, dg, t;
+BEGIN
+  IF (v == 0) RETURN 0; END
+  FOR s = 0 TO 7
+    dg = (v / p10[7 - s]) % 10;
+    IF (dg > 0)
+      t = t0 + s * step_s;
+      IF (dg <= 4)
+        add_note(t, dg - 1, 0);
+      ELSE
+        add_note(t, ch_a[dg], 1);
+        add_note(t, ch_b[dg], 1);
+      END
+    END
+  END
+  RETURN 0;
+END
+
+// The chart of song si at difficulty d, in time order
+FUNCTION build_chart(si, d);
+PRIVATE k, b, t0;
+BEGIN
+  set_tempo(si);
+  nnotes = 0;
+  FOR k = 0 TO s_nb[si] - 1
+    b = s_b0[si] + k;
+    t0 = k * bar_s;
+    IF (d == 0)
+      chart_half(b_n1[b], t0);
+      chart_half(b_n2[b], t0 + 8 * step_s);
+    ELSE
+      chart_half(b_h1[b], t0);
+      chart_half(b_h2[b], t0 + 8 * step_s);
+    END
+  END
+  RETURN nnotes;
+END
+
+// =====================================================================
+// The backdrop: the song's sky, a glow and rings that beat with the
+// music, and some scenery that drifts by
+// =====================================================================
+
+PROCESS backdrop();
+BEGIN
+  x = SW / 2; y = SH / 2; z = 100;
+  LOOP
+    graph = g_bg[bg_song];
+    FRAME;
+  END
+END
+
+PROCESS bgdisc();
+BEGIN
+  x = SW / 2; y = 118; z = 96; graph = g_disc;
+  LOOP
+    red = s_ar[bg_song]; green = s_ag[bg_song]; blue = s_ab[bg_song];
+    alpha = 6 + int(pulse * 12 + bar_pulse * 10);
+    size = 105 + int(pulse * 10 + bar_pulse * 12);
+    FRAME;
+  END
+END
+
+// a ring spreading from the middle on every beat (stronger on a bar)
+PROCESS beatring(strong);
+PRIVATE t, a;
+BEGIN
+  x = SW / 2; y = 118; z = 92; graph = g_bigring;
+  red = s_ar[bg_song]; green = s_ag[bg_song]; blue = s_ab[bg_song];
+  IF (strong) a = 48; ELSE a = 24; END
+  FROM t = 0 TO 40;
+    size = 40 + t * 6;
+    alpha = a * (40 - t) / 40;
+    FRAME;
+  END
+END
+
+// Paper lanterns rise and sway. The glow is a second process moving
+// the same way (kind 1)
+PROCESS lantern(x0, sp, ph, kind);
+PRIVATE fy, t;
+BEGIN
+  z = 94 + kind; fy = SH + 12;
+  IF (kind) graph = g_halo; alpha = 18; ELSE graph = g_lantern; END
+  LOOP
+    t++;
+    fy -= sp;
+    x = int(x0 + sin(t * 1500 + ph) * 8);
+    y = int(fy);
+    IF (kind) alpha = 16 + rand(0, 6); END
+    IF (y < -20 OR bg_song != 0) BREAK; END
+    FRAME;
+  END
+END
+
+PROCESS tram();
+BEGIN
+  x = SW + 60; y = SH - 22; z = 94; graph = g_tram;
+  WHILE (x > -60 AND bg_song == 1)
+    x -= 2;
+    FRAME;
+  END
+END
+
+PROCESS streak();
+PRIVATE t;
+BEGIN
+  x = rand(120, SW + 120); y = -10; z = 94; graph = g_streak;
+  angle = 208000; alpha = rand(50, 90);
+  FROM t = 0 TO 90;
+    advance(7);
+    IF (y > SH + 10 OR x < -30 OR bg_song != 2) BREAK; END
+    FRAME;
+  END
+END
+
+PROCESS twinkle();
+PRIVATE t;
+BEGIN
+  x = rand(0, SW); y = rand(0, 200); z = 97; graph = g_star;
+  FROM t = 0 TO 30;
+    size = 20 + ping_pong(t, 15) * 6;
+    alpha = 30 + ping_pong(t, 15) * 4;
+    FRAME;
+  END
+END
+
+// dust drifting up, in the song's colour
+PROCESS mote();
+PRIVATE fy, t, sp;
+BEGIN
+  x = rand(0, SW); fy = SH + 4; z = 95; graph = g_dot2;
+  red = s_ar[bg_song]; green = s_ag[bg_song]; blue = s_ab[bg_song];
+  sp = rand(3, 9) * 0.1;
+  WHILE (fy > -4)
+    t++;
+    fy -= sp + pulse * 0.6;
+    y = int(fy);
+    alpha = 20 + int(pulse * 30);
+    FRAME;
+  END
+END
+
+// notes drifting down behind the title
+PROCESS gemfall();
+PRIVATE fy, sp;
+BEGIN
+  x = rand(0, SW); fy = -10; z = 93; graph = g_note[rand(0, 3)];
+  alpha = 22; sp = rand(6, 14) * 0.1;
+  WHILE (fy < SH + 10 AND scr == SC_TITLE)
+    fy += sp;
+    y = int(fy);
+    FRAME;
+  END
+END
+
+// spawns the scenery of the song showing
+PROCESS decor();
+PRIVATE t;
+BEGIN
+  LOOP
+    t++;
+    IF (bg_song == 0 AND t % 70 == 0)
+      x = rand(20, SW - 20);
+      y = rand(4, 8);
+      lantern(x, y * 0.1, rand(0, 360000), 1);
+      lantern(x, y * 0.1, rand(0, 360000), 0);
+    END
+    IF (bg_song == 1 AND t % 480 == 60) tram(); END
+    IF (bg_song == 2 AND t % 34 == 0) streak(); END
+    IF (bg_song == 2 AND t % 14 == 0) twinkle(); END
+    IF (t % 16 == 0) mote(); END
+    IF (scr == SC_TITLE AND t % 24 == 0) gemfall(); END
+    FRAME;
+  END
+END
+
+// =====================================================================
+// The highway: lanes, glows, receptors, beat lines and notes
+// =====================================================================
+
+PROCESS highway();
+BEGIN
+  x = SW / 2; y = SH / 2; z = 50; graph = g_hw; alpha = 86;
+  WHILE (scr == SC_PLAY OR scr == SC_PAUSE OR scr == SC_FAIL)
+    FRAME;
+  END
+END
+
+// light rising from the hit line of lane l (three heights, k 0-2)
+PROCESS glowp(l, k);
+PRIVATE f;
+BEGIN
+  x = lane_x[l]; z = 45 - k; graph = g_glow[k];
+  IF (k == 0) y = HIT_Y - 75; f = 30; END
+  IF (k == 1) y = HIT_Y - 35; f = 45; END
+  IF (k == 2) y = HIT_Y - 13; f = 70; END
+  WHILE (scr == SC_PLAY OR scr == SC_PAUSE OR scr == SC_FAIL)
+    IF (lane_red[l] > 0)
+      red = 255; green = 40; blue = 60;
+    ELSE
+      red = lane_r[l]; green = lane_g[l]; blue = lane_b[l];
+    END
+    alpha = int(lane_glow[l] * f / 100);
+    FRAME;
+  END
+END
+
+PROCESS receptor(l);
+BEGIN
+  x = lane_x[l]; y = HIT_Y; z = 30;
+  WHILE (scr == SC_PLAY OR scr == SC_PAUSE OR scr == SC_FAIL)
+    IF (lane_flash[l] > 0)
+      graph = g_rec_on[l]; size = 100 + lane_flash[l] * 3; alpha = 100;
+    ELSE
+      IF (lane_down[l])
+        graph = g_rec_on[l]; size = 92; alpha = 55;
+      ELSE
+        graph = g_rec[l]; size = 100; alpha = 100;
+      END
+    END
+    FRAME;
+  END
+END
+
+// a line across the lanes on every beat, moving with the notes
+PROCESS beatline(t, strong);
+PRIVATE run;
+BEGIN
+  run = line_run; x = SW / 2; z = 40;
+  IF (strong) graph = g_bline2; alpha = 30; ELSE graph = g_bline; alpha = 13; END
+  LOOP
+    IF (run != line_run OR (scr != SC_PLAY AND scr != SC_PAUSE)) BREAK; END
+    y = HIT_Y - int((t - song_t) * px_s);
+    IF (y >= HIT_Y) BREAK; END
+    FRAME;
+  END
+END
+
+PROCESS note(i);
+PRIVATE l, run, fy, vy, spin;
+BEGIN
+  l = n_ln[i]; run = play_run;
+  x = lane_x[l]; z = 20;
+  IF (n_ch[i]) graph = g_notec[l]; ELSE graph = g_note[l]; END
+  y = HIT_Y - int((n_t[i] - song_t) * px_s);
+  LOOP
+    IF (run != play_run) BREAK; END
+    IF (scr == SC_FAIL)
+      // the groove ran out: the notes tumble off the highway
+      fy = y; vy = rand(-30, 0) * 0.1; spin = rand(-8000, 8000);
+      WHILE (y < SH + 20 AND alpha > 0 AND run == play_run)
+        fy += vy; vy += 0.35; y = int(fy);
+        angle += spin; alpha -= 2;
+        FRAME;
+      END
+      BREAK;
+    END
+    IF (scr != SC_PLAY AND scr != SC_PAUSE) BREAK; END
+    IF (n_st[i] == 1 OR n_st[i] == 2) BREAK; END
+    y = HIT_Y - int((n_t[i] - song_t) * px_s);
+    IF (n_st[i] == 3)
+      red = 110; green = 110; blue = 130;
+      alpha = max(0, alpha - 5);
+    END
+    IF (y > SH + 10 OR alpha <= 0) BREAK; END
+    FRAME;
+  END
+END
+
+// =====================================================================
+// Hit effects
+// =====================================================================
+
+PROCESS hitring(l, big);
+PRIVATE t;
+BEGIN
+  x = lane_x[l]; y = HIT_Y; z = 5; graph = g_ring;
+  red = lane_r[l]; green = lane_g[l]; blue = lane_b[l];
+  IF (big) red = (red + 255) / 2; green = (green + 255) / 2; blue = (blue + 255) / 2; END
+  FROM t = 0 TO 13;
+    IF (big) size = 60 + t * 13; ELSE size = 60 + t * 8; END
+    alpha = 95 - t * 7;
+    FRAME;
+  END
+END
+
+PROCESS spark(x, y, vx, vy, l, life);
+PRIVATE fx, fy, t;
+BEGIN
+  z = 0; fx = x; fy = y;
+  IF (rand(0, 2) == 0) graph = g_dot; ELSE graph = g_dot2; END
+  IF (l >= 0)
+    red = lane_r[l]; green = lane_g[l]; blue = lane_b[l];
+  END
+  FROM t = 1 TO life;
+    fx += vx; fy += vy; vy += 0.16; vx = vx * 0.96;
+    x = int(fx); y = int(fy);
+    alpha = 100 - t * 100 / life;
+    FRAME;
+  END
+END
+
+PROCESS sparkle(x, y, l);
+PRIVATE t;
+BEGIN
+  z = -2; graph = g_star;
+  IF (l >= 0) red = (lane_r[l] + 255) / 2; green = (lane_g[l] + 255) / 2; blue = (lane_b[l] + 255) / 2; END
+  FROM t = 0 TO 16;
+    size = 60 + ping_pong(t, 8) * 25;
+    angle = t * 6000;
+    alpha = 100 - t * 5;
+    FRAME;
+  END
+END
+
+// k: 1 PERFECT, 2 GOOD
+FUNCTION hit_fx(l, k);
+PRIVATE i, n;
+BEGIN
+  hitring(l, k == 1);
+  IF (k == 1) n = 10; ELSE n = 5; END
+  FOR i = 1 TO n
+    spark(lane_x[l] + rand(-10, 10), HIT_Y - 2, rand(-22, 22) * 0.1, rand(-45, -15) * 0.1, l, rand(14, 26));
+  END
+  IF (k == 1) sparkle(lane_x[l] + rand(-8, 8), HIT_Y - rand(6, 16), l); END
+  RETURN 0;
+END
+
+// the judgement word over the hit line (k 0 PERFECT, 1 GOOD, 2 MISS)
+PROCESS popup(k);
+PRIVATE t;
+BEGIN
+  x = SW / 2; y = 172; z = -10; graph = g_word[k];
+  FROM t = 0 TO 32;
+    IF (t < 6) size = 140 - t * 7; ELSE size = 100; END
+    IF (k == 2) y = 172 + t / 3; END
+    IF (t > 20) alpha = 100 - (t - 20) * 8; END
+    FRAME;
+  END
+END
+
+FUNCTION show_pop(k, e);
+BEGIN
+  signal(TYPE popup, s_kill);
+  popup(k);
+  pop_k = k; pop_t = 32; pop_err = e;
+  RETURN 0;
+END
+
+// 3, 2, 1, GO! on the beats of a count-in bar starting at song time t0
+PROCESS countin(t0);
+PRIVATE b, f, run;
+BEGIN
+  x = SW / 2; y = 110; z = -30; run = play_run; alpha = 0;
+  WHILE (run == play_run AND (scr == SC_PLAY OR scr == SC_PAUSE))
+    IF (cin_from != t0) BREAK; END
+    f = fdiv(song_t - t0, spb);
+    IF (f >= 0 AND f < 4)
+      b = int(f);
+      graph = g_word[10 + b];
+      f = f - b;
+      size = 150 - int(min(f * 4, 1) * 50);
+      IF (f > 0.7) alpha = int((1 - f) * 330); ELSE alpha = 100; END
+    ELSE
+      alpha = 0;
+      IF (f >= 4) BREAK; END
+    END
+    FRAME;
+  END
+END
+
+// =====================================================================
+// Title and results pieces
+// =====================================================================
+
+// a letter of the logo, jumping on its beat
+PROCESS logo_letter(i, g, bx, by);
+PRIVATE jy, last;
+BEGIN
+  graph = g; x = bx; y = by; z = -5; last = -1;
+  WHILE (scr == SC_TITLE)
+    IF (beat_n != last)
+      last = beat_n;
+      IF (beat_n % 8 == i) jy = 9; END
+    END
+    y = by - int(jy);
+    jy = jy * 0.8;
+    size = 100 + int(pulse * 5);
+    FRAME;
+  END
+END
+
+PROCESS grade_show();
+PRIVATE t, i;
+BEGIN
+  graph = g_word[5 + grade]; x = 118; y = 132; z = -5; size = 320; alpha = 0;
+  WHILE (scr == SC_RESULT)
+    t++;
+    IF (t > 40)
+      IF (t < 52)
+        size = 320 - (t - 40) * 20; alpha = min(100, (t - 40) * 12);
+        angle = (52 - t) * 2500;
+      ELSE
+        size = 100 + int(pulse * 6); angle = 0; alpha = 100;
+      END
+      IF (t == 52)
+        FOR i = 0 TO 23
+          spark(x, y, rand(-40, 40) * 0.1, rand(-50, 10) * 0.1, rand(0, 3), rand(20, 40));
+        END
+        hitring(0, 1); hitring(3, 1);
+      END
+      IF (t > 52 AND t % 20 == 0) sparkle(x + rand(-34, 34), y + rand(-40, 40), -1); END
+    END
+    FRAME;
+  END
+END
+
+// a flash on the metronome of the calibration screen
+PROCESS cal_ring();
+PRIVATE t;
+BEGIN
+  x = 118; y = 132; z = -4; graph = g_bigring;
+  FROM t = 0 TO 16;
+    size = 60 + t * 5; alpha = 80 - t * 5;
+    FRAME;
+  END
+END
+
+PROCESS cal_disc();
+BEGIN
+  x = 118; y = 132; z = -3; graph = g_disc;
+  red = 120; green = 220; blue = 255;
+  WHILE (scr == SC_CALIB)
+    size = 30 + int(pulse * 14);
+    alpha = 30 + int(pulse * 60);
+    FRAME;
+  END
+END
+
+// =====================================================================
+// The clock and the beat
+// =====================================================================
+
+// Starts engine song s now and makes song time t0 the moment it begins
+// (the sequencer starts a song 50 ms after the call)
+FUNCTION start_music(s, lp, t0);
+BEGIN
+  song_play(s, lp);
+  t_base = get_time() + 0.05 - t0;
+  clock_on = 1;
+  beat_n = -1;
+  RETURN 0;
+END
+
+FUNCTION clock_update();
+BEGIN
+  IF (clock_on) song_t = get_time() - t_base - off_ms * 0.001; END
+  RETURN 0;
+END
+
+// pulses, rings and the equalizer on each new beat
+FUNCTION beat_update();
+PRIVATE b, i, k;
+BEGIN
+  pulse = pulse * 0.88;
+  bar_pulse = bar_pulse * 0.9;
+  FOR i = 0 TO 23
+    eq_h[i] = eq_h[i] * 0.9;
+  END
+  IF (NOT clock_on OR song_t < 0) RETURN 0; END
+  b = int(song_t / spb);
+  IF (b != beat_n)
+    beat_n = b;
+    pulse = 1;
+    IF (b % 4 == 0) bar_pulse = 1; END
+    beatring(b % 4 == 0);
+    FOR i = 0 TO 23
+      k = rand(25, 100);
+      IF (b % 4 != 0) k = k * 7 / 10; END
+      IF (k > eq_h[i]) eq_h[i] = k; END
+    END
+  END
+  RETURN 0;
+END
+
+// the equalizer bars in the bottom corners
+FUNCTION draw_eq();
+PRIVATE i, h, c;
+BEGIN
+  c = rgba(s_ar[bg_song], s_ag[bg_song], s_ab[bg_song], 55);
+  FOR i = 0 TO 11
+    h = int(eq_h[i] * 0.16) + 1;
+    draw_rect(10 + i * 12, SH - 2 - h, 8, h, c);
+    h = int(eq_h[12 + i] * 0.16) + 1;
+    draw_rect(334 + i * 12, SH - 2 - h, 8, h, c);
+  END
+  RETURN 0;
+END
+
+FUNCTION fx_update();
+PRIVATE l;
+BEGIN
+  FOR l = 0 TO 3
+    lane_glow[l] = lane_glow[l] * 0.84;
+    IF (lane_flash[l] > 0) lane_flash[l]--; END
+    IF (lane_red[l] > 0) lane_red[l]--; END
+  END
+  IF (pop_t > 0) pop_t--; END
+  IF (mult_t > 0) mult_t--; END
+  IF (combo_t > 0) combo_t--; END
+  IF (miles_t > 0) miles_t--; END
+  RETURN 0;
+END
+
+FUNCTION set_touch(pad, buttons, menu);
+BEGIN
+  touch_pad(pad);
+  touch_buttons(buttons);
+  touch_menu(menu);
+  RETURN 0;
+END
+
+// =====================================================================
+// Title
+// =====================================================================
+
+FUNCTION enter_title();
+PRIVATE i;
+BEGIN
+  scr = SC_TITLE; st = 0;
+  bg_song = 1;
+  set_tempo(1);
+  start_music(m_title, 1, 0);
+  set_touch(0, "", "enter:Start");
+  FOR i = 0 TO 3
+    logo_letter(i, g_logo[i], 183 + i * 38, 70);
+  END
+  logo_letter(4, g_logo[0], 183, 126);
+  logo_letter(5, g_logo[2], 221, 126);
+  logo_letter(6, g_logo[4], 259, 126);
+  logo_letter(7, g_logo[5], 297, 126);
+  RETURN 0;
+END
+
+FUNCTION title_update();
+BEGIN
+  draw_rect(0, 164, SW, 58, 'rgba(8,6,18,0.55)');
+  say(f1, 240, 172, 1, "A FOUR-LANE RHYTHM GAME", '#c8c0ff');
+  say(f1, 240, 184, 1, "HIT EVERY NOTE ON THE BEAT", '#c8c0ff');
+  IF ((st / 30) % 2 == 0) say(f2, 240, 200, 1, "PRESS ENTER", '#ffd84a'); END
+  say(f1, 240, 236, 1, "LANES  D F J K  OR THE ARROWS      ESC  PAUSE", '#8f86b8');
+  IF (st > 10 AND (k_ok() OR any_lane_hit()))
+    play_sound(s_ok, 70, 100, 0);
+    enter_select();
+  END
+  RETURN 0;
+END
+
+// =====================================================================
+// Song list
+// =====================================================================
+
+FUNCTION enter_select();
+BEGIN
+  scr = SC_SELECT; st = 0;
+  bg_song = cur_song;
+  set_tempo(cur_song);
+  start_music(s_prev[cur_song], 1, 0);
+  set_touch(1, "c:Offset,s:Speed", "enter:Play,esc:Back");
+  RETURN 0;
+END
+
+FUNCTION select_update();
+PRIVATE i, y, k, c, s, a;
+BEGIN
+  k = cur_song;
+  IF (key_pressed(_up) OR key_pressed(_d)) cur_song = (cur_song + NSONG - 1) % NSONG; END
+  IF (key_pressed(_down) OR key_pressed(_f)) cur_song = (cur_song + 1) % NSONG; END
+  IF (key_pressed(_left) OR key_pressed(_j)) cur_diff = 0; play_sound(s_move, 60, 90, 0); END
+  IF (key_pressed(_right) OR key_pressed(_k)) cur_diff = 1; play_sound(s_move, 60, 110, 0); END
+  IF (key_pressed(_s)) speed = (speed + 1) % 4; play_sound(s_move, 60, 120, 0); END
+  IF (cur_song != k)
+    play_sound(s_move, 60, 100, 0);
+    enter_select();
+    RETURN 0;
+  END
+  IF (key_pressed(_c))
+    play_sound(s_ok, 60, 100, 0);
+    enter_calib();
+    RETURN 0;
+  END
+  IF (k_back() AND st > 5)
+    play_sound(s_back, 70, 100, 0);
+    enter_title();
+    RETURN 0;
+  END
+  IF (k_ok() AND st > 5)
+    play_sound(s_ok, 70, 100, 0);
+    play_start();
+    RETURN 0;
+  END
+
+  say(f2, 16, 10, 0, "SONGS", '#ffffff');
+  say(f1, 464, 8, 2, "AUDIO OFFSET " + ms_s(off_ms), '#b8b0d8');
+  say(f1, 464, 18, 2, "SCROLL SPEED X" + (speed_mul[speed] / 100) + "." + zpad(speed_mul[speed] % 100, 2), '#b8b0d8');
+  // the cards
+  FOR i = 0 TO NSONG - 1
+    y = 36 + i * 58;
+    IF (i == cur_song)
+      a = 10 + int(pulse * 14);
+      draw_rect(14, y, 226, 52, rgba(s_ar[i], s_ag[i], s_ab[i], 24 + a));
+      draw_rect(14, y, 4, 52, rgb(s_ar[i], s_ag[i], s_ab[i]));
+      draw_rect(14, y, 226, 1, rgba(255, 255, 255, 60));
+      c = '#ffffff';
+    ELSE
+      draw_rect(20, y, 220, 52, 'rgba(10,8,24,0.72)');
+      c = '#9a92c0';
+    END
+    say(f2, 28, y + 8, 0, s_name[i], c);
+    say(f1, 28, y + 28, 0, s_bpm[i] + " BPM   " + mmss(s_nb[i] * 240 / s_bpm[i]), rgb(s_ar[i], s_ag[i], s_ab[i]));
+    say(f1, 28, y + 39, 0, s_mood[i], '#8f86b8');
+    k = i * 2 + cur_diff;
+    IF (best_played[k])
+      say(f1, 232, y + 8, 2, "BEST", '#8f86b8');
+      say(f2, 232, y + 22, 2, grade_ch(best_grade[k]), grade_col(best_grade[k]));
+    END
+  END
+  // the level panel
+  draw_rect(252, 36, 216, 168, 'rgba(10,8,24,0.78)');
+  draw_rect(252, 36, 216, 1, rgb(s_ar[cur_song], s_ag[cur_song], s_ab[cur_song]));
+  say(f1, 264, 46, 0, "LEVEL", '#8f86b8');
+  FOR i = 0 TO 1
+    IF (i == cur_diff)
+      draw_rect(262 + i * 102, 58, 96, 22, rgba(s_ar[cur_song], s_ag[cur_song], s_ab[cur_song], 45));
+      c = '#ffffff';
+    ELSE
+      c = '#6f6898';
+    END
+  END
+  say(f2, 310, 62, 1, "NORMAL", c_of(cur_diff == 0));
+  say(f2, 412, 62, 1, "HARD", c_of(cur_diff == 1));
+  k = s_lv[cur_song * 2 + cur_diff];
+  s = "";
+  FOR i = 1 TO 5
+    IF (i <= k) s = s + "*"; ELSE s = s + " "; END
+  END
+  say(f2, 264, 90, 0, s, '#ffd84a');
+  say(f1, 460, 94, 2, s_cnt[cur_song * 2 + cur_diff] + " NOTES", '#c8c0ff');
+  k = cur_song * 2 + cur_diff;
+  say(f1, 264, 120, 0, "BEST SCORE", '#8f86b8');
+  IF (best_played[k])
+    say(f2, 264, 132, 0, zpad(best_score[k], 7), '#ffffff');
+    say(f1, 264, 154, 0, "ACCURACY " + pct(best_acc[k]), '#c8c0ff');
+    say(f3, 452, 128, 2, grade_ch(best_grade[k]), grade_col(best_grade[k]));
+    IF (best_fc[k]) say(f1, 264, 168, 0, "FULL COMBO", '#ffd84a'); END
+  ELSE
+    say(f2, 264, 132, 0, "-------", '#6f6898');
+    say(f1, 264, 154, 0, "NOT PLAYED YET", '#6f6898');
+  END
+  say(f1, 360, 188, 1, "PREVIEW PLAYING", rgba(255, 255, 255, 30 + int(pulse * 60)));
+  // help
+  say(f1, 16, 216, 0, "UP DOWN  SONG        LEFT RIGHT  LEVEL", '#8f86b8');
+  say(f1, 16, 228, 0, "ENTER  PLAY          S  SCROLL SPEED", '#8f86b8');
+  say(f1, 16, 240, 0, "C  AUDIO OFFSET      ESC  TITLE", '#8f86b8');
+  RETURN 0;
+END
+
+FUNCTION c_of(on);
+BEGIN
+  IF (on) RETURN '#ffffff'; END
+  RETURN '#6f6898';
+END
+
+FUNCTION grade_ch(g);
+BEGIN
+  IF (g == 0) RETURN "S"; END
+  IF (g == 1) RETURN "A"; END
+  IF (g == 2) RETURN "B"; END
+  IF (g == 3) RETURN "C"; END
+  RETURN "D";
+END
+
+FUNCTION grade_col(g);
+BEGIN
+  IF (g == 0) RETURN '#ffd84a'; END
+  IF (g == 1) RETURN '#5ae69a'; END
+  IF (g == 2) RETURN '#6aa8ff'; END
+  IF (g == 3) RETURN '#b68cff'; END
+  RETURN '#b0b0c0';
+END
+
+// =====================================================================
+// Playing a song
+// =====================================================================
+
+FUNCTION kill_play();
+BEGIN
+  play_run++; line_run++;
+  signal(TYPE popup, s_kill);
+  signal(TYPE countin, s_kill);
+  RETURN 0;
+END
+
+FUNCTION play_start();
+PRIVATE l;
+BEGIN
+  kill_play();
+  scr = SC_PLAY; st = 0;
+  bg_song = cur_song;
+  build_chart(cur_song, cur_diff);
+  nspawn = 0; nfirst = 0; nbeat = 0;
+  score = 0; combo = 0; max_combo = 0; mult = 1;
+  cnt_p = 0; cnt_g = 0; cnt_m = 0; groove = 60;
+  pop_t = 0; mult_t = 0; combo_t = 0; miles_t = 0; new_best = 0;
+  IF (cur_diff == 0) view_s = 1.4; ELSE view_s = 1.1; END
+  view_s = view_s * 100 / speed_mul[speed];
+  px_s = fdiv(HIT_Y + 12, view_s);
+  FOR l = 0 TO 3
+    lane_glow[l] = 0; lane_flash[l] = 0; lane_red[l] = 0; lane_down[l] = 0;
+  END
+  signal(TYPE highway, s_kill);
+  signal(TYPE glowp, s_kill);
+  signal(TYPE receptor, s_kill);
+  highway();
+  FOR l = 0 TO 3
+    glowp(l, 0); glowp(l, 1); glowp(l, 2);
+    receptor(l);
+  END
+  set_touch(0, "d:1,f:2,j:3,k:4", "esc:Pause");
+  start_music(s_song[cur_song], 0, 0);
+  song_t = get_time() - t_base - off_ms * 0.001;
+  cin_from = 0;
+  countin(0);
+  RETURN 0;
+END
+
+// a note was hit e seconds after its time
+FUNCTION judge(i, e);
+PRIVATE k, l, m;
+BEGIN
+  l = n_ln[i];
+  IF (abs(e) <= W_PERF) k = 1; ELSE k = 2; END
+  n_st[i] = k;
+  n_err[i] = int(e * 1000);
+  combo++;
+  IF (combo > max_combo) max_combo = combo; END
+  m = min(4, 1 + combo / 10);
+  IF (m > mult) mult_t = 40; END
+  mult = m;
+  IF (k == 1)
+    cnt_p++; score += 300 * mult; groove = min(100, groove + 2);
+  ELSE
+    cnt_g++; score += 100 * mult; groove = min(100, groove + 1);
+  END
+  lane_glow[l] = 70; lane_flash[l] = 8;
+  hit_fx(l, k);
+  show_pop(k - 1, e);
+  combo_t = 8;
+  IF (combo % 50 == 0)
+    miles_t = 90; miles_n = combo;
+    FOR l = 0 TO 3
+      spark(lane_x[l], HIT_Y, rand(-15, 15) * 0.1, -5.5, l, 34);
+      spark(lane_x[l], HIT_Y, rand(-15, 15) * 0.1, -4.5, l, 34);
+      sparkle(lane_x[l], HIT_Y - 30, l);
+    END
+  END
+  RETURN 0;
+END
+
+FUNCTION miss(i);
+BEGIN
+  n_st[i] = 3;
+  n_err[i] = 999;
+  cnt_m++;
+  combo = 0; mult = 1;
+  IF (cur_diff == 0) groove -= 6; ELSE groove -= 8; END
+  lane_red[n_ln[i]] = 10; lane_glow[n_ln[i]] = 40;
+  show_pop(2, 0);
+  play_sound(s_miss, 45, 100, 0);
+  IF (groove <= 0)
+    groove = 0;
+    enter_fail();
+  END
+  RETURN 0;
+END
+
+// hundredths of a percent of the notes judged so far
+FUNCTION accuracy();
+PRIVATE n;
+BEGIN
+  n = cnt_p + cnt_g + cnt_m;
+  IF (n == 0) RETURN 10000; END
+  RETURN (cnt_p * 100 + cnt_g * 50) * 100 / n;
+END
+
+FUNCTION play_update();
+PRIVATE l, i, tj, found, d;
+BEGIN
+  clock_update();
+  beat_update();
+  // notes and beat lines come in view_s seconds before their time
+  WHILE (nspawn < nnotes AND n_t[nspawn] - song_t < view_s)
+    note(nspawn);
+    nspawn++;
+  END
+  WHILE (nbeat * spb < song_len AND nbeat * spb - song_t < view_s)
+    beatline(nbeat * spb, nbeat % 4 == 0);
+    nbeat++;
+  END
+  // a press is taken as half a frame before this frame
+  tj = song_t - get_delta() * 0.5;
+  FOR l = 0 TO 3
+    lane_down[l] = lane_held(l);
+    IF (lane_hit(l))
+      lane_glow[l] = max(lane_glow[l], 34);
+      // the first waiting note of the lane inside the GOOD window
+      found = -1;
+      i = nfirst;
+      WHILE (i < nnotes AND n_t[i] <= tj + W_GOOD)
+        IF (n_st[i] == 0 AND n_ln[i] == l)
+          d = tj - n_t[i];
+          IF (abs(d) <= W_GOOD)
+            found = i;
+            BREAK;
+          END
+        END
+        i++;
+      END
+      IF (found >= 0) judge(found, tj - n_t[found]); END
+    END
+  END
+  // notes gone past the window are missed
+  WHILE (nfirst < nnotes AND scr == SC_PLAY)
+    IF (n_st[nfirst] != 0)
+      nfirst++;
+    ELSE
+      IF (tj - n_t[nfirst] > W_GOOD)
+        miss(nfirst);
+        nfirst++;
+      ELSE
+        BREAK;
+      END
+    END
+  END
+  IF (scr != SC_PLAY) RETURN 0; END
+  // the end of the song
+  IF (nfirst >= nnotes AND song_t > song_len + 0.3)
+    enter_result();
+    RETURN 0;
+  END
+  // pause (also when the page was hidden: frames stopped for a while)
+  IF (key_pressed(_esc) OR key_pressed(_p) OR get_delta() > 0.25)
+    enter_pause();
+    RETURN 0;
+  END
+  play_hud();
+  RETURN 0;
+END
+
+FUNCTION play_hud();
+PRIVATE c, a, s, h, gy;
+BEGIN
+  c = rgb(s_ar[cur_song], s_ag[cur_song], s_ab[cur_song]);
+  // left panel
+  draw_rect(4, 4, 156, 186, 'rgba(8,6,20,0.62)');
+  say(f1, 12, 12, 0, s_name[cur_song], c);
+  IF (cur_diff == 0) s = "NORMAL"; ELSE s = "HARD"; END
+  say(f1, 12, 23, 0, s + "  " + s_bpm[cur_song] + " BPM", '#b8b0d8');
+  say(f1, 12, 44, 0, "SCORE", '#8f86b8');
+  say(f2, 12, 55, 0, zpad(score, 7), '#ffffff');
+  say(f1, 12, 82, 0, "MULTIPLIER", '#8f86b8');
+  IF (mult == 1) s = '#c8c0ff'; END
+  IF (mult == 2) s = '#5ae69a'; END
+  IF (mult == 3) s = '#50aaff'; END
+  IF (mult == 4) s = '#ffd84a'; END
+  IF (mult_t > 0 AND (mult_t / 4) % 2 == 0) s = '#ffffff'; END
+  say(f3, 12, 94, 0, "X" + mult, s);
+  say(f1, 12, 124, 0, "ACCURACY", '#8f86b8');
+  say(f2, 12, 135, 0, pct(accuracy()), '#ffffff');
+  say(f1, 12, 158, 0, "PERFECT " + cnt_p, '#8fe0ff');
+  say(f1, 12, 168, 0, "GOOD    " + cnt_g, '#9ee67a');
+  say(f1, 12, 178, 0, "MISS    " + cnt_m, '#ff7a8a');
+  // combo
+  IF (combo >= 2)
+    say(f1, 396, 70, 1, "COMBO", '#8f86b8');
+    a = 0;
+    IF (combo_t > 4) a = 2; END
+    say(f3, 396, 82 - a, 1, "" + combo, '#ffffff');
+  END
+  IF (miles_t > 0 AND (miles_t / 6) % 2 == 0)
+    say(f2, 396, 120, 1, miles_n + " COMBO!", '#ffd84a');
+  END
+  // early / late under a GOOD
+  IF (pop_t > 12 AND pop_k == 1)
+    IF (pop_err < 0) say(f1, 240, 194, 1, "EARLY", '#8fe0ff'); ELSE say(f1, 240, 194, 1, "LATE", '#ffb070'); END
+  END
+  // groove bar
+  h = groove * 190 / 100;
+  gy = HIT_Y - h;
+  draw_rect(318, 40, 10, 192, 'rgba(8,6,20,0.8)');
+  IF (groove > 50) s = '#5ae69a'; ELSE IF (groove > 25) s = '#ffd84a'; ELSE s = '#ff4a5e'; END END
+  IF (groove <= 25 AND (st / 8) % 2 == 0) s = '#ffffff'; END
+  draw_rect(320, gy, 6, h, s);
+  draw_rect(320, gy, 6, 1, '#ffffff');
+  say(f1, 332, 226, 0, "GROOVE", '#8f86b8');
+  // danger: the edges glow red
+  IF (groove <= 25)
+    a = 20 + int(pulse * 30);
+    draw_rect(0, 0, SW, 3, rgba(255, 40, 60, a));
+    draw_rect(0, SH - 3, SW, 3, rgba(255, 40, 60, a));
+    draw_rect(0, 0, 3, SH, rgba(255, 40, 60, a));
+    draw_rect(SW - 3, 0, 3, SH, rgba(255, 40, 60, a));
+  END
+  // progress along the top of the highway
+  draw_rect(168, 0, int(144 * clamp(fdiv(song_t, song_len), 0, 1)), 2, c);
+  // lane keys
+  FOR a = 0 TO 3
+    IF (is_touch()) s = "" + (a + 1); ELSE s = lane_key[a]; END
+    IF (lane_down[a]) say(f1, lane_x[a], 246, 1, s, '#ffffff'); ELSE say(f1, lane_x[a], 246, 1, s, lane_col[a]); END
+  END
+  RETURN 0;
+END
+
+// =====================================================================
+// Pause
+// =====================================================================
+
+FUNCTION enter_pause();
+BEGIN
+  song_stop();
+  clock_on = 0;
+  scr = SC_PAUSE; st = 0; menu_i = 0;
+  set_touch(1, "", "enter:OK,esc:Resume");
+  RETURN 0;
+END
+
+// Back to the song: from the start of the bar the pause came in, after
+// a bar of clicks
+FUNCTION resume_play();
+PRIVATE b;
+BEGIN
+  b = int(song_t / bar_s);
+  scr = SC_PLAY; st = 0;
+  set_touch(0, "d:1,f:2,j:3,k:4", "esc:Pause");
+  IF (b < 1)
+    start_music(s_song[cur_song], 0, 0);
+    cin_from = 0;
+  ELSE
+    m_resume = make_song(cur_song, s_b0[cur_song] + b, s_b0[cur_song] + s_nb[cur_song] - 1, 1);
+    cin_from = (b - 1) * bar_s;
+    start_music(m_resume, 0, cin_from);
+  END
+  song_t = get_time() - t_base - off_ms * 0.001;
+  line_run++;
+  nbeat = int(cin_from / spb + 0.5);
+  countin(cin_from);
+  RETURN 0;
+END
+
+FUNCTION pause_update();
+PRIVATE i, c;
+BEGIN
+  beat_update();
+  IF (key_pressed(_up) OR key_pressed(_d)) menu_i = (menu_i + 2) % 3; play_sound(s_move, 60, 100, 0); END
+  IF (key_pressed(_down) OR key_pressed(_f)) menu_i = (menu_i + 1) % 3; play_sound(s_move, 60, 100, 0); END
+  draw_rect(0, 0, SW, SH, 'rgba(6,4,16,0.66)');
+  say(f3, 240, 64, 1, "PAUSED", '#ffffff');
+  FOR i = 0 TO 2
+    IF (i == menu_i)
+      draw_rect(170, 104 + i * 26, 140, 20, rgba(s_ar[cur_song], s_ag[cur_song], s_ab[cur_song], 50));
+      c = '#ffffff';
+    ELSE
+      c = '#8f86b8';
+    END
+  END
+  say(f2, 240, 107, 1, "RESUME", c_of(menu_i == 0));
+  say(f2, 240, 133, 1, "RESTART", c_of(menu_i == 1));
+  say(f2, 240, 159, 1, "SONG LIST", c_of(menu_i == 2));
+  say(f1, 240, 200, 1, "UP DOWN  CHOOSE     ENTER  OK     ESC  RESUME", '#8f86b8');
+  IF (st > 5 AND (key_pressed(_esc) OR key_pressed(_p)))
+    resume_play();
+    RETURN 0;
+  END
+  IF (st > 5 AND k_ok())
+    play_sound(s_ok, 60, 100, 0);
+    IF (menu_i == 0) resume_play(); END
+    IF (menu_i == 1) play_start(); END
+    IF (menu_i == 2) kill_play(); enter_select(); END
+  END
+  RETURN 0;
+END
+
+// =====================================================================
+// Results and failing
+// =====================================================================
+
+FUNCTION enter_result();
+PRIVATE k, acc;
+BEGIN
+  scr = SC_RESULT; st = 0; roll = 0;
+  acc = accuracy();
+  IF (acc >= 9500) grade = 0; ELSE IF (acc >= 9000) grade = 1; ELSE IF (acc >= 8000) grade = 2; ELSE IF (acc >= 7000) grade = 3; ELSE grade = 4; END END END END
+  k = cur_song * 2 + cur_diff;
+  new_best = 0;
+  IF (score > best_score[k])
+    best_score[k] = score; new_best = 1;
+  END
+  IF (best_played[k] == 0 OR acc > best_acc[k])
+    best_acc[k] = acc; best_grade[k] = grade;
+  END
+  best_played[k] = 1;
+  IF (cnt_m == 0) best_fc[k] = 1; END
+  set_tempo(cur_song);
+  spb = fdiv(60, 140);
+  start_music(m_clear, 0, 0);
+  set_touch(0, "r:Retry", "enter:Songs");
+  grade_show();
+  RETURN 0;
+END
+
+FUNCTION result_update();
+PRIVATE f, y, c;
+BEGIN
+  clock_update();
+  beat_update();
+  roll = min(roll + 1, 60);
+  f = fdiv(roll, 60);
+  c = rgb(s_ar[cur_song], s_ag[cur_song], s_ab[cur_song]);
+  draw_rect(16, 12, 448, 212, 'rgba(8,6,20,0.72)');
+  draw_rect(16, 12, 448, 1, c);
+  IF (cnt_m == 0)
+    say(f3, 240, 22, 1, "FULL COMBO!", '#ffd84a');
+  ELSE
+    say(f3, 240, 22, 1, "SONG CLEAR!", '#ffffff');
+  END
+  IF (cur_diff == 0) y = "NORMAL"; ELSE y = "HARD"; END
+  say(f1, 240, 50, 1, s_name[cur_song] + "  -  " + y, c);
+  say(f1, 118, 196, 1, "GRADE", '#8f86b8');
+  y = 72;
+  say(f1, 224, y + 4, 0, "SCORE", '#8f86b8');
+  say(f2, 450, y, 2, zpad(int(score * f), 7), '#ffffff');
+  say(f1, 224, y + 26, 0, "PERFECT", '#8fe0ff');
+  say(f2, 450, y + 22, 2, "" + int(cnt_p * f), '#8fe0ff');
+  say(f1, 224, y + 44, 0, "GOOD", '#9ee67a');
+  say(f2, 450, y + 40, 2, "" + int(cnt_g * f), '#9ee67a');
+  say(f1, 224, y + 62, 0, "MISS", '#ff7a8a');
+  say(f2, 450, y + 58, 2, "" + int(cnt_m * f), '#ff7a8a');
+  say(f1, 224, y + 80, 0, "MAX COMBO", '#8f86b8');
+  say(f2, 450, y + 76, 2, "" + int(max_combo * f), '#ffffff');
+  say(f1, 224, y + 98, 0, "ACCURACY", '#8f86b8');
+  say(f2, 450, y + 94, 2, pct(int(accuracy() * f)), '#ffffff');
+  IF (new_best AND roll >= 60 AND (st / 12) % 3 != 0)
+    say(f2, 337, 196, 1, "NEW BEST!", '#ffd84a');
+  END
+  IF (roll == 59 AND new_best) play_sound(s_best, 60, 100, 0); END
+  say(f1, 240, 236, 1, "ENTER  SONG LIST        R  PLAY AGAIN", '#b8b0d8');
+  IF (st > 30 AND k_ok())
+    play_sound(s_ok, 70, 100, 0);
+    kill_play(); enter_select();
+    RETURN 0;
+  END
+  IF (st > 30 AND key_pressed(_r))
+    play_sound(s_ok, 70, 100, 0);
+    play_start();
+  END
+  RETURN 0;
+END
+
+FUNCTION enter_fail();
+BEGIN
+  song_stop();
+  clock_on = 0;
+  fail_at = song_t;
+  scr = SC_FAIL; st = 0;
+  play_sound(s_fail, 70, 100, 0);
+  set_touch(0, "r:Retry", "enter:Songs");
+  RETURN 0;
+END
+
+FUNCTION fail_update();
+PRIVATE a;
+BEGIN
+  beat_update();
+  a = min(st * 2, 60);
+  draw_rect(0, 0, SW, SH, rgba(30, 0, 10, a));
+  IF (st == 70) start_music(m_fail, 0, 0); clock_on = 0; END
+  IF (st > 40)
+    say(f3, 240, 70, 1, "OUT OF GROOVE", '#ff4a5e');
+    say(f1, 240, 104, 1, s_name[cur_song] + "  -  " + c_diff(), '#c8c0ff');
+    say(f2, 240, 126, 1, "YOU MADE IT " + int(clamp(fdiv(fail_at, song_len), 0, 1) * 100) + "% IN", '#ffffff');
+    say(f1, 240, 152, 1, "SCORE " + zpad(score, 7) + "     MAX COMBO " + max_combo, '#b8b0d8');
+    say(f1, 240, 200, 1, "R  TRY AGAIN        ENTER  SONG LIST", '#ffd84a');
+  END
+  IF (st > 60 AND key_pressed(_r))
+    play_sound(s_ok, 70, 100, 0);
+    play_start();
+    RETURN 0;
+  END
+  IF (st > 60 AND k_ok())
+    play_sound(s_ok, 70, 100, 0);
+    kill_play(); enter_select();
+  END
+  RETURN 0;
+END
+
+FUNCTION c_diff();
+BEGIN
+  IF (cur_diff == 0) RETURN "NORMAL"; END
+  RETURN "HARD";
+END
+
+// =====================================================================
+// Audio offset: tap along with a click
+// =====================================================================
+
+FUNCTION enter_calib();
+BEGIN
+  scr = SC_CALIB; st = 0;
+  cal_n = 0; cal_i = 0; cal_last = -1;
+  spb = 0.5;
+  start_music(m_metro, 1, 0);
+  cal_disc();
+  set_touch(1, "d:Tap,k:Tap", "enter:Use,esc:Back");
+  RETURN 0;
+END
+
+FUNCTION cal_avg();
+PRIVATE i, s, n;
+BEGIN
+  s = 0; n = min(cal_n, 8);
+  IF (n == 0) RETURN 0; END
+  FOR i = 0 TO n - 1
+    s += cal_err[i];
+  END
+  RETURN s / n;
+END
+
+FUNCTION calib_update();
+PRIVATE t, e, i, x0, px, n, a;
+BEGIN
+  clock_update();
+  beat_update();
+  IF (beat_n != cal_last AND beat_n >= 0)
+    cal_last = beat_n;
+    cal_ring();
+  END
+  // a tap: how far from the nearest click (without the offset)
+  IF (any_lane_hit())
+    t = get_time() - t_base - get_delta() * 0.5;
+    IF (t > 0.75)
+      e = int((t - round(t / 0.5) * 0.5) * 1000);
+      IF (abs(e) < 220)
+        cal_err[cal_i] = e;
+        cal_i = (cal_i + 1) % 8;
+        cal_n++;
+      END
+    END
+  END
+  IF (key_pressed(_left)) off_ms -= 5; END
+  IF (key_pressed(_right)) off_ms += 5; END
+  IF (key_pressed(_backspace)) off_ms = 0; END
+  off_ms = clamp(off_ms, -300, 300);
+  say(f3, 240, 12, 1, "AUDIO OFFSET", '#ffffff');
+  say(f1, 240, 42, 1, "TAP D F J OR K ON EVERY CLICK YOU HEAR", '#c8c0ff');
+  say(f1, 240, 52, 1, "THE CIRCLE FLASHES WHERE THE GAME THINKS THE BEAT IS", '#8f86b8');
+  // the ruler: -150 ms .. +150 ms
+  x0 = 340;
+  draw_rect(220, 128, 240, 1, '#6f6898');
+  FOR i = -2 TO 2
+    draw_rect(x0 + i * 40, 122, 1, 13, '#6f6898');
+  END
+  say(f1, x0 - 80, 140, 1, "-100", '#6f6898');
+  say(f1, x0, 140, 1, "0", '#6f6898');
+  say(f1, x0 + 80, 140, 1, "+100", '#6f6898');
+  say(f1, x0 - 80, 110, 1, "EARLY", '#6f6898');
+  say(f1, x0 + 80, 110, 1, "LATE", '#6f6898');
+  n = min(cal_n, 8);
+  FOR i = 0 TO n - 1
+    px = x0 + clamp(cal_err[i], -150, 150) * 8 / 10;
+    draw_rect(px, 121, 2, 15, lane_col[i % 4]);
+  END
+  IF (n > 0)
+    a = cal_avg();
+    px = x0 + clamp(a, -150, 150) * 8 / 10;
+    draw_rect(px - 1, 116, 4, 25, '#ffffff');
+    say(f1, x0, 160, 1, "TAPS " + cal_n + "     AVERAGE " + ms_s(a), '#ffffff');
+  ELSE
+    say(f1, x0, 160, 1, "WAITING FOR TAPS...", '#8f86b8');
+  END
+  say(f2, x0, 178, 1, "OFFSET " + ms_s(off_ms), '#ffd84a');
+  say(f1, 240, 216, 1, "ENTER  USE THE AVERAGE      LEFT RIGHT  ADJUST BY 5 MS", '#8f86b8');
+  say(f1, 240, 228, 1, "BACKSPACE  SET TO 0          ESC  BACK TO THE SONGS", '#8f86b8');
+  IF (st > 5 AND key_pressed(_enter) AND n >= 4)
+    off_ms = clamp(cal_avg(), -300, 300);
+    play_sound(s_ok, 60, 100, 0);
+  END
+  IF (st > 5 AND key_pressed(_esc))
+    play_sound(s_back, 70, 100, 0);
+    signal(TYPE cal_disc, s_kill);
+    enter_select();
+  END
+  RETURN 0;
+END
+
+// =====================================================================
+// MAIN: builds everything (a slice per frame), then runs the screens
+// =====================================================================
+
+PRIVATE i, k;
+BEGIN
+  set_mode(480, 270);
+  set_fps(60, 0);
+  screen_color('#08060f');
+  music_volume(70);
+  FOR i = 0 TO NGLYPH - 1
+    gidx[gdat[i * 8]] = i;
+  END
+  // fonts
+  FOR k = 1 TO 3
+    font_start(k);
+    FOR i = 0 TO NGLYPH - 1 STEP 8
+      font_part(k, i, i + 7);
+      load_n++;
+      loading();
+      FRAME;
+    END
+    IF (k == 1) f1 = font_finish(); END
+    IF (k == 2) f2 = font_finish(); END
+    IF (k == 3) f3 = font_finish(); END
+  END
+  make_gfx();
+  load_n++; loading(); FRAME;
+  FOR i = 0 TO 4
+    make_words(i);
+    load_n++; loading(); FRAME;
+  END
+  make_logo();
+  load_n++; loading(); FRAME;
+  FOR i = 0 TO 2
+    make_bg(i, 0);
+    load_n++; loading(); FRAME;
+    make_bg(i, 1);
+    load_n++; loading(); FRAME;
+  END
+  make_sounds();
+  // the songs, their previews and charts
+  song1(); load_n++; loading(); FRAME;
+  song2(); load_n++; loading(); FRAME;
+  song3(); load_n++; loading(); FRAME;
+  FOR i = 0 TO NSONG - 1
+    s_song[i] = make_song(i, s_b0[i], s_b0[i] + s_nb[i] - 1, 0);
+    s_prev[i] = make_song(i, s_pv[i], s_pv[i] + 3, 0);
+    load_n++; loading(); FRAME;
+    s_cnt[i * 2] = build_chart(i, 0);
+    load_n++; loading(); FRAME;
+    s_cnt[i * 2 + 1] = build_chart(i, 1);
+    load_n++; loading(); FRAME;
+  END
+  m_title = make_song(1, s_pv[1], s_pv[1] + 7, 0);
+  m_metro = song_new(120);
+  song_track(m_metro, inst_sine, "A5 . . . E5 . . . E5 . . . E5 . . . ", 40);
+  song_track(m_metro, inst_drums, "k . . . h . . . h . . . h . . . ", 60);
+  m_clear = song_new(140);
+  song_track(m_clear, inst_square, "C5 E5 G5 C6 . G5 C6 - E6 - - - - - . . | D6 - C6 - G5 - E6 - - - - - - - . . ", 26);
+  song_track(m_clear, inst_bass, "C3 . . . G3 . . . C4 - - - . . . . | G3 . . . E3 . . . C3 - - - - - . . ", 50);
+  song_track(m_clear, inst_drums, "k . . . s . . . k . . . s . s s | k . . . s . . . k . . . . . . . ", 40);
+  m_fail = song_new(90);
+  song_track(m_fail, inst_triangle, "E5 - - - D#5 - - - D5 - - - C#5 - - - - - - - . . . . ", 40);
+  song_track(m_fail, inst_pad, "A4 - - - - - - - F4 - - - - - - - - - - - . . . . ", 20);
+  delete_text(all_text);
+
+  backdrop();
+  bgdisc();
+  decor();
+  enter_title();
+  LOOP
+    st++;
+    delete_text(all_text);
+    fx_update();
+    SWITCH (scr)
+      CASE 1
+        clock_update(); beat_update(); title_update();
+      CASE 2
+        clock_update(); beat_update(); select_update();
+      CASE 3
+        play_update();
+      CASE 4
+        pause_update();
+      CASE 5
+        result_update();
+      CASE 6
+        fail_update();
+      CASE 7
+        calib_update();
+    END
+    draw_eq();
+    FRAME;
+  END
+END
+
+FUNCTION loading();
+BEGIN
+  delete_text(all_text);
+  set_color('#ffffff');
+  write(0, 240, 120, 4, "BEAT BASH");
+  set_color('#8f86b8');
+  write(0, 240, 136, 4, "tuning the synths...");
+  draw_rect(160, 150, 160, 4, '#241c40');
+  draw_rect(160, 150, min(160, load_n * 160 / 46), 4, '#ffd84a');
+  RETURN 0;
+END
