@@ -1,0 +1,114 @@
+1
+00:00:00,967 --> 00:00:03,727
+Nesta lição, vais fazer
+aparecer a tua primeira forma:
+
+2
+00:00:03,767 --> 00:00:06,027
+um círculo, mesmo no meio do jogo.
+
+3
+00:00:06,300 --> 00:00:07,880
+A lição começa com dois blocos:
+
+4
+00:00:07,920 --> 00:00:10,460
+quando o jogo começa, e
+define a personagem player.
+
+5
+00:00:10,933 --> 00:00:12,693
+Uma personagem precisa de ter aspeto.
+
+6
+00:00:12,733 --> 00:00:15,413
+Agora, clica na categoria Aparência.
+
+7
+00:00:15,767 --> 00:00:17,887
+Agora, arrasta o bloco
+parece um círculo,
+
+8
+00:00:17,927 --> 00:00:19,887
+para dentro de define
+a personagem player.
+
+9
+00:00:19,927 --> 00:00:21,087
+Encaixa no sítio.
+
+10
+00:00:21,467 --> 00:00:22,907
+O player já parece um círculo,
+
+11
+00:00:22,947 --> 00:00:24,707
+mas só aparece quando o jogo o cria.
+
+12
+00:00:24,747 --> 00:00:26,407
+Clica na categoria Programa.
+
+13
+00:00:26,667 --> 00:00:29,807
+Agora, arrasta o bloco
+cria a personagem player,
+
+14
+00:00:29,847 --> 00:00:31,847
+para debaixo de quando o jogo começa.
+
+15
+00:00:31,887 --> 00:00:33,027
+Também encaixa.
+
+16
+00:00:33,533 --> 00:00:35,613
+O jogo tem 320 píxeis de largura,
+
+17
+00:00:35,653 --> 00:00:37,573
+e 240 de altura.
+
+18
+00:00:37,613 --> 00:00:41,613
+Por isso, x 160, y 120, é mesmo o meio.
+
+19
+00:00:41,933 --> 00:00:43,633
+Agora, clica no botão Jogar.
+
+20
+00:00:44,000 --> 00:00:45,420
+E aqui está: o teu círculo,
+
+21
+00:00:45,460 --> 00:00:46,560
+no meio do jogo.
+
+22
+00:00:46,700 --> 00:00:47,440
+Aqui está o código.
+
+23
+00:00:47,480 --> 00:00:49,700
+Este é o verdadeiro código DIV
+que os teus blocos fizeram:
+
+24
+00:00:49,740 --> 00:00:51,520
+o player, com o seu círculo,
+
+25
+00:00:51,560 --> 00:00:54,620
+e a linha que o cria em 160, 120.
+
+26
+00:00:55,233 --> 00:00:56,073
+Muito bem!
+
+27
+00:00:56,113 --> 00:00:59,893
+Na lição dois, vais mexer o teu
+círculo com as teclas das setas.

@@ -1,0 +1,115 @@
+1
+00:00:00,967 --> 00:00:04,567
+In this lesson, you'll add an enemy
+that bounces around the screen.
+
+2
+00:00:04,907 --> 00:00:07,607
+If it touches you, your
+score goes back to zero.
+
+3
+00:00:08,067 --> 00:00:10,107
+The player and the coin are folded up.
+
+4
+00:00:10,307 --> 00:00:12,627
+Our new sprite is define sprite enemy.
+
+5
+00:00:12,933 --> 00:00:16,293
+From Program, drag create
+sprite under the coin's.
+
+6
+00:00:16,333 --> 00:00:19,033
+Pick enemy, and put it
+in a corner, at 300, 20.
+
+7
+00:00:22,567 --> 00:00:25,687
+From Looks, look like a circle
+goes into define sprite enemy.
+
+8
+00:00:26,107 --> 00:00:28,667
+Make it a box, size 18, and red.
+
+9
+00:00:30,800 --> 00:00:32,600
+Also from Looks, point in direction,
+
+10
+00:00:32,640 --> 00:00:34,700
+with 40, to fly on a slant.
+
+11
+00:00:35,667 --> 00:00:37,687
+Then forever: move forward 2 steps,
+
+12
+00:00:37,727 --> 00:00:39,147
+and bounce off the edges.
+
+13
+00:00:46,967 --> 00:00:48,687
+Inside the forever, an if,
+
+14
+00:00:48,727 --> 00:00:50,107
+with touching sprite player.
+
+15
+00:00:58,800 --> 00:01:00,460
+When it hits you, from Variables,
+
+16
+00:01:00,500 --> 00:01:02,960
+set score to 0, and play sound hit.
+
+17
+00:01:08,100 --> 00:01:10,360
+And from Motion, go to x 300,
+
+18
+00:01:10,400 --> 00:01:13,440
+y 20, so the enemy starts
+again from its corner.
+
+19
+00:01:14,600 --> 00:01:16,640
+Press Run, click the game, and play.
+
+20
+00:01:17,033 --> 00:01:19,713
+Catch the coins, and keep
+away from the red box,
+
+21
+00:01:19,753 --> 00:01:21,333
+or your score drops to zero.
+
+22
+00:01:22,633 --> 00:01:24,733
+In the code, moving
+forward became advance,
+
+23
+00:01:24,773 --> 00:01:26,993
+and bounce became four IFs,
+
+24
+00:01:27,033 --> 00:01:28,693
+one for each edge of the screen.
+
+25
+00:01:29,100 --> 00:01:29,780
+Well done!
+
+26
+00:01:29,820 --> 00:01:31,500
+In lesson five, it's free play:
+
+27
+00:01:31,660 --> 00:01:32,760
+make your own game.

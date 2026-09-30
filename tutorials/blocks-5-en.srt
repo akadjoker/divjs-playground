@@ -1,0 +1,86 @@
+1
+00:00:00,967 --> 00:00:03,507
+Lesson five is free
+play: make your own game,
+
+2
+00:00:03,547 --> 00:00:04,687
+with every block.
+
+3
+00:00:05,067 --> 00:00:07,067
+It starts with just
+when the game starts.
+
+4
+00:00:07,267 --> 00:00:08,667
+The rest is up to you.
+
+5
+00:00:08,967 --> 00:00:10,087
+Stuck for ideas?
+
+6
+00:00:10,427 --> 00:00:12,327
+Show me the solution loads an example:
+
+7
+00:00:12,567 --> 00:00:15,307
+a ship that turns, flies,
+and fires at rocks.
+
+8
+00:00:15,767 --> 00:00:17,787
+The ship turns and flies
+with the arrow keys,
+
+9
+00:00:17,827 --> 00:00:19,907
+and fires a shot with space.
+
+10
+00:00:20,367 --> 00:00:22,127
+Each shot flies forty steps,
+
+11
+00:00:22,227 --> 00:00:23,327
+then deletes itself.
+
+12
+00:00:23,667 --> 00:00:24,947
+The rocks drift and bounce,
+
+13
+00:00:24,987 --> 00:00:27,407
+and explode when a shot touches them.
+
+14
+00:00:28,200 --> 00:00:30,240
+Press Run, click the game, and fly.
+
+15
+00:00:30,633 --> 00:00:32,293
+Hit all five rocks to win.
+
+16
+00:00:40,633 --> 00:00:44,433
+Every block has a tip: hold the
+mouse over it to read what it does.
+
+17
+00:00:44,833 --> 00:00:47,693
+And Open in the playground takes
+the DIV code of your blocks
+
+18
+00:00:47,733 --> 00:00:50,753
+to the text editor,
+to go on in real code.
+
+19
+00:00:51,100 --> 00:00:52,240
+That's all the lessons.
+
+20
+00:00:52,500 --> 00:00:54,000
+Have fun making your own games!

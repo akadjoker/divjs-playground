@@ -1,0 +1,131 @@
+1
+00:00:00,967 --> 00:00:04,267
+In this lesson, you'll make your
+circle move with the arrow keys.
+
+2
+00:00:04,700 --> 00:00:06,520
+We start where lesson one ended:
+
+3
+00:00:06,680 --> 00:00:08,100
+the player is a teal circle,
+
+4
+00:00:08,140 --> 00:00:09,660
+in the middle of the screen.
+
+5
+00:00:10,067 --> 00:00:13,527
+Open Control, and drag forever
+under look like a circle.
+
+6
+00:00:13,987 --> 00:00:16,927
+Everything inside forever
+runs again, every frame.
+
+7
+00:00:17,333 --> 00:00:20,713
+From Control again, drag if
+then into the forever loop.
+
+8
+00:00:21,067 --> 00:00:24,847
+From Sensing, drag key right arrow
+pressed into the slot of the if.
+
+9
+00:00:25,200 --> 00:00:27,260
+Then from Motion, drag change x by,
+
+10
+00:00:27,300 --> 00:00:29,240
+inside the if, and make it 3.
+
+11
+00:00:29,733 --> 00:00:31,713
+So, if the right arrow key is pressed,
+
+12
+00:00:31,893 --> 00:00:34,593
+x grows by 3, and the
+circle moves right.
+
+13
+00:00:34,933 --> 00:00:36,633
+Left is almost the same.
+
+14
+00:00:37,113 --> 00:00:39,633
+Copy the if with
+control C and control V,
+
+15
+00:00:39,713 --> 00:00:42,033
+put the copy underneath,
+pick left arrow,
+
+16
+00:00:42,073 --> 00:00:43,353
+and type minus 3.
+
+17
+00:00:44,233 --> 00:00:46,093
+Up and down change y instead.
+
+18
+00:00:46,573 --> 00:00:48,193
+Drag another if under the others,
+
+19
+00:00:48,233 --> 00:00:50,313
+put key pressed in
+it, and pick up arrow.
+
+20
+00:00:50,733 --> 00:00:53,213
+Then add change y by, with minus 3.
+
+21
+00:01:00,733 --> 00:01:02,613
+In the game, y grows downwards,
+
+22
+00:01:02,693 --> 00:01:04,233
+so minus 3 goes up.
+
+23
+00:01:04,453 --> 00:01:06,713
+One more copy for down arrow, with 3.
+
+24
+00:01:14,167 --> 00:01:15,827
+Now press Run, and click the game,
+
+25
+00:01:15,867 --> 00:01:17,247
+so it gets the keys.
+
+26
+00:01:17,667 --> 00:01:20,467
+The arrow keys move your
+circle around the screen.
+
+27
+00:01:22,367 --> 00:01:25,427
+In the code, each if became
+an IF with a key test,
+
+28
+00:01:25,587 --> 00:01:27,827
+inside the LOOP that runs every frame.
+
+29
+00:01:28,200 --> 00:01:28,940
+Great work!
+
+30
+00:01:28,980 --> 00:01:31,620
+In lesson three, you'll
+catch a coin and keep score.

@@ -1,0 +1,108 @@
+1
+00:00:00,967 --> 00:00:02,787
+In this lesson, you'll make
+your first shape appear:
+
+2
+00:00:02,827 --> 00:00:06,467
+a teal circle, right in the
+middle of the game screen.
+
+3
+00:00:06,867 --> 00:00:08,687
+The lesson starts with two blocks:
+
+4
+00:00:08,807 --> 00:00:11,347
+when the game starts,
+and define sprite player.
+
+5
+00:00:11,800 --> 00:00:13,140
+A sprite needs a look.
+
+6
+00:00:13,440 --> 00:00:14,580
+Open the Looks category.
+
+7
+00:00:15,000 --> 00:00:17,760
+Drag look like a circle
+into define sprite player.
+
+8
+00:00:18,040 --> 00:00:19,320
+It snaps into place.
+
+9
+00:00:19,767 --> 00:00:21,527
+The player now looks like a circle,
+
+10
+00:00:21,567 --> 00:00:24,007
+but it only appears when
+the game creates it.
+
+11
+00:00:24,207 --> 00:00:25,307
+Open Program.
+
+12
+00:00:25,600 --> 00:00:28,680
+Drag create sprite player at x 160,
+
+13
+00:00:28,940 --> 00:00:31,100
+y 120 under when the game starts.
+
+14
+00:00:31,480 --> 00:00:32,640
+It fits right in.
+
+15
+00:00:32,967 --> 00:00:37,527
+The game screen is 320
+pixels wide and 240 tall.
+
+16
+00:00:37,847 --> 00:00:42,027
+So x 160, y 120 is right in the middle.
+
+17
+00:00:42,400 --> 00:00:43,500
+Now press Run.
+
+18
+00:00:43,867 --> 00:00:45,767
+And there it is: your teal circle,
+
+19
+00:00:45,807 --> 00:00:47,187
+in the middle of the screen.
+
+20
+00:00:47,567 --> 00:00:49,127
+Over here is the code.
+
+21
+00:00:49,467 --> 00:00:52,087
+This is the real DIV
+code your blocks made:
+
+22
+00:00:52,227 --> 00:00:53,807
+the player, with its circle,
+
+23
+00:00:53,887 --> 00:00:57,467
+and the line that
+creates it at 160, 120.
+
+24
+00:00:57,967 --> 00:00:58,767
+Well done!
+
+25
+00:00:58,807 --> 00:01:02,007
+In lesson two, you'll make your
+circle move with the arrow keys.

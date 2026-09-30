@@ -1,0 +1,131 @@
+1
+00:00:00,967 --> 00:00:02,787
+In this lesson, you'll
+add a coin to catch,
+
+2
+00:00:02,827 --> 00:00:03,927
+and keep score.
+
+3
+00:00:04,300 --> 00:00:06,000
+The player moves with the arrow keys,
+
+4
+00:00:06,040 --> 00:00:07,580
+its blocks folded up here.
+
+5
+00:00:07,800 --> 00:00:11,220
+And there's a new sprite:
+define sprite coin, still empty.
+
+6
+00:00:11,667 --> 00:00:15,607
+First, from Program, drag create
+sprite under create sprite player.
+
+7
+00:00:15,927 --> 00:00:18,827
+Pick coin in its list,
+and put it at 60, 60.
+
+8
+00:00:20,333 --> 00:00:23,793
+From Looks, drag look like a
+circle into define sprite coin.
+
+9
+00:00:24,073 --> 00:00:25,933
+Make it size 14, and yellow.
+
+10
+00:00:27,200 --> 00:00:30,740
+From Motion, go to a random place
+puts the coin somewhere new.
+
+11
+00:00:31,067 --> 00:00:33,307
+Then, from Control, a forever loop,
+
+12
+00:00:33,347 --> 00:00:34,547
+with an if inside it.
+
+13
+00:00:37,333 --> 00:00:40,013
+From Sensing, touching
+sprite goes in the if.
+
+14
+00:00:40,093 --> 00:00:41,453
+Pick player in its list.
+
+15
+00:00:45,800 --> 00:00:47,340
+When the player touches the coin,
+
+16
+00:00:47,380 --> 00:00:49,660
+from Variables, change score by 1.
+
+17
+00:00:50,033 --> 00:00:51,793
+From Sound, play sound coin.
+
+18
+00:00:53,233 --> 00:00:55,913
+And from Motion, go to
+a random place again,
+
+19
+00:00:55,953 --> 00:00:57,713
+so the coin jumps somewhere else.
+
+20
+00:00:58,067 --> 00:00:59,567
+Last, show the score.
+
+21
+00:00:59,867 --> 00:01:02,767
+From Control, a forever at the
+end of when the game starts,
+
+22
+00:01:02,807 --> 00:01:05,047
+with show variable score inside it.
+
+23
+00:01:05,367 --> 00:01:06,887
+Press Run, click the game,
+
+24
+00:01:06,927 --> 00:01:08,347
+and go and catch the coin.
+
+25
+00:01:08,733 --> 00:01:10,953
+Every coin you catch
+adds one to your score,
+
+26
+00:01:11,053 --> 00:01:12,393
+and the coin jumps away.
+
+27
+00:01:13,333 --> 00:01:16,073
+In the code, the coin
+is a PROCESS of its own,
+
+28
+00:01:16,133 --> 00:01:18,113
+and touching became a collision test.
+
+29
+00:01:18,500 --> 00:01:19,060
+Nice!
+
+30
+00:01:19,100 --> 00:01:22,220
+In lesson four, you'll dodge
+an enemy that bounces around.

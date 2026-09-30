@@ -1,0 +1,91 @@
+1
+00:00:00,967 --> 00:00:02,007
+A lição cinco é jogo livre:
+
+2
+00:00:02,047 --> 00:00:04,627
+faz o teu próprio jogo,
+com todos os blocos.
+
+3
+00:00:04,933 --> 00:00:06,773
+Começa só com quando o jogo começa.
+
+4
+00:00:06,813 --> 00:00:07,933
+O resto é contigo.
+
+5
+00:00:08,200 --> 00:00:09,160
+Sem ideias?
+
+6
+00:00:09,200 --> 00:00:10,920
+Mostra-me a solução carrega um exemplo:
+
+7
+00:00:10,960 --> 00:00:13,940
+uma nave que vira, voa,
+e dispara contra rochas.
+
+8
+00:00:14,467 --> 00:00:15,907
+A nave vira e voa com as setas,
+
+9
+00:00:15,947 --> 00:00:17,887
+e dispara com a tecla de espaço.
+
+10
+00:00:18,933 --> 00:00:20,373
+Cada disparo anda quarenta passos,
+
+11
+00:00:20,413 --> 00:00:21,773
+e depois apaga-se.
+
+12
+00:00:22,100 --> 00:00:23,880
+As rochas andam à deriva, ressaltam,
+
+13
+00:00:23,920 --> 00:00:25,880
+e explodem quando um tiro lhes toca.
+
+14
+00:00:26,633 --> 00:00:29,093
+Clica no botão Jogar,
+clica no jogo, e voa.
+
+15
+00:00:29,367 --> 00:00:31,307
+Tens de acertar nas
+cinco rochas para ganhar.
+
+16
+00:00:39,367 --> 00:00:42,187
+Cada bloco tem uma dica: deixa
+o rato parado em cima dele para
+
+17
+00:00:42,227 --> 00:00:43,327
+leres o que faz.
+
+18
+00:00:43,567 --> 00:00:45,967
+E Abrir no playground leva o
+código DIV dos teus blocos para o
+
+19
+00:00:46,007 --> 00:00:48,767
+editor de texto, para
+continuares em código a sério.
+
+20
+00:00:49,167 --> 00:00:50,287
+E assim acabam as lições.
+
+21
+00:00:50,327 --> 00:00:52,547
+Diverte-te a fazer os
+teus próprios jogos!

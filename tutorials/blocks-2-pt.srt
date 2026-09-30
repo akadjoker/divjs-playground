@@ -1,0 +1,160 @@
+1
+00:00:00,967 --> 00:00:04,587
+Nesta lição, vais mexer o teu
+círculo com as teclas das setas.
+
+2
+00:00:04,967 --> 00:00:06,347
+Começamos onde a lição um acabou:
+
+3
+00:00:06,387 --> 00:00:08,627
+o player é um círculo, no meio do jogo.
+
+4
+00:00:08,967 --> 00:00:10,487
+Clica na categoria Controlo,
+
+5
+00:00:10,527 --> 00:00:13,247
+e arrasta para sempre, para
+debaixo de parece um círculo.
+
+6
+00:00:13,287 --> 00:00:15,007
+Tudo o que está dentro de
+para sempre corre de novo,
+
+7
+00:00:15,047 --> 00:00:16,347
+em cada fotograma.
+
+8
+00:00:16,600 --> 00:00:18,520
+Outra vez na categoria Controlo,
+
+9
+00:00:18,560 --> 00:00:21,540
+arrasta o bloco se então,
+para dentro do para sempre.
+
+10
+00:00:21,833 --> 00:00:24,913
+Na categoria Sensores, arrasta
+tecla seta para a direita
+
+11
+00:00:24,953 --> 00:00:27,633
+carregada, para o espaço
+do bloco se então.
+
+12
+00:00:28,100 --> 00:00:29,940
+Depois, na categoria Movimento,
+
+13
+00:00:29,980 --> 00:00:33,200
+arrasta adiciona a x, para
+dentro do bloco se então,
+
+14
+00:00:33,240 --> 00:00:34,760
+e escreve 3 no número.
+
+15
+00:00:35,067 --> 00:00:37,967
+Assim, se a tecla da seta para
+a direita estiver carregada,
+
+16
+00:00:38,007 --> 00:00:40,967
+o x fica maior 3, e o
+círculo anda para a direita.
+
+17
+00:00:41,267 --> 00:00:42,387
+Para a esquerda é quase igual.
+
+18
+00:00:42,427 --> 00:00:45,067
+Copia o se com Control C e Control V,
+
+19
+00:00:45,147 --> 00:00:47,427
+põe a cópia por baixo,
+escolhe seta para a esquerda,
+
+20
+00:00:47,467 --> 00:00:48,807
+e escreve menos 3.
+
+21
+00:00:49,467 --> 00:00:51,587
+Para cima e para baixo, muda o y.
+
+22
+00:00:51,627 --> 00:00:53,947
+Arrasta outro bloco se
+para debaixo dos outros,
+
+23
+00:00:54,047 --> 00:00:56,807
+põe lá tecla carregada,
+e escolhe seta para cima.
+
+24
+00:00:56,847 --> 00:00:58,647
+Depois junta adiciona a y,
+
+25
+00:00:58,687 --> 00:01:00,247
+com menos 3 no número.
+
+26
+00:01:05,967 --> 00:01:08,227
+No jogo, o y cresce para baixo,
+
+27
+00:01:08,267 --> 00:01:09,947
+por isso menos 3 vai para cima.
+
+28
+00:01:09,987 --> 00:01:11,547
+Mais uma cópia para a seta para baixo,
+
+29
+00:01:11,587 --> 00:01:12,687
+com 3 no número.
+
+30
+00:01:19,633 --> 00:01:20,753
+Agora clica no botão Jogar,
+
+31
+00:01:20,793 --> 00:01:23,713
+e clica no jogo, para
+ele receber as teclas.
+
+32
+00:01:24,100 --> 00:01:26,680
+As setas do teclado mexem
+o teu círculo pelo jogo.
+
+33
+00:01:28,800 --> 00:01:31,600
+No código, cada se ficou um
+IF com um teste de tecla,
+
+34
+00:01:31,640 --> 00:01:34,300
+dentro do LOOP que
+corre em cada fotograma.
+
+35
+00:01:34,567 --> 00:01:35,287
+Bom trabalho!
+
+36
+00:01:35,327 --> 00:01:38,767
+Na lição três, vais apanhar
+uma moeda e contar pontos.

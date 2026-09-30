@@ -1,0 +1,140 @@
+1
+00:00:00,967 --> 00:00:03,327
+Nesta lição, vais juntar
+uma moeda para apanhar,
+
+2
+00:00:03,367 --> 00:00:04,607
+e contar pontos.
+
+3
+00:00:05,033 --> 00:00:06,493
+O player já se mexe com as setas,
+
+4
+00:00:06,533 --> 00:00:08,353
+e os blocos dele estão fechados aqui.
+
+5
+00:00:08,393 --> 00:00:12,073
+E há uma personagem nova: define
+a personagem coin, ainda vazia.
+
+6
+00:00:12,400 --> 00:00:14,000
+Primeiro, na categoria Programa,
+
+7
+00:00:14,040 --> 00:00:16,960
+arrasta cria a personagem
+para debaixo do primeiro.
+
+8
+00:00:17,000 --> 00:00:19,940
+Escolhe coin na lista,
+e põe-na em 60, 60.
+
+9
+00:00:21,433 --> 00:00:24,873
+Na categoria Aparência, arrasta
+parece um círculo para dentro
+
+10
+00:00:24,913 --> 00:00:25,913
+de define a personagem coin.
+
+11
+00:00:25,953 --> 00:00:28,693
+Muda o tamanho para 14,
+e a cor para amarelo.
+
+12
+00:00:29,467 --> 00:00:32,727
+Em Movimento, vai para um sítio ao
+acaso põe a moeda num sítio novo.
+
+13
+00:00:33,000 --> 00:00:34,767
+Depois, na categoria Controlo,
+
+14
+00:00:34,807 --> 00:00:37,900
+arrasta um para sempre, e
+põe um bloco se lá dentro.
+
+15
+00:00:40,133 --> 00:00:43,633
+Em Sensores, a tocar na personagem
+vai para dentro do bloco se então.
+
+16
+00:00:43,673 --> 00:00:45,413
+Escolhe player, na lista.
+
+17
+00:00:48,567 --> 00:00:49,847
+Quando o player toca na moeda:
+
+18
+00:00:49,887 --> 00:00:52,447
+em Variáveis, adiciona 1 a score.
+
+19
+00:00:52,867 --> 00:00:55,987
+Na categoria Som, arrasta
+o bloco toca o som moeda.
+
+20
+00:00:56,500 --> 00:00:58,920
+E em Movimento, vai para um
+sítio ao acaso outra vez,
+
+21
+00:00:58,960 --> 00:01:00,760
+para a moeda saltar para outro lado.
+
+22
+00:01:01,067 --> 00:01:02,227
+Por fim, mostra os pontos.
+
+23
+00:01:02,267 --> 00:01:05,087
+Em Controlo, um para sempre no
+fim de quando o jogo começa,
+
+24
+00:01:05,127 --> 00:01:07,567
+com mostra a variável score lá dentro.
+
+25
+00:01:08,033 --> 00:01:09,793
+Clica no botão Jogar, clica no jogo,
+
+26
+00:01:09,833 --> 00:01:11,293
+e vai apanhar a moeda.
+
+27
+00:01:11,567 --> 00:01:13,107
+Cada moeda que apanhas soma um ponto,
+
+28
+00:01:13,147 --> 00:01:15,167
+e a moeda salta para longe.
+
+29
+00:01:16,167 --> 00:01:18,207
+No código, a moeda é um PROCESS só dela,
+
+30
+00:01:18,247 --> 00:01:20,207
+e a tocar ficou um teste de colisão.
+
+31
+00:01:20,533 --> 00:01:20,493
+Boa!
+
+32
+00:01:20,533 --> 00:01:24,293
+Na lição quatro, vais fugir de um
+inimigo que ressalta pelo jogo.
