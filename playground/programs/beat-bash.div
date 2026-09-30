@@ -157,7 +157,7 @@ GLOBAL
   g_note[3]; g_notec[3]; g_rec[3]; g_rec_on[3]; g_glow[2];
   g_hw = 0; g_ring = 0; g_bigring = 0; g_disc = 0; g_dot = 0; g_dot2 = 0;
   g_bline = 0; g_bline2 = 0; g_star = 0; g_lantern = 0; g_halo = 0; g_streak = 0;
-  g_tram = 0; g_bg[2]; g_word[16]; g_logo[5]; g_flash = 0;
+  g_tram = 0; g_bg[2]; g_word[16]; g_logo[5]; g_flash = 0; g_panel = 0;
   bg_song = 0;                 // backdrop showing (song index)
 
   // ---- sounds
@@ -511,6 +511,9 @@ BEGIN
   g_bline = new_graphic(144, 1); gfx_fill(g_bline, 255, 255, 255);
   g_bline2 = new_graphic(144, 2); gfx_fill(g_bline2, 255, 255, 255);
   g_flash = new_graphic(144, 40); gfx_fill(g_flash, 255, 255, 255);
+  // the dark card behind the results
+  g_panel = new_graphic(448, 212); gfx_fill(g_panel, 8, 6, 20);
+  gfx_rect(g_panel, 0, 0, 448, 1, 120, 100, 200);
   // a four-pointed sparkle
   g_star = new_graphic(9, 9);
   gfx_rect(g_star, 4, 0, 1, 9, 255, 255, 255);
@@ -550,10 +553,10 @@ END
 // all in one frame is too much work for one frame)
 FUNCTION make_words(k);
 BEGIN
-  IF (k == 0) g_word[0] = word_gfx(0, 3, 255, 255, 255, 110, 220, 255); END
+  IF (k == 0) g_word[0] = word_gfx(0, 2, 255, 255, 255, 110, 220, 255); END
   IF (k == 1)
-    g_word[1] = word_gfx(1, 3, 220, 255, 140, 60, 200, 90);
-    g_word[2] = word_gfx(2, 3, 255, 150, 150, 210, 40, 70);
+    g_word[1] = word_gfx(1, 2, 220, 255, 140, 60, 200, 90);
+    g_word[2] = word_gfx(2, 2, 255, 150, 150, 210, 40, 70);
   END
   IF (k == 2)
     g_word[5] = word_gfx(5, 9, 255, 250, 190, 255, 160, 30);
@@ -724,8 +727,8 @@ BEGIN
       s = s + c_t1 + " . " + c_t2 + " . " + c_t3 + " . " + c_t2 + " . ";
     END
     IF (style == 1)
-      // a rolling sixteenth-note shimmer
-      s = s + c_t1 + " " + c_t2 + " " + c_t3 + " " + c_t2 + " " + c_t1 + " " + c_t2 + " " + c_t3 + " " + c_t2 + " ";
+      // a 3-3-2 pop rhythm
+      s = s + c_t1 + " . . " + c_t2 + " . . " + c_t3 + " . ";
     END
     IF (style == 2)
       s = s + c_t1 + " . " + c_t3 + " . " + c_t2 + " . " + c_t3 + " . ";
@@ -878,7 +881,7 @@ BEGIN
 END
 
 // ---------------------------------------------------------------------
-// NIGHT TRAM - 128 BPM, E minor: a square-wave lead, rolling plucks,
+// NIGHT TRAM - 128 BPM, E minor: a square-wave lead, syncopated plucks,
 // octave bass and a four-on-the-floor beat
 // ---------------------------------------------------------------------
 
@@ -1443,11 +1446,11 @@ END
 PROCESS popup(k);
 PRIVATE t;
 BEGIN
-  x = SW / 2; y = 172; z = -10; graph = g_word[k];
+  x = SW / 2; y = 196; z = -10; graph = g_word[k];
   FROM t = 0 TO 32;
-    IF (t < 6) size = 140 - t * 7; ELSE size = 100; END
-    IF (k == 2) y = 172 + t / 3; END
-    IF (t > 20) alpha = 100 - (t - 20) * 8; END
+    IF (t < 6) size = 150 - t * 9; ELSE size = 100; END
+    IF (k == 2) y = 196 + t / 4; END
+    IF (t > 20) alpha = 90 - (t - 20) * 7; ELSE alpha = 90; END
     FRAME;
   END
 END
@@ -1524,6 +1527,16 @@ BEGIN
       END
       IF (t > 52 AND t % 20 == 0) sparkle(x + rand(-34, 34), y + rand(-40, 40), -1); END
     END
+    FRAME;
+  END
+END
+
+// the card behind the results
+PROCESS panelp();
+BEGIN
+  x = SW / 2; y = 118; z = 60; graph = g_panel; alpha = 0;
+  WHILE (scr == SC_RESULT)
+    alpha = min(alpha + 8, 78);
     FRAME;
   END
 END
@@ -1753,11 +1766,9 @@ BEGIN
   say(f2, 310, 62, 1, "NORMAL", c_of(cur_diff == 0));
   say(f2, 412, 62, 1, "HARD", c_of(cur_diff == 1));
   k = s_lv[cur_song * 2 + cur_diff];
-  s = "";
   FOR i = 1 TO 5
-    IF (i <= k) s = s + "*"; ELSE s = s + " "; END
+    IF (i <= k) say(f2, 252 + i * 14, 90, 0, "*", '#ffd84a'); ELSE say(f2, 252 + i * 14, 90, 0, "*", '#3a3260'); END
   END
-  say(f2, 264, 90, 0, s, '#ffd84a');
   say(f1, 460, 94, 2, s_cnt[cur_song * 2 + cur_diff] + " NOTES", '#c8c0ff');
   k = cur_song * 2 + cur_diff;
   say(f1, 264, 120, 0, "BEST SCORE", '#8f86b8');
@@ -1772,6 +1783,7 @@ BEGIN
   END
   say(f1, 360, 188, 1, "PREVIEW PLAYING", rgba(255, 255, 255, 30 + int(pulse * 60)));
   // help
+  draw_rect(0, 210, SW, 42, 'rgba(8,6,20,0.7)');
   say(f1, 16, 216, 0, "UP DOWN  SONG        LEFT RIGHT  LEVEL", '#8f86b8');
   say(f1, 16, 228, 0, "ENTER  PLAY          S  SCROLL SPEED", '#8f86b8');
   say(f1, 16, 240, 0, "C  AUDIO OFFSET      ESC  TITLE", '#8f86b8');
@@ -2005,7 +2017,7 @@ BEGIN
   END
   // early / late under a GOOD
   IF (pop_t > 12 AND pop_k == 1)
-    IF (pop_err < 0) say(f1, 240, 194, 1, "EARLY", '#8fe0ff'); ELSE say(f1, 240, 194, 1, "LATE", '#ffb070'); END
+    IF (pop_err < 0) say(f1, 240, 212, 1, "EARLY", '#8fe0ff'); ELSE say(f1, 240, 212, 1, "LATE", '#ffb070'); END
   END
   // groove bar
   h = groove * 190 / 100;
@@ -2026,10 +2038,13 @@ BEGIN
   END
   // progress along the top of the highway
   draw_rect(168, 0, int(144 * clamp(fdiv(song_t, song_len), 0, 1)), 2, c);
-  // lane keys
-  FOR a = 0 TO 3
-    IF (is_touch()) s = "" + (a + 1); ELSE s = lane_key[a]; END
-    IF (lane_down[a]) say(f1, lane_x[a], 246, 1, s, '#ffffff'); ELSE say(f1, lane_x[a], 246, 1, s, lane_col[a]); END
+  // lane keys (on a touch screen the buttons say which lane they hit, and
+  // the Pause button can sit here)
+  IF (NOT is_touch())
+    FOR a = 0 TO 3
+      IF (lane_down[a]) s = '#ffffff'; ELSE s = lane_col[a]; END
+      say(f1, lane_x[a], 246, 1, lane_key[a], s);
+    END
   END
   RETURN 0;
 END
@@ -2127,6 +2142,7 @@ BEGIN
   spb = fdiv(60, 140);
   start_music(m_clear, 0, 0);
   set_touch(0, "r:Retry", "enter:Songs");
+  panelp();
   grade_show();
   RETURN 0;
 END
@@ -2139,8 +2155,6 @@ BEGIN
   roll = min(roll + 1, 60);
   f = fdiv(roll, 60);
   c = rgb(s_ar[cur_song], s_ag[cur_song], s_ab[cur_song]);
-  draw_rect(16, 12, 448, 212, 'rgba(8,6,20,0.72)');
-  draw_rect(16, 12, 448, 1, c);
   IF (cnt_m == 0)
     say(f3, 240, 22, 1, "FULL COMBO!", '#ffd84a');
   ELSE
@@ -2273,6 +2287,9 @@ BEGIN
   IF (key_pressed(_right)) off_ms += 5; END
   IF (key_pressed(_backspace)) off_ms = 0; END
   off_ms = clamp(off_ms, -300, 300);
+  draw_rect(0, 36, SW, 30, 'rgba(8,6,20,0.7)');
+  draw_rect(212, 100, 256, 98, 'rgba(8,6,20,0.78)');
+  draw_rect(0, 210, SW, 32, 'rgba(8,6,20,0.7)');
   say(f3, 240, 12, 1, "AUDIO OFFSET", '#ffffff');
   say(f1, 240, 42, 1, "TAP D F J OR K ON EVERY CLICK YOU HEAR", '#c8c0ff');
   say(f1, 240, 52, 1, "THE CIRCLE FLASHES WHERE THE GAME THINKS THE BEAT IS", '#8f86b8');
