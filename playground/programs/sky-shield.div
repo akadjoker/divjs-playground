@@ -1,0 +1,1916 @@
+PROGRAM sky_shield;
+
+// ---------------------------------------------------------------------
+// SKY SHIELD - missiles, bombers and zippers rain down on the six
+// districts of Harbour City. Three batteries on the hills fire
+// interceptors: click or tap the sky and the nearest ready battery sends
+// one there. It bursts into a blast that grows, holds and fades, and
+// anything caught in it goes up in a blast of its own - chain them!
+//
+// Every fifth wave the Hive Carrier crosses the sky, dropping volleys.
+// Each wave the day moves on: noon, afternoon, dusk, night, deep night
+// and dawn, and the windows of the city light up as it gets dark.
+//
+// How it is built:
+//  - Enemies, interceptors and blasts publish themselves in slot arrays
+//    (e_*, i_*, bl_*). Enemies test themselves against the blasts, and
+//    one painter process draws every smoke trail into a single layer
+//    graphic each frame, after everything has moved.
+//  - Everything is drawn in code with new_graphic + gfx_*; all sound
+//    effects and music are made by the engine's synthesiser.
+//  - x, y are the centre of a process: world positions are kept in
+//    fx, fy and drawn with the screen shake (shx, shy) added.
+//  - DIV divides whole numbers as integers: fdiv() is a real division.
+//
+// Controls: mouse or finger aims and fires. Keys: arrows/WASD move the
+// crosshair, 1/2/3 fire from the left/centre/right battery, Space fires
+// from the nearest one. P pauses, M music on/off.
+// ---------------------------------------------------------------------
+
+GLOBAL
+  SW = 640; SH = 480;
+  GROUND = 448;                  // the ground line (screen y)
+  AMMO = 10;                     // interceptors per battery per wave
+  EMAX = 63; IMAX = 31; BMAX = 63;
+  PART_MAX = 230;                // particles alive at most
+
+  // ---- batteries: 0 left, 1 centre (faster), 2 right
+  bat_x[2] = 52, 320, 588;
+  bat_ammo[2]; bat_alive[2]; bat_cool[2]; bat_ang[2]; bat_kick[2];
+  bat_spd[2] = 7.2, 10.0, 7.2;
+
+  // ---- districts: hp 2 standing, 1 burning, 0 rubble
+  city_x[5] = 119, 186, 253, 387, 454, 521;
+  city_hp[5]; city_g[5]; city_flash[5];
+
+  // ---- enemies: kind 1 missile, 2 zipper, 3 bomber, 4 carrier
+  e_on[63]; e_kind[63]; e_x[63]; e_y[63]; e_vx[63]; e_vy[63];
+  e_ox[63]; e_oy[63]; e_claim[63];
+  n_enemies = 0;
+
+  // ---- interceptors in flight
+  i_on[31]; i_x[31]; i_y[31]; i_ox[31]; i_oy[31]; i_tx[31]; i_ty[31];
+  n_int = 0;
+
+  // ---- blasts that destroy (player's and chains)
+  bl_on[63]; bl_x[63]; bl_y[63]; bl_r[63]; bl_ch[63]; bl_boss[63];
+  bl_hi = 0;                      // slots in use are below this
+  n_blasts = 0;                   // every blast alive, harmless ones too
+
+  // ---- target point chosen by target_point()
+  tp_x = 0; tp_y = 0;
+  sky_seed = 1; city_seed = 1;
+
+  // ---- juice
+  shake = 0.0; shx = 0; shy = 0;
+  flash = 0; flash_r = 255; flash_g = 255; flash_b = 255;
+  n_parts = 0; frame_no = 0; boom_t = -9; tick_t = -9;
+
+  // ---- palette of the current wave
+  pal = 0; night = 0;
+  top_r = 0; top_g = 0; top_b = 0; hor_r = 0; hor_g = 0; hor_b = 0;
+  far_r = 0; far_g = 0; far_b = 0; gnd_r = 0; gnd_g = 0; gnd_b = 0;
+  bld_r = 0; bld_g = 0; bld_b = 0; lit = 0;
+  trl_r = 0; trl_g = 0; trl_b = 0; smk_r = 0; smk_g = 0; smk_b = 0;
+
+  // ---- game
+  ST_TITLE = 0; ST_PLAY = 1; ST_TALLY = 2; ST_OVER = 3;
+  state = 0; paused = 0; st_t = 0;
+  wave = 0; score = 0; best = 0; mult = 1; wave_t = 0;
+  m_left = 0; b_left = 0; z_left = 0; m_spd = 0.6; split_p = 0;
+  salvo_t = 0; bomb_t = 0; zip_t = 0;
+  boss_wave = 0; boss_state = 0; boss_hp = 0; boss_max = 1;
+  next_rebuild = 10000; rebuild_bank = 0;
+  tally_step = 0; tally_t = 0; tally_ammo = 0; tally_city = 0; tally_k = 0;
+  pend_on = 0; pend_x = 0; pend_y = 0; pend_t = 0;
+
+  // ---- input
+  aim_x = 320.0; aim_y = 240.0; aim_vx = 0.0; aim_vy = 0.0;
+  last_mx = -1; last_my = -1; prev_left = 1; pressed = 0;
+  touched = 0; cross_t = 0;
+
+  // ---- measurements read by the tests
+  kills = 0; shots = 0; cities_lost = 0; boss_seen = 0; boss_kills = 0;
+  max_chain = 0; max_enemies = 0; fps_now = 0; waves_cleared = 0;
+
+  // ---- graphics
+  g_skybuf[1]; sky_cur = 0; g_trail = 0; g_blast[4]; g_head = 0; g_ihead = 0; g_zip = 0;
+  g_ring = 0; g_cross = 0; g_spark[2]; g_chunk = 0; g_smoke[1]; g_bomber[1];
+  g_boss[1]; g_boss_hit = 0; g_base = 0; g_base_dead = 0; g_barrel = 0;
+  g_hud = 0; g_title = 0; g_sub = 0; g_help = 0; g_banner = 0; g_panel = 0;
+  g_pause = 0; g_over = 0;
+  hud_score = -1; hud_wave = -1; hud_best = -1; hud_mult = -1;
+
+  // ---- sound
+  s_launch = 0; s_launch2 = 0; s_boom[2]; s_pop = 0; s_thud = 0; s_crash = 0;
+  s_crumble = 0; s_empty = 0; s_alarm = 0; s_tick = 0; s_note[4];
+  s_zip = 0; s_bosshit = 0; s_warn = 0; s_rebuild = 0; s_start = 0; s_split = 0;
+  s_drop = 0; s_batlost = 0;
+  mus_title = 0; mus_play = 0; mus_boss = 0; mus_over = 0; mus_now = -1; music_on = 1;
+
+// =====================================================================
+// Small helpers
+// =====================================================================
+
+// a / b as a real division (DIV divides whole numbers as integers)
+FUNCTION fdiv(a, b);
+BEGIN
+  IF (b == 0) RETURN 0; END
+  RETURN a * (1.0 / (b + 0.0000001));
+END
+
+// Two small random generators of our own for drawing the sky and the
+// districts: the same seed gives the same towers every time, and the
+// game's rand() is left alone.
+FUNCTION srnd(a, b);
+BEGIN
+  sky_seed = (sky_seed * 1103 + 4271) % 65521;
+  RETURN a + sky_seed % (b - a + 1);
+END
+
+FUNCTION crnd(a, b);
+BEGIN
+  city_seed = (city_seed * 1103 + 4271) % 65521;
+  RETURN a + city_seed % (b - a + 1);
+END
+
+FUNCTION mix(a, b, pct);
+BEGIN
+  RETURN a + (b - a) * pct * 0.01;
+END
+
+FUNCTION add_score(n);
+BEGIN
+  score += n;
+  IF (score > best) best = score; END
+  WHILE (score >= next_rebuild)
+    rebuild_bank++;
+    next_rebuild += 10000;
+    popup(260, 70, "BONUS DISTRICT EARNED", '#a0ffb0');
+    play_sound(s_rebuild, 50, 100, 0);
+  END
+  RETURN 0;
+END
+
+FUNCTION add_shake(n);
+BEGIN
+  IF (shake < n) shake = n; END
+  RETURN 0;
+END
+
+FUNCTION do_flash(n, r, g, b);
+BEGIN
+  IF (flash < n) flash = n; flash_r = r; flash_g = g; flash_b = b; END
+  RETURN 0;
+END
+
+// Pan for a screen x: -60 at the left edge, 60 at the right.
+FUNCTION pan(px);
+BEGIN
+  RETURN clamp((px - 320) * 0.19, -60, 60);
+END
+
+// A number as a string of n digits, with leading zeros.
+FUNCTION digits(v, n);
+PRIVATE s, d, i;
+BEGIN
+  s = ""; d = 1;
+  FROM i = 2 TO n; d = d * 10; END
+  FROM i = 1 TO n;
+    s = s + ((v / d) % 10);
+    d = d / 10;
+  END
+  RETURN s;
+END
+
+// How many characters v takes.
+FUNCTION ndig(v);
+PRIVATE n;
+BEGIN
+  n = 1;
+  WHILE (v >= 10) v = v / 10; n++; END
+  RETURN n;
+END
+
+// Text with a dark outline into a graphic, centred on cx (monospace:
+// a character is about 0.6 of the size wide).
+FUNCTION ctext(g, cx, y, s, n, sz, r, gg, b);
+PRIVATE tx;
+BEGIN
+  tx = cx - n * sz * 0.3;
+  gfx_text(g, tx - 1, y, s, 8, 10, 22, sz);
+  gfx_text(g, tx + 1, y, s, 8, 10, 22, sz);
+  gfx_text(g, tx, y - 1, s, 8, 10, 22, sz);
+  gfx_text(g, tx, y + 2, s, 8, 10, 22, sz);
+  gfx_text(g, tx, y, s, r, gg, b, sz);
+  RETURN 0;
+END
+
+// =====================================================================
+// Palette: six times of day, one per wave, in a cycle
+// =====================================================================
+
+FUNCTION set_palette(p);
+BEGIN
+  pal = p;
+  IF (p == 0)      // noon
+    top_r = 58; top_g = 128; top_b = 214; hor_r = 176; hor_g = 214; hor_b = 240;
+    far_r = 128; far_g = 158; far_b = 190; gnd_r = 86; gnd_g = 116; gnd_b = 74;
+    bld_r = 92; bld_g = 100; bld_b = 126; night = 0; lit = 4;
+  END
+  IF (p == 1)      // afternoon
+    top_r = 66; top_g = 110; top_b = 196; hor_r = 238; hor_g = 204; hor_b = 158;
+    far_r = 140; far_g = 132; far_b = 160; gnd_r = 96; gnd_g = 104; gnd_b = 66;
+    bld_r = 100; bld_g = 90; bld_b = 110; night = 15; lit = 12;
+  END
+  IF (p == 2)      // dusk
+    top_r = 44; top_g = 40; top_b = 110; hor_r = 250; hor_g = 128; hor_b = 84;
+    far_r = 92; far_g = 58; far_b = 96; gnd_r = 64; gnd_g = 48; gnd_b = 58;
+    bld_r = 58; bld_g = 48; bld_b = 76; night = 55; lit = 45;
+  END
+  IF (p == 3)      // night
+    top_r = 8; top_g = 10; top_b = 34; hor_r = 34; hor_g = 36; hor_b = 84;
+    far_r = 26; far_g = 28; far_b = 56; gnd_r = 24; gnd_g = 28; gnd_b = 38;
+    bld_r = 34; bld_g = 38; bld_b = 60; night = 100; lit = 60;
+  END
+  IF (p == 4)      // deep night
+    top_r = 3; top_g = 3; top_b = 16; hor_r = 22; hor_g = 14; hor_b = 50;
+    far_r = 20; far_g = 16; far_b = 42; gnd_r = 18; gnd_g = 18; gnd_b = 30;
+    bld_r = 28; bld_g = 28; bld_b = 50; night = 100; lit = 52;
+  END
+  IF (p == 5)      // dawn
+    top_r = 44; top_g = 66; top_b = 132; hor_r = 246; hor_g = 176; hor_b = 160;
+    far_r = 104; far_g = 96; far_b = 136; gnd_r = 70; gnd_g = 80; gnd_b = 70;
+    bld_r = 74; bld_g = 70; bld_b = 100; night = 40; lit = 26;
+  END
+  // enemy trails: sooty by day, glowing red at night
+  trl_r = mix(150, 255, night); trl_g = mix(40, 84, night); trl_b = mix(34, 60, night);
+  smk_r = mix(96, 110, night); smk_g = mix(90, 30, night); smk_b = mix(92, 44, night);
+  RETURN 0;
+END
+
+// The sky, sun or moon, stars, clouds, the far skyline and the ground,
+// drawn into the background (8 px wider on every side for the shake).
+FUNCTION draw_sky(g);
+PRIVATE y, t, i, sx, sy, c, w, h, bx, r, k;
+BEGIN
+  y = 0;
+  WHILE (y < 496)
+    t = clamp(fdiv(y, GROUND + 8), 0, 1);
+    t = t * t * (3 - 2 * t);
+    gfx_rect(g, 0, y, 656, 2, mix(top_r, hor_r, t * 100), mix(top_g, hor_g, t * 100), mix(top_b, hor_b, t * 100));
+    y += 2;
+  END
+  sky_seed = 777 + pal * 31;
+  FRAME;
+  // stars
+  IF (night > 30)
+    FROM i = 1 TO 150 * night / 100;
+      c = srnd(70, 255) * night / 100;
+      sx = srnd(0, 655); sy = srnd(0, 330);
+      gfx_pixel(g, sx, sy, c, c, c + (255 - c) / 4);
+      IF (srnd(0, 12) == 0) gfx_pixel(g, sx + 1, sy, c, c, c); gfx_pixel(g, sx, sy + 1, c, c, c); END
+    END
+  END
+  // sun or moon
+  IF (pal == 0) sun(g, 520, 92, 26, 255, 246, 200); END
+  IF (pal == 1) sun(g, 470, 170, 28, 255, 222, 150); END
+  IF (pal == 2)
+    // a big low sun cut by bands of sky
+    sun(g, 440, 404, 62, 255, 150, 90);
+    FROM i = 0 TO 5;
+      y = 372 + i * 9 + i * i;
+      gfx_rect(g, 360, y, 170, 2 + i / 2, mix(top_r, hor_r, 88), mix(top_g, hor_g, 88), mix(top_b, hor_b, 88));
+    END
+  END
+  IF (pal == 3 OR pal == 4)
+    gfx_circle(g, 130, 86, 24, mix(top_r, 120, 40), mix(top_g, 120, 40), mix(top_b, 150, 40));
+    gfx_circle(g, 130, 86, 18, 236, 236, 214);
+    gfx_circle(g, 138, 81, 16, top_r + 4, top_g + 4, top_b + 10);
+  END
+  IF (pal == 5) sun(g, 150, 426, 40, 255, 200, 170); END
+  FRAME;
+  // clouds by day and at dusk and dawn
+  IF (night < 70)
+    FROM i = 0 TO 4;
+      sx = 40 + i * 140 + srnd(-30, 30); sy = 60 + srnd(0, 150);
+      c = 40 + night / 3;
+      FROM k = 0 TO 4;
+        gfx_circle(g, sx + k * 16, sy - (k % 2) * 7, 13 + (k % 3) * 3,
+          mix(mix(top_r, hor_r, 60), 255, c), mix(mix(top_g, hor_g, 60), 250, c), mix(mix(top_b, hor_b, 60), 250, c));
+      END
+      gfx_rect(g, sx - 6, sy, 80, 10, mix(mix(top_r, hor_r, 60), 255, c), mix(mix(top_g, hor_g, 60), 250, c), mix(mix(top_b, hor_b, 60), 250, c));
+    END
+  END
+  FRAME;
+  // the far skyline: towers across the whole width
+  bx = 0; i = 0;
+  WHILE (bx < 656)
+    i++;
+    IF (i % 8 == 0) FRAME; END
+    w = srnd(12, 30); h = srnd(14, 70);
+    IF (srnd(0, 5) == 0) h = h + 40; END
+    gfx_rect(g, bx, GROUND + 8 - h, w, h, far_r, far_g, far_b);
+    gfx_rect(g, bx, GROUND + 8 - h, 1, h, mix(far_r, hor_r, 30), mix(far_g, hor_g, 30), mix(far_b, hor_b, 30));
+    IF (h > 60 AND srnd(0, 2) == 0)
+      gfx_line(g, bx + w / 2, GROUND + 8 - h, bx + w / 2, GROUND - h - 4, far_r, far_g, far_b);
+      IF (night > 30) gfx_pixel(g, bx + w / 2, GROUND - h - 4, 255, 60, 60); END
+    END
+    IF (night > 30)
+      FROM k = 1 TO w * h / 40;
+        IF (srnd(0, 99) < lit)
+          gfx_pixel(g, bx + srnd(2, w - 3), GROUND + 8 - h + srnd(3, h - 2), 200, 170, 90);
+        END
+      END
+    END
+    bx += w + srnd(-4, 3);
+  END
+  FRAME;
+  // the ground, and a mound under each battery
+  gfx_rect(g, 0, GROUND + 6, 656, 60, gnd_r, gnd_g, gnd_b);
+  FROM k = 0 TO 2;
+    gfx_circle(g, bat_x[k] + 8, GROUND + 50, 58, gnd_r, gnd_g, gnd_b);
+  END
+  gfx_rect(g, 0, GROUND + 6, 656, 1, mix(gnd_r, 255, 25), mix(gnd_g, 255, 25), mix(gnd_b, 255, 25));
+  r = mix(gnd_r, 0, 30); c = mix(gnd_g, 0, 30); t = mix(gnd_b, 0, 30);
+  FROM k = 0 TO 90;
+    gfx_rect(g, srnd(0, 650), srnd(GROUND + 10, 494), srnd(2, 6), 1, r, c, t);
+  END
+  RETURN 0;
+END
+
+// A sun with a soft glow: rings from the sky colour to the sun's.
+FUNCTION sun(g, cx, cy, r, sr, sg, sb);
+PRIVATE k, t, br, bg, bb;
+BEGIN
+  t = clamp(fdiv(cy, GROUND + 8), 0, 1);
+  t = t * t * (3 - 2 * t) * 100;
+  br = mix(top_r, hor_r, t); bg = mix(top_g, hor_g, t); bb = mix(top_b, hor_b, t);
+  FROM k = 0 TO 5;
+    gfx_circle(g, cx, cy, r + 30 - k * 5, mix(br, sr, k * 9), mix(bg, sg, k * 9), mix(bb, sb, k * 9));
+  END
+  gfx_circle(g, cx, cy, r, sr, sg, sb);
+  gfx_circle(g, cx - r / 4, cy - r / 4, r * 0.6, mix(sr, 255, 40), mix(sg, 255, 40), mix(sb, 255, 40));
+  RETURN 0;
+END
+
+// One district: a row of towers with windows (lit ones glow at night),
+// scorched and half dark when burning, a heap of rubble when destroyed.
+FUNCTION draw_city(k);
+PRIVATE g, bx, w, h, wx, wy, top, c, hp, dim, i, lr, lg, lb, dr, dg, db, tall, tx, tone, br, bg, bb;
+BEGIN
+  g = city_g[k]; hp = city_hp[k];
+  gfx_fill_rgba(g, 0, 0, 0, 0);
+  city_seed = k * 7919 + 131;
+  IF (hp == 0)
+    // rubble: jagged heaps, charred beams and a few embers
+    FROM i = 0 TO 63;
+      h = 3 + crnd(0, 7) + (32 - abs(i - 32)) / 5;
+      c = crnd(0, 18);
+      gfx_rect(g, i, 64 - h, 1, h, mix(bld_r, 20, 55) + c, mix(bld_g, 20, 55) + c, mix(bld_b, 24, 55) + c);
+    END
+    FROM i = 0 TO 5;
+      bx = crnd(4, 58);
+      gfx_line(g, bx, 64 - crnd(8, 14), bx + crnd(-8, 8), 64 - crnd(0, 4), 30, 26, 26);
+    END
+    FROM i = 0 TO 7;
+      gfx_pixel(g, crnd(4, 60), crnd(50, 62), 255, crnd(90, 180), 40);
+    END
+    RETURN 0;
+  END
+  lr = 255; lg = 214; lb = 120;                     // lit window
+  dr = mix(bld_r, 10, 45); dg = mix(bld_g, 12, 45); db = mix(bld_b, 30, 30);   // dark glass
+  IF (night < 30) dr = mix(bld_r, 80, 40); dg = mix(bld_g, 120, 40); db = mix(bld_b, 170, 40); END
+  bx = 1; tall = 0; tx = 0;
+  WHILE (bx < 60)
+    w = crnd(9, 15);
+    IF (bx + w > 63) w = 63 - bx; END
+    h = crnd(20, 56);
+    IF (hp == 1) h = h * 3 / 4; END
+    top = 64 - h;
+    c = crnd(-10, 10);
+    tone = crnd(0, 2);
+    br = bld_r + c; bg = bld_g + c; bb = bld_b + c;
+    IF (tone == 1) br = br + 22; bg = bg + 4; bb = bb - 12; END      // brick
+    IF (tone == 2) br = br - 12; bg = bg + 10; bb = bb + 8; END      // teal glass
+    gfx_rect(g, bx, top, w, h, br, bg, bb);
+    gfx_rect(g, bx + w - 1, top, 1, h, br * 0.7, bg * 0.7, bb * 0.7);
+    gfx_rect(g, bx, top, 1, h, mix(br, 255, 18), mix(bg, 255, 18), mix(bb, 255, 18));
+    gfx_rect(g, bx, top, w, 1, mix(br, 255, 25), mix(bg, 255, 25), mix(bb, 255, 25));
+    IF (h > tall) tall = h; tx = bx + w / 2; END
+    // windows every 4 x 5 pixels
+    wy = top + 3;
+    WHILE (wy < 60)
+      wx = bx + 2;
+      WHILE (wx < bx + w - 2)
+        dim = crnd(0, 99);
+        IF ((hp == 2 AND dim < lit) OR (hp == 1 AND dim < lit / 5))
+          gfx_rect(g, wx, wy, 2, 2, lr, lg - crnd(0, 30), lb - crnd(0, 40));
+        ELSE
+          gfx_rect(g, wx, wy, 2, 2, dr, dg, db);
+        END
+        wx += 4;
+      END
+      wy += 5;
+    END
+    IF (hp == 1)   // broken top edge and soot
+      FROM i = 0 TO w / 3;
+        gfx_rect(g, bx + i * 3, top, 2, crnd(1, 4), 24, 20, 24);
+      END
+    END
+    bx += w + 1;
+  END
+  // an antenna with a red light on the tallest tower
+  IF (hp == 2)
+    gfx_line(g, tx, 64 - tall, tx, 64 - tall - 7, mix(bld_r, 255, 30), mix(bld_g, 255, 30), mix(bld_b, 255, 30));
+    gfx_pixel(g, tx, 64 - tall - 7, 255, 70, 60);
+  ELSE
+    FROM i = 0 TO 3;
+      gfx_circle(g, crnd(6, 58), crnd(30, 58), crnd(4, 7), 26, 22, 26);
+    END
+  END
+  RETURN 0;
+END
+
+// =====================================================================
+// Graphics made once
+// =====================================================================
+
+// A blast: rings from the edge colour to a white-hot core, radius 64.
+FUNCTION make_blast(r1, g1, b1, r2, g2, b2);
+PRIVATE g, k, t;
+BEGIN
+  g = new_graphic(132, 132);
+  FROM k = 0 TO 15;
+    t = k * 100 / 15;
+    gfx_circle(g, 66, 66, 64 - k * 4, mix(r1, r2, t), mix(g1, g2, t), mix(b1, b2, t));
+  END
+  RETURN g;
+END
+
+FUNCTION make_graphics();
+PRIVATE g, i, k;
+BEGIN
+  g_skybuf[0] = new_graphic(656, 496);
+  g_skybuf[1] = new_graphic(656, 496);
+  g_trail = new_graphic(640, 480);
+  g_hud = new_graphic(640, 26);
+  FROM k = 0 TO 5; city_g[k] = new_graphic(64, 64); END
+
+  g_blast[0] = make_blast(255, 190, 60, 255, 255, 240);    // yellow
+  g_blast[1] = make_blast(255, 110, 50, 255, 250, 220);    // orange
+  g_blast[2] = make_blast(120, 220, 255, 255, 255, 255);   // ice blue
+  g_blast[3] = make_blast(255, 90, 170, 255, 240, 250);    // pink
+  g_blast[4] = make_blast(210, 70, 50, 255, 200, 120);     // cooling ember
+
+  g_ring = new_graphic(132, 132);
+  gfx_circle_outline(g_ring, 66, 66, 64, 255, 255, 255);
+  gfx_circle_outline(g_ring, 66, 66, 63, 255, 250, 220);
+  gfx_circle_outline(g_ring, 66, 66, 62, 255, 230, 170);
+  g_head = new_graphic(9, 9);
+  gfx_circle(g_head, 4, 4, 4, 255, 120, 60);
+  gfx_circle(g_head, 4, 4, 2, 255, 240, 200);
+  g_ihead = new_graphic(9, 9);
+  gfx_circle(g_ihead, 4, 4, 4, 90, 220, 255);
+  gfx_circle(g_ihead, 4, 4, 2, 255, 255, 255);
+  g_zip = new_graphic(15, 15);
+  gfx_line(g_zip, 7, 0, 7, 14, 255, 120, 255);
+  gfx_line(g_zip, 0, 7, 14, 7, 255, 120, 255);
+  gfx_circle(g_zip, 7, 7, 4, 230, 90, 255);
+  gfx_circle(g_zip, 7, 7, 2, 255, 255, 255);
+
+  g_cross = new_graphic(29, 29);
+  gfx_circle_outline(g_cross, 14, 14, 9, 255, 255, 255);
+  gfx_line(g_cross, 14, 0, 14, 8, 255, 255, 255);
+  gfx_line(g_cross, 14, 20, 14, 28, 255, 255, 255);
+  gfx_line(g_cross, 0, 14, 8, 14, 255, 255, 255);
+  gfx_line(g_cross, 20, 14, 28, 14, 255, 255, 255);
+  gfx_pixel(g_cross, 14, 14, 120, 240, 255);
+
+  g_spark[0] = new_graphic(3, 3); gfx_fill(g_spark[0], 255, 230, 140);
+  g_spark[1] = new_graphic(3, 3); gfx_fill(g_spark[1], 255, 130, 60);
+  g_spark[2] = new_graphic(2, 2); gfx_fill(g_spark[2], 160, 240, 255);
+  g_chunk = new_graphic(5, 4); gfx_fill(g_chunk, 70, 66, 70); gfx_rect(g_chunk, 0, 0, 5, 1, 120, 116, 120);
+  g_smoke[0] = new_graphic(24, 24);
+  FROM k = 0 TO 5; gfx_circle(g_smoke[0], 12, 12, 11 - k * 2, 150 + k * 12, 150 + k * 12, 156 + k * 12); END
+  g_smoke[1] = new_graphic(24, 24);
+  FROM k = 0 TO 5; gfx_circle(g_smoke[1], 12, 12, 11 - k * 2, 40 + k * 8, 38 + k * 8, 46 + k * 8); END
+
+  // The bomber: a dark swept flying wing, facing right, lights blinking.
+  FROM i = 0 TO 1;
+    g = new_graphic(60, 22);
+    FROM k = 0 TO 9;
+      gfx_line(g, 4 + k * 2, 11 - k / 2, 52 - k, 11, 64, 70, 88);
+      gfx_line(g, 4 + k * 2, 11 + k / 2, 52 - k, 11, 54, 58, 74);
+    END
+    gfx_rect(g, 14, 8, 36, 6, 70, 76, 96);
+    gfx_rect(g, 14, 8, 36, 1, 130, 138, 160);
+    gfx_circle(g, 50, 11, 4, 74, 80, 100);
+    gfx_rect(g, 46, 9, 6, 2, 150, 220, 255);          // canopy
+    gfx_line(g, 20, 4, 30, 8, 60, 64, 80);            // tail fins
+    gfx_line(g, 20, 18, 30, 14, 60, 64, 80);
+    gfx_rect(g, 8, 10, 4, 3, 255, 140, 60);           // engine glow
+    IF (i == 0) gfx_rect(g, 22, 3, 2, 2, 255, 50, 50); gfx_rect(g, 22, 17, 2, 2, 60, 255, 90);
+    ELSE gfx_rect(g, 22, 3, 2, 2, 120, 30, 30); gfx_rect(g, 22, 17, 2, 2, 30, 110, 50); END
+    g_bomber[i] = g;
+  END
+
+  // The Hive Carrier: a long armoured hull with glowing launch bays.
+  FROM i = 0 TO 2;
+    g = new_graphic(190, 70);
+    FROM k = 0 TO 8;
+      gfx_circle(g, 95 - 70 + k * 17, 32, 18 - abs(k - 4) * 2, 56 + k * 2, 60, 78);
+    END
+    gfx_rect(g, 20, 26, 150, 18, 62, 66, 86);
+    gfx_rect(g, 20, 26, 150, 2, 120, 126, 150);
+    gfx_rect(g, 60, 12, 70, 14, 72, 76, 98);          // bridge
+    gfx_rect(g, 60, 12, 70, 2, 140, 146, 170);
+    gfx_rect(g, 70, 16, 50, 3, 150, 230, 255);        // bridge windows
+    gfx_rect(g, 2, 30, 18, 8, 50, 52, 66);            // prows
+    gfx_rect(g, 170, 30, 18, 8, 50, 52, 66);
+    FROM k = 0 TO 2;                                  // launch bays
+      gfx_rect(g, 30 + k * 56, 44, 18, 8, 40, 40, 52);
+      IF (i == 2) gfx_rect(g, 33 + k * 56, 46, 12, 4, 255, 255, 255);
+      ELSE gfx_rect(g, 33 + k * 56, 46, 12, 4, 255, 120 + i * 80, 50); END
+    END
+    FROM k = 0 TO 5;                                  // hull lights
+      IF ((k + i) % 2 == 0) gfx_rect(g, 28 + k * 27, 36, 3, 2, 255, 80, 80);
+      ELSE gfx_rect(g, 28 + k * 27, 36, 3, 2, 90, 40, 40); END
+    END
+    IF (i == 2)                                       // hit: a white-hot flash
+      gfx_rect(g, 20, 26, 150, 3, 255, 255, 255);
+      gfx_rect(g, 60, 12, 70, 3, 255, 255, 255);
+      g_boss_hit = g;
+    ELSE
+      g_boss[i] = g;
+    END
+  END
+
+  // A battery: a bunker on the hill, and its barrel turning round.
+  g_base = new_graphic(44, 20);
+  gfx_circle(g_base, 22, 16, 12, 88, 96, 110);
+  gfx_rect(g_base, 2, 12, 40, 8, 70, 76, 90);
+  gfx_rect(g_base, 2, 12, 40, 1, 150, 160, 176);
+  gfx_circle(g_base, 22, 12, 8, 110, 120, 138);
+  gfx_rect(g_base, 8, 15, 4, 2, 250, 200, 60);
+  gfx_rect(g_base, 32, 15, 4, 2, 250, 200, 60);
+  g_base_dead = new_graphic(44, 20);
+  gfx_rect(g_base_dead, 2, 14, 40, 6, 44, 40, 42);
+  gfx_line(g_base_dead, 8, 14, 18, 8, 60, 56, 58);
+  gfx_line(g_base_dead, 26, 9, 36, 14, 60, 56, 58);
+  gfx_pixel(g_base_dead, 20, 12, 255, 140, 40);
+  g_barrel = new_graphic(22, 6);
+  set_point(0, g_barrel, 0, 2, 3);
+  gfx_rect(g_barrel, 0, 1, 20, 4, 150, 160, 178);
+  gfx_rect(g_barrel, 0, 1, 20, 1, 210, 220, 236);
+  gfx_rect(g_barrel, 17, 0, 5, 6, 90, 220, 255);
+
+  // Text: the title and fixed lines.
+  g_title = new_graphic(620, 90);
+  ctext(g_title, 312, 8, "SKY SHIELD", 10, 76, 120, 220, 255);
+  ctext(g_title, 308, 4, "SKY SHIELD", 10, 76, 250, 252, 255);
+  g_sub = new_graphic(620, 26);
+  ctext(g_sub, 310, 2, "HOLD THE LINE OVER HARBOUR CITY", 31, 18, 255, 210, 120);
+  g_pause = new_graphic(400, 90);
+  ctext(g_pause, 200, 6, "PAUSED", 6, 44, 255, 255, 255);
+  ctext(g_pause, 200, 60, "P, tap or click to go on", 24, 14, 200, 220, 255);
+  g_banner = new_graphic(520, 80);
+  g_panel = new_graphic(420, 170);
+  g_over = new_graphic(520, 190);
+  g_help = new_graphic(600, 120);
+  RETURN 0;
+END
+
+// The fixed help text of the title screen (touch or mouse wording).
+FUNCTION draw_help();
+BEGIN
+  gfx_fill_rgba(g_help, 0, 0, 0, 0);
+  IF (is_touch())
+    ctext(g_help, 300, 0, "TAP THE SKY: the nearest battery fires there", 44, 14, 230, 240, 255);
+    ctext(g_help, 300, 22, "Catch missiles in the blasts. Chain them!", 41, 14, 230, 240, 255);
+    ctext(g_help, 300, 56, "TAP TO START", 12, 22, 255, 230, 120);
+  ELSE
+    ctext(g_help, 300, 0, "CLICK THE SKY: the nearest battery fires there", 46, 14, 230, 240, 255);
+    ctext(g_help, 300, 20, "Keys: arrows/WASD aim, 1 2 3 or SPACE fire, P pause, M music", 60, 13, 190, 210, 235);
+    ctext(g_help, 300, 40, "Catch missiles in the blasts. Chain them!", 41, 14, 230, 240, 255);
+    ctext(g_help, 300, 70, "CLICK OR PRESS ENTER TO START", 29, 22, 255, 230, 120);
+  END
+  IF (best > 0) ctext(g_help, 300, 100, "BEST " + best, 5 + ndig(best), 14, 160, 255, 180); END
+  RETURN 0;
+END
+
+// The top bar: score, wave and multiplier, best. Redrawn on a change.
+FUNCTION draw_hud();
+BEGIN
+  IF (hud_score == score AND hud_wave == wave AND hud_best == best AND hud_mult == mult) RETURN 0; END
+  hud_score = score; hud_wave = wave; hud_best = best; hud_mult = mult;
+  gfx_fill_rgba(g_hud, 6, 8, 22, 45);
+  gfx_text(g_hud, 10, 5, "SCORE " + digits(score, 7), 255, 255, 255, 16);
+  IF (wave > 0)
+    gfx_text(g_hud, 262, 5, "WAVE " + wave, 255, 220, 120, 16);
+    gfx_text(g_hud, 262 + (6 + ndig(wave)) * 9.6, 5, "x" + mult, 140, 255, 170, 16);
+  END
+  gfx_text(g_hud, 480, 5, "BEST " + digits(best, 7), 170, 210, 255, 16);
+  RETURN 1;
+END
+
+// =====================================================================
+// Sound and music (all made by the engine)
+// =====================================================================
+
+FUNCTION make_sounds();
+BEGIN
+  s_launch = sfx_tone(wave_noise, 700, 2800, 170, 24);
+  s_launch2 = sfx_tone(wave_square, 240, 720, 110, 14);
+  s_boom[0] = sfx(sfx_explosion, 31);
+  s_boom[1] = sfx(sfx_explosion, 44);
+  s_boom[2] = sfx(sfx_explosion, 58);
+  s_pop = sfx(sfx_explosion, 72);
+  s_thud = sfx_tone(wave_sine, 150, 38, 420, 70);
+  s_crash = sfx(sfx_explosion, 9);
+  s_crumble = sfx_tone(wave_noise, 500, 70, 800, 34);
+  s_empty = sfx_tone(wave_square, 170, 150, 70, 24);
+  s_alarm = sfx_tone(wave_triangle, 540, 820, 240, 30);
+  s_tick = sfx_tone(wave_square, 1760, 1760, 26, 14);
+  s_note[0] = sfx_tone(wave_triangle, 523, 523, 140, 40);
+  s_note[1] = sfx_tone(wave_triangle, 659, 659, 140, 40);
+  s_note[2] = sfx_tone(wave_triangle, 784, 784, 140, 40);
+  s_note[3] = sfx_tone(wave_triangle, 1047, 1047, 380, 40);
+  s_note[4] = sfx_tone(wave_square, 392, 392, 160, 26);
+  s_zip = sfx_tone(wave_sine, 2600, 900, 260, 16);
+  s_bosshit = sfx(sfx_hit, 13);
+  s_warn = sfx_tone(wave_saw, 110, 240, 520, 26);
+  s_rebuild = sfx(sfx_powerup, 9);
+  s_start = sfx(sfx_powerup, 21);
+  s_split = sfx_tone(wave_saw, 900, 300, 160, 18);
+  s_drop = sfx_tone(wave_sine, 900, 500, 140, 18);
+  s_batlost = sfx_tone(wave_saw, 400, 60, 600, 34);
+  RETURN 0;
+END
+
+FUNCTION make_songs();
+BEGIN
+  // Title: a slow heroic theme in A minor
+  mus_title = song_new(96);
+  song_track(mus_title, inst_pluck,
+    "A4 C5 E5 A5 E5 C5 A4 C5 G4 B4 D5 G5 D5 B4 G4 B4 | F4 A4 C5 F5 C5 A4 F4 A4 E4 G#4 B4 E5 B4 G#4 E4 G#4 ", 26);
+  song_track(mus_title, inst_pad,
+    "A3 - - - - - - - G3 - - - - - - - | F3 - - - - - - - E3 - - - - - - - ", 24);
+  song_track(mus_title, inst_square,
+    "E5 - - - - - . . D5 - - - B4 - - - | C5 - - - A4 - - - B4 - - - - - - - ", 18);
+  song_track(mus_title, inst_bass,
+    "A2 - . A2 . . A2 . G2 - . G2 . . G2 . | F2 - . F2 . . F2 . E2 - . E2 . . E2 . ", 42);
+  song_track(mus_title, inst_drums, "k . . . s . . . k . k . s . . h ", 22);
+  // In play: a tense pulse under the effects
+  mus_play = song_new(128);
+  song_track(mus_play, inst_bass,
+    "D3 D3 . D3 D3 . D3 . D3 D3 . D3 F3 . E3 . | C3 C3 . C3 C3 . C3 . Bb2 Bb2 . Bb2 A2 . A2 . ", 40);
+  song_track(mus_play, inst_drums, "k . h . s . h . k . h k s . h h ", 18);
+  song_track(mus_play, inst_pluck,
+    ". . . . A4 . . . . . D5 . . . . . | . . . . G4 . . . . . F4 . E4 . . . ", 16);
+  song_track(mus_play, inst_pad,
+    "D4 - - - - - - - - - - - - - - - | C4 - - - - - - - Bb3 - - - A3 - - - ", 12);
+  // The carrier: faster, a saw lead
+  mus_boss = song_new(150);
+  song_track(mus_boss, inst_bass,
+    "E3 E3 E3 . E3 E3 G3 . E3 E3 E3 . A3 . G3 . | C3 C3 C3 . C3 C3 D3 . B2 B2 B2 . D#3 . B2 . ", 44);
+  song_track(mus_boss, inst_saw,
+    "E5 - . E5 G5 - . E5 B5 - A5 - G5 - F#5 - | E5 - . E5 G5 - . A5 B5 - - - D#5 - - - ", 16);
+  song_track(mus_boss, inst_drums, "k . h k s . h . k k h . s . s h ", 22);
+  // Game over: once, falling
+  mus_over = song_new(84);
+  song_track(mus_over, inst_square, "E5 - D5 - C5 - B4 - A4 - - - G#4 - - - A4 - - - - - - - . . . . ", 30);
+  song_track(mus_over, inst_pad, "A3 - - - - - - - F3 - - - E3 - - - A2 - - - - - - - . . . . ", 26);
+  song_track(mus_over, inst_bass, "A2 - - - G2 - - - F2 - - - E2 - - - A2 - - - - - - - . . . . ", 46);
+  music_volume(42);
+  RETURN 0;
+END
+
+FUNCTION music(s, lp);
+BEGIN
+  IF (mus_now == s) RETURN 0; END
+  mus_now = s;
+  IF (music_on OR lp == 0) song_play(s, lp); ELSE song_stop(); END
+  RETURN 1;
+END
+
+FUNCTION boom_sound(px, big);
+BEGIN
+  IF (frame_no - boom_t < 3) RETURN 0; END
+  boom_t = frame_no;
+  IF (big) play_sound(s_boom[rand(0, 2)], 90, rand(70, 90), pan(px));
+  ELSE play_sound(s_boom[rand(0, 2)], 60, rand(95, 125), pan(px)); END
+  RETURN 1;
+END
+
+// A few notes of a sound in a row (pitch percent, 0 = rest).
+PROCESS jingle(snd, gap, a, b, c, d);
+PRIVATE k, p;
+BEGIN
+  FROM k = 0 TO 3;
+    p = a;
+    IF (k == 1) p = b; END
+    IF (k == 2) p = c; END
+    IF (k == 3) p = d; END
+    IF (p > 0) play_sound(snd, 60, p, 0); END
+    FRAME(gap * 100);
+  END
+END
+
+// =====================================================================
+// Particles and pop-up text
+// =====================================================================
+
+PROCESS spark(fx, fy, vx, vy, graph, life, grav);
+PRIVATE t;
+BEGIN
+  z = -5; n_parts++;
+  FROM t = 1 TO life;
+    vy += grav; vx = vx * 0.985;
+    fx += vx; fy += vy;
+    IF (fy > GROUND + 4) fy = GROUND + 4; vy = -vy * 0.3; vx = vx * 0.6; END
+    IF (t > life - 12) alpha = (life - t) * 8; END
+    x = fx + shx; y = fy + shy;
+    FRAME;
+  END
+  n_parts--;
+END
+
+PROCESS smoke(fx, fy, sz, dark, life);
+PRIVATE t, a0;
+BEGIN
+  z = 30; n_parts++;
+  graph = g_smoke[dark]; size = sz;
+  a0 = 55; IF (dark) a0 = 70; END
+  FROM t = 1 TO life;
+    fy -= 0.35; fx += 0.12;
+    size += 1;
+    alpha = a0 - t * a0 / life;
+    x = fx + shx; y = fy + shy;
+    FRAME;
+  END
+  n_parts--;
+END
+
+FUNCTION sparks(px, py, n, spd);
+PRIVATE i, a, v;
+BEGIN
+  FROM i = 1 TO n;
+    IF (n_parts < PART_MAX)
+      a = rand(0, 359999); v = rand(spd * 5, spd * 10) * 0.1;
+      spark(px, py, cos(a) * v, -sin(a) * v, g_spark[rand(0, 1)], rand(18, 34), 0.06);
+    END
+  END
+  RETURN 0;
+END
+
+FUNCTION debris(px, py, n);
+PRIVATE i;
+BEGIN
+  FROM i = 1 TO n;
+    IF (n_parts < PART_MAX)
+      spark(px + rand(-14, 14), py, rand(-30, 30) * 0.1, -rand(20, 55) * 0.1, g_chunk, rand(40, 70), 0.14);
+    END
+  END
+  RETURN 0;
+END
+
+PROCESS popup(x, y, s, col);
+PRIVATE t;
+BEGIN
+  FROM t = 0 TO 55;
+    y -= 0.45;
+    set_color('#000000'); text(x + 1, y + 1, s);
+    set_color(col); text(x, y, s);
+    FRAME;
+  END
+END
+
+// A graphic shown until killed (title, banners, panels).
+PROCESS sprite(x, y, graph, z);
+BEGIN
+  LOOP FRAME; END
+END
+
+// A banner that drops in, stays and fades.
+PROCESS banner(x, y, graph, life);
+PRIVATE t;
+BEGIN
+  z = -45;
+  FROM t = 0 TO life;
+    IF (t < 12) size = 150 - t * 4; alpha = t * 8; ELSE size = 100; alpha = 100; END
+    IF (t > life - 20) alpha = (life - t) * 5; END
+    FRAME;
+  END
+END
+
+// =====================================================================
+// Slots
+// =====================================================================
+
+FUNCTION e_alloc(kind, px, py);
+PRIVATE k;
+BEGIN
+  FROM k = 0 TO EMAX;
+    IF (e_on[k] == 0)
+      e_on[k] = 1; e_kind[k] = kind; e_x[k] = px; e_y[k] = py;
+      e_ox[k] = px; e_oy[k] = py; e_vx[k] = 0; e_vy[k] = 0; e_claim[k] = 0;
+      n_enemies++;
+      IF (n_enemies > max_enemies) max_enemies = n_enemies; END
+      RETURN k;
+    END
+  END
+  RETURN -1;
+END
+
+FUNCTION e_free(k);
+BEGIN
+  IF (k >= 0 AND e_on[k]) e_on[k] = 0; n_enemies--; END
+  RETURN 0;
+END
+
+FUNCTION bl_alloc(px, py, ch);
+PRIVATE k;
+BEGIN
+  FROM k = 0 TO BMAX;
+    IF (bl_on[k] == 0)
+      bl_on[k] = 1; bl_x[k] = px; bl_y[k] = py; bl_r[k] = 0; bl_ch[k] = ch; bl_boss[k] = 0;
+      IF (k + 1 > bl_hi) bl_hi = k + 1; END
+      RETURN k;
+    END
+  END
+  RETURN -1;
+END
+
+FUNCTION bl_free(k);
+BEGIN
+  bl_on[k] = 0; bl_r[k] = 0;
+  WHILE (bl_hi > 0 AND bl_on[bl_hi - 1] == 0) bl_hi--; END
+  RETURN 0;
+END
+
+// Index + 1 of a destroying blast that reaches (px, py) with a margin.
+FUNCTION blast_hit(px, py, pad);
+PRIVATE k, dx, dy, rr;
+BEGIN
+  k = 0;
+  WHILE (k < bl_hi)
+    IF (bl_on[k])
+      rr = bl_r[k] + pad;
+      dx = px - bl_x[k];
+      IF (dx < rr AND dx > -rr)
+        dy = py - bl_y[k];
+        IF (dx * dx + dy * dy < rr * rr) RETURN k + 1; END
+      END
+    END
+    k++;
+  END
+  RETURN 0;
+END
+
+// =====================================================================
+// Blasts
+// =====================================================================
+
+// A shock ring flying out of a new blast.
+PROCESS ring(fx, fy, r0);
+PRIVATE t;
+BEGIN
+  z = -2; graph = g_ring; n_parts++;
+  FROM t = 1 TO 14;
+    size = (r0 + t * 5) * 1.5625;
+    alpha = 90 - t * 6;
+    x = fx + shx; y = fy + shy;
+    FRAME;
+  END
+  n_parts--;
+END
+
+// kind 0 destroys what it touches (the player's, chains); kind 1 is only
+// a sight (a warhead hitting the ground).
+PROCESS blast(fx, fy, rmax, ch, kind);
+PRIVATE slot, t, r, p, tg, th, ts, i;
+BEGIN
+  z = 0; n_blasts++;
+  slot = -1;
+  IF (kind == 0) slot = bl_alloc(fx, fy, ch); END
+  IF (n_parts < PART_MAX - 30) ring(fx, fy, rmax * 0.4); END
+  tg = 12; th = 10; ts = 24;
+  IF (kind == 1) tg = 8; th = 4; ts = 20; END
+  FROM t = 0 TO tg + th + ts - 1;
+    IF (t < tg)
+      p = fdiv(t + 1, tg);
+      r = rmax * (1 - (1 - p) * (1 - p));
+      graph = g_blast[(t / 2) % 4];
+      IF (kind == 1) graph = g_blast[1 + (t / 2) % 2]; END
+    ELSE
+      IF (t < tg + th)
+        r = rmax * (1 + sin(t * 60000) * 0.04);
+        graph = g_blast[(t / 2) % 4];
+        IF (kind == 1) graph = g_blast[4]; END
+      ELSE
+        p = fdiv(t - tg - th, ts);
+        r = rmax * (1 - p * p * 0.8);
+        graph = g_blast[4];
+        alpha = 100 - p * 100;
+      END
+    END
+    size = r * 1.5625;
+    x = fx + shx; y = fy + shy;
+    IF (slot >= 0)
+      bl_r[slot] = r;
+      IF (t >= tg + th) bl_r[slot] = r * (1 - p); END   // a fading blast bites less
+    END
+    FRAME;
+  END
+  IF (slot >= 0) bl_free(slot); END
+  IF (n_parts < PART_MAX - 20)
+    FROM i = 0 TO 1;
+      smoke(fx + rand(-10, 10), fy + rand(-10, 10), 60 + rmax * 2, night > 50, 50);
+    END
+  END
+  n_blasts--;
+END
+
+// An enemy is destroyed at (px, py) by a blast of chain depth ch: score,
+// a blast of its own one step further down the chain, sparks.
+FUNCTION enemy_down(px, py, ch, pts, rad);
+PRIVATE p;
+BEGIN
+  kills++;
+  p = pts * mult;
+  IF (ch > 0) p = p + pts * mult * ch / 2; END
+  add_score(p);
+  blast(px, py, rad, ch + 1, 0);
+  boom_sound(px, 0);
+  sparks(px, py, 6, 3);
+  IF (ch >= 1)
+    IF (ch + 1 > max_chain) max_chain = ch + 1; END
+    popup(px - 24, py - 20, "CHAIN x" + (ch + 1), '#ffe070');
+    play_sound(s_note[clamp(ch - 1, 0, 3)], 40, 100, pan(px));
+  END
+  RETURN p;
+END
+
+// =====================================================================
+// Targets and impacts
+// =====================================================================
+
+// Chooses what an enemy flies at: 0-5 a district, 6-8 a battery, 9 the
+// ground. Standing districts are preferred.
+FUNCTION pick_target();
+PRIVATE r, k, n, tries;
+BEGIN
+  r = rand(0, 99);
+  IF (r < 22)
+    FROM tries = 0 TO 5;
+      k = rand(0, 2);
+      IF (bat_alive[k]) RETURN 6 + k; END
+    END
+    RETURN 6 + rand(0, 2);
+  END
+  IF (r < 94)
+    FROM tries = 0 TO 7;
+      k = rand(0, 5);
+      IF (city_hp[k] > 0) RETURN k; END
+    END
+    RETURN rand(0, 5);
+  END
+  RETURN 9;
+END
+
+FUNCTION target_point(tg);
+BEGIN
+  IF (tg < 6) tp_x = city_x[tg] + rand(-18, 18); tp_y = GROUND - 14; RETURN 0; END
+  IF (tg < 9) tp_x = bat_x[tg - 6] + rand(-4, 4); tp_y = GROUND - 22; RETURN 0; END
+  tp_x = rand(30, 610); tp_y = GROUND + 2;
+  RETURN 0;
+END
+
+// A warhead reached the ground at (px, py) on target tg.
+FUNCTION impact(tg, px, py);
+PRIVATE k;
+BEGIN
+  blast(px, py, 24, 0, 1);
+  boom_sound(px, 1);
+  add_shake(5);
+  sparks(px, py, 8, 3);
+  IF (state == ST_TITLE) RETURN 0; END
+  IF (tg < 6)
+    k = tg;
+    IF (city_hp[k] > 0)
+      city_hp[k]--;
+      city_flash[k] = 16;
+      draw_city(k);
+      debris(px, py - 10, 12);
+      play_sound(s_thud, 90, 100, pan(px));
+      play_sound(s_crumble, 60, rand(90, 110), pan(px));
+      add_shake(10);
+      do_flash(30, 255, 90, 60);
+      IF (city_hp[k] == 0)
+        cities_lost++;
+        play_sound(s_crash, 90, 70, pan(px));
+        FROM k = 0 TO 5; IF (n_parts < PART_MAX) smoke(px + rand(-24, 24), py - rand(0, 20), 90, 1, 70); END END
+        popup(px - 30, py - 50, "DISTRICT LOST", '#ff8070');
+      END
+    END
+  ELSE
+    IF (tg < 9)
+      k = tg - 6;
+      IF (bat_alive[k])
+        bat_alive[k] = 0; bat_ammo[k] = 0;
+        debris(px, py, 10);
+        play_sound(s_batlost, 70, 100, pan(px));
+        add_shake(9);
+        do_flash(24, 255, 120, 60);
+        popup(px - 34, py - 40, "BATTERY DOWN", '#ffb070');
+      END
+    END
+  END
+  RETURN 1;
+END
+
+FUNCTION cities_standing();
+PRIVATE k, n;
+BEGIN
+  FROM k = 0 TO 5; IF (city_hp[k] > 0) n++; END END
+  RETURN n;
+END
+
+// =====================================================================
+// Enemies
+// =====================================================================
+
+// A missile from (sx, sy) to target tg. split_y > 0: it splits into more
+// warheads when it gets that low.
+PROCESS missile(sx, sy, tg, spd, split_y);
+PRIVATE slot, fx, fy, tx, ty, vx, vy, d, hit, t, n, i;
+BEGIN
+  slot = e_alloc(1, sx, sy);
+  IF (slot >= 0)
+    target_point(tg); tx = tp_x; ty = tp_y;
+    fx = sx; fy = sy;
+    d = fget_distance(sx, sy, tx, ty);
+    vx = fdiv((tx - sx) * spd, d); vy = fdiv((ty - sy) * spd, d);
+    e_vx[slot] = vx; e_vy[slot] = vy;
+    graph = g_head; z = 10;
+    x = fx + shx; y = fy + shy;
+    LOOP
+      fx += vx; fy += vy; t++;
+      hit = blast_hit(fx, fy, 3);
+      IF (hit)
+        enemy_down(fx, fy, bl_ch[hit - 1], 25, 26);
+        BREAK;
+      END
+      IF (split_y > 0 AND fy >= split_y)
+        split_y = 0;
+        n = rand(1, 2);
+        FROM i = 1 TO n; missile(fx, fy, pick_target(), spd, 0); END
+        play_sound(s_split, 40, rand(90, 110), pan(fx));
+        sparks(fx, fy, 5, 2);
+      END
+      IF (fy >= ty)
+        impact(tg, fx, fy);
+        BREAK;
+      END
+      e_x[slot] = fx; e_y[slot] = fy;
+      IF (t % 7 == 0 AND n_parts < PART_MAX - 40) smoke(fx, fy, 30, night > 50, 36); END
+      x = fx + shx; y = fy + shy;
+      FRAME;
+    END
+    e_free(slot);
+  END
+END
+
+// A zipper: fast, weaving, and it swerves away from blasts it sees.
+PROCESS zipper(sx, tg, spd);
+PRIVATE slot, bx, by, fx, fy, px, py, tx, ty, vx, vy, nx, ny, d, t, ph,
+        weave, dodge, k, dx, dy, rr, side, hit;
+BEGIN
+  slot = e_alloc(2, sx, -10);
+  IF (slot >= 0)
+    target_point(tg); tx = tp_x; ty = tp_y;
+    bx = sx; by = -10.0;
+    d = fget_distance(sx, -10, tx, ty);
+    vx = fdiv((tx - sx) * spd, d); vy = fdiv((ty + 10) * spd, d);
+    nx = fdiv(-vy, spd); ny = fdiv(vx, spd);
+    ph = rand(0, 359999); dodge = 0.0;
+    fx = bx; fy = by;
+    graph = g_zip; z = 9;
+    play_sound(s_zip, 34, rand(90, 115), pan(sx));
+    LOOP
+      px = fx; py = fy;
+      bx += vx; by += vy; t++;
+      weave = sin(t * 7000 + ph) * 24;
+      // look for a blast close by and swerve away from it
+      side = 0; k = 0;
+      WHILE (k < bl_hi)
+        IF (bl_on[k])
+          dx = fx - bl_x[k]; dy = fy - bl_y[k]; rr = bl_r[k] + 44;
+          IF (dx * dx + dy * dy < rr * rr)
+            IF (dx * nx + dy * ny > 0) side = 1; ELSE side = -1; END
+          END
+        END
+        k++;
+      END
+      IF (side != 0) dodge = clamp(dodge + side * 2.4, -70, 70); ELSE dodge = dodge * 0.98; END
+      fx = bx + nx * (weave + dodge); fy = by + ny * (weave + dodge);
+      hit = blast_hit(fx, fy, 2);
+      IF (hit)
+        enemy_down(fx, fy, bl_ch[hit - 1], 75, 30);
+        popup(fx - 12, fy - 26, "ZAP!", '#ff90ff');
+        BREAK;
+      END
+      IF (by >= ty)
+        impact(tg, fx, fy);
+        BREAK;
+      END
+      e_x[slot] = fx; e_y[slot] = fy; e_vx[slot] = fx - px; e_vy[slot] = fy - py;
+      angle += 24000;
+      x = fx + shx; y = fy + shy;
+      FRAME;
+    END
+    e_free(slot);
+  END
+END
+
+// A bomber crossing the sky, dropping warheads on the way.
+PROCESS bomber(dir, fy0, spd, drops);
+PRIVATE slot, fx, fy, t, drop_t, hit, gone;
+BEGIN
+  fx = -40.0; IF (dir < 0) fx = 680.0; END
+  slot = e_alloc(3, fx, fy0);
+  IF (slot >= 0)
+    z = 12; fy = fy0;
+    IF (dir < 0) flags = 1; END
+    drop_t = rand(50, 100);
+    LOOP
+      t++;
+      fx += dir * spd;
+      fy = fy0 + sin(t * 3000) * 4;
+      hit = blast_hit(fx, fy, 16);
+      IF (hit)
+        enemy_down(fx, fy, bl_ch[hit - 1], 100, 34);
+        debris(fx, fy, 8);
+        popup(fx - 16, fy - 26, "" + (100 * mult), '#ffffff');
+        add_shake(5);
+        BREAK;
+      END
+      IF (drops > 0 AND fx > 60 AND fx < 580)
+        drop_t--;
+        IF (drop_t <= 0)
+          missile(fx, fy + 8, pick_target(), m_spd * 0.9, 0);
+          play_sound(s_drop, 30, rand(90, 110), pan(fx));
+          drops--; drop_t = rand(60, 120);
+        END
+      END
+      IF ((dir > 0 AND fx > 690) OR (dir < 0 AND fx < -50)) BREAK; END
+      e_x[slot] = fx; e_y[slot] = fy; e_vx[slot] = dir * spd; e_vy[slot] = 0;
+      graph = g_bomber[(t / 10) % 2];
+      x = fx + shx; y = fy + shy;
+      FRAME;
+    END
+    e_free(slot);
+  END
+END
+
+// The Hive Carrier: every fifth wave. It sweeps across the upper sky and
+// drops volleys; each blast that touches it costs it one hit point.
+PROCESS carrier();
+PRIVATE slot, fx, fy, t, k, j, dx, dy, rr, hitf, volleys, vt, escape, dead, i, hx;
+BEGIN
+  fx = 320.0; fy = -50.0;
+  slot = e_alloc(4, fx, fy);
+  IF (slot >= 0)
+    boss_max = 8 + wave; boss_hp = boss_max; boss_state = 1; boss_seen++;
+    z = 14; graph = g_boss[0];
+    play_sound(s_warn, 70, 100, 0);
+    music(mus_boss, 1);
+    vt = 140;
+    LOOP
+      t++;
+      IF (escape == 0)
+        IF (fy < 86) fy += 0.8; END
+        fx = 320 + sin(t * 650) * 200;
+      ELSE
+        fy -= 1.2;
+        IF (fy < -60) BREAK; END
+      END
+      // hits: three circles along the hull
+      k = 0;
+      WHILE (k < bl_hi)
+        IF (bl_on[k] AND bl_boss[k] == 0)
+          FROM j = -1 TO 1;
+            dx = bl_x[k] - (fx + j * 58); dy = bl_y[k] - fy;
+            rr = bl_r[k] + 24;
+            IF (dx * dx + dy * dy < rr * rr AND bl_boss[k] == 0)
+              bl_boss[k] = 1; boss_hp--; hitf = 6;
+              sparks(bl_x[k], bl_y[k], 10, 4);
+              play_sound(s_bosshit, 80, rand(80, 100), pan(fx));
+              add_score(50 * mult);
+              add_shake(4);
+            END
+          END
+        END
+        k++;
+      END
+      IF (boss_hp <= 0) dead = 1; BREAK; END
+      // volleys from the three bays
+      vt--;
+      IF (vt <= 0 AND fy > 60 AND escape == 0)
+        FROM j = -1 TO 1;
+          missile(fx + j * 56, fy + 22, pick_target(), m_spd * 0.85, 0);
+        END
+        volleys++;
+        IF (volleys % 3 == 0) zipper(fx, pick_target(), 2.4); END
+        vt = 170 - min(wave * 4, 70);
+        play_sound(s_drop, 50, 70, pan(fx));
+        IF (volleys >= 14) escape = 1; END
+      END
+      e_x[slot] = fx; e_y[slot] = fy;
+      e_vx[slot] = cos(t * 650) * 650 * 200 * 0.0000174533; e_vy[slot] = 0;
+      IF (hitf > 0) hitf--; graph = g_boss_hit; ELSE graph = g_boss[(t / 14) % 2]; END
+      x = fx + shx; y = fy + shy + sin(t * 4000) * 2;
+      FRAME;
+    END
+    IF (dead)
+      boss_kills++;
+      e_free(slot); slot = -1;
+      play_sound(s_crash, 100, 60, pan(fx));
+      FROM i = 0 TO 47;
+        IF (i % 5 == 0)
+          hx = fx + rand(-80, 80);
+          blast(hx, fy + rand(-18, 18), rand(30, 46), 1, 0);
+          boom_sound(hx, 1);
+          add_shake(12);
+          debris(hx, fy, 4);
+        END
+        alpha = 100 - i * 2;
+        x = fx + shx; y = fy + shy + i * 0.5;
+        FRAME;
+      END
+      do_flash(80, 255, 255, 230);
+      add_shake(18);
+      add_score(3000 * mult);
+      popup(fx - 50, fy, "CARRIER DOWN! " + (3000 * mult), '#ffe070');
+      jingle(s_note[0], 5, 100, 126, 150, 200);
+    END
+    boss_state = 2;
+    IF (state == ST_PLAY) music(mus_play, 1); END
+    e_free(slot);
+  END
+END
+
+// =====================================================================
+// The player's side
+// =====================================================================
+
+// An interceptor from battery k to (tx, ty), where it bursts.
+PROCESS interceptor(k, tx, ty);
+PRIVATE slot, fx, fy, vx, vy, d, n, t, sx, sy;
+BEGIN
+  slot = -1;
+  FROM t = 0 TO IMAX;
+    IF (i_on[t] == 0 AND slot < 0) slot = t; END
+  END
+  sx = bat_x[k] + cos(bat_ang[k]) * 20; sy = GROUND - 26 - sin(bat_ang[k]) * 20;
+  fx = sx; fy = sy;
+  d = fget_distance(sx, sy, tx, ty);
+  n = int(fdiv(d, bat_spd[k])) + 1;
+  vx = fdiv(tx - sx, n); vy = fdiv(ty - sy, n);
+  n_int++;
+  IF (slot >= 0) i_on[slot] = 1; i_ox[slot] = sx; i_oy[slot] = sy; i_tx[slot] = tx; i_ty[slot] = ty; END
+  graph = g_ihead; z = 8;
+  FROM t = 1 TO n;
+    fx += vx; fy += vy;
+    IF (slot >= 0) i_x[slot] = fx; i_y[slot] = fy; END
+    x = fx + shx; y = fy + shy;
+    FRAME;
+  END
+  IF (slot >= 0) i_on[slot] = 0; END
+  n_int--;
+  blast(tx, ty, 38, 0, 0);
+  boom_sound(tx, 0);
+END
+
+// Fires from battery k at (tx, ty). Returns 1 if it did.
+FUNCTION fire_from(k, tx, ty);
+BEGIN
+  IF (bat_alive[k] == 0 OR bat_ammo[k] <= 0) RETURN 0; END
+  IF (ty > GROUND - 36) ty = GROUND - 36; END
+  IF (ty < 30) ty = 30; END
+  tx = clamp(tx, 6, 634);
+  bat_ammo[k]--; bat_cool[k] = 8; bat_kick[k] = 5;
+  bat_ang[k] = fget_angle(bat_x[k], GROUND - 26, tx, ty);
+  shots++;
+  interceptor(k, tx, ty);
+  play_sound(s_launch, 50, rand(90, 115), pan(bat_x[k]));
+  play_sound(s_launch2, 30, 90 + k * 15, pan(bat_x[k]));
+  sparks(bat_x[k] + cos(bat_ang[k]) * 20, GROUND - 26 - sin(bat_ang[k]) * 20, 3, 2);
+  IF (bat_ammo[k] == 2) popup(bat_x[k] - 12, GROUND - 60, "LOW", '#ffc060'); END
+  RETURN 1;
+END
+
+// The nearest battery with ammo that is not reloading fires. If they are
+// all reloading the shot waits a few frames. 0 when out of ammo.
+FUNCTION fire_at(tx, ty);
+PRIVATE k, best_k, bd, d, any;
+BEGIN
+  best_k = -1; bd = 99999;
+  FROM k = 0 TO 2;
+    IF (bat_alive[k] AND bat_ammo[k] > 0)
+      any = 1;
+      d = abs(bat_x[k] - tx);
+      IF (k == 1) d = d - 40; END            // the fast centre battery a little first
+      IF (bat_cool[k] == 0 AND d < bd) bd = d; best_k = k; END
+    END
+  END
+  IF (best_k >= 0) RETURN fire_from(best_k, tx, ty); END
+  IF (any)
+    pend_on = 1; pend_x = tx; pend_y = ty; pend_t = 12;
+    RETURN 0;
+  END
+  play_sound(s_empty, 60, 100, pan(tx));
+  popup(tx - 30, ty - 10, "NO AMMO", '#ff7060');
+  RETURN 0;
+END
+
+PROCESS battery(k);
+PRIVATE t;
+BEGIN
+  z = 35;
+  LOOP
+    t++;
+    IF (bat_alive[k])
+      graph = g_base;
+    ELSE
+      graph = g_base_dead;
+      IF (t % 12 == 0 AND n_parts < PART_MAX - 30) smoke(bat_x[k] + rand(-8, 8), GROUND - 16, 40, 1, 60); END
+    END
+    IF (bat_cool[k] > 0) bat_cool[k]--; END
+    x = bat_x[k] + shx; y = GROUND - 20 + shy;
+    FRAME;
+  END
+END
+
+PROCESS barrel(k);
+BEGIN
+  z = 36; graph = g_barrel;
+  LOOP
+    angle = bat_ang[k];
+    IF (bat_kick[k] > 0) bat_kick[k]--; END
+    x = bat_x[k] - cos(angle) * bat_kick[k] + shx;
+    y = GROUND - 26 + sin(angle) * bat_kick[k] + shy;
+    IF (bat_alive[k]) alpha = 100; ELSE alpha = 0; END
+    FRAME;
+  END
+END
+
+PROCESS district(k);
+PRIVATE t;
+BEGIN
+  z = 40;
+  LOOP
+    t++;
+    graph = city_g[k];
+    IF (city_flash[k] > 0) city_flash[k]--; END
+    IF (city_hp[k] == 1 AND t % 9 == 0 AND n_parts < PART_MAX - 30)
+      smoke(city_x[k] + rand(-22, 22), GROUND - rand(20, 40), 50, 1, 70);
+      IF (rand(0, 2) == 0) spark(city_x[k] + rand(-20, 20), GROUND - rand(10, 34), rand(-5, 5) * 0.1, -rand(5, 15) * 0.1, g_spark[1], 30, -0.01); END
+    END
+    IF (city_hp[k] == 0 AND t % 25 == 0 AND n_parts < PART_MAX - 30)
+      smoke(city_x[k] + rand(-22, 22), GROUND - 4, 40, 1, 60);
+    END
+    x = city_x[k] + shx; y = GROUND - 30 + shy;
+    IF (city_flash[k] > 0 AND (city_flash[k] / 2) % 2 == 0) x += rand(-2, 2); END
+    FRAME;
+  END
+END
+
+// The top bar (score, wave, best), redrawn by draw_hud().
+PROCESS hud_bar();
+BEGIN
+  x = 320; y = 13; z = -60; graph = g_hud;
+  LOOP FRAME; END
+END
+
+// The background: sky, far skyline and the ground.
+PROCESS sky();
+BEGIN
+  z = 100;
+  LOOP
+    graph = g_skybuf[sky_cur];
+    x = 320 + shx; y = 240 + shy;
+    FRAME;
+  END
+END
+
+// Paints every smoke trail into one layer graphic after everything moved
+// (lowest priority: it runs last in the frame).
+PROCESS painter();
+PRIVATE k, ox, oy, hx, hy, mx, my, c, zr, zg, zb;
+BEGIN
+  z = 60; graph = g_trail; priority = -100;
+  LOOP
+    gfx_fill_rgba(g_trail, 0, 0, 0, 0);
+    // enemy missiles: a wide sooty trail, a bright core near the head
+    k = 0;
+    WHILE (k <= EMAX)
+      IF (e_on[k])
+        IF (e_kind[k] == 1)
+          ox = e_ox[k]; oy = e_oy[k]; hx = e_x[k]; hy = e_y[k];
+          mx = (ox + hx) * 0.5; my = (oy + hy) * 0.5;
+          gfx_line(g_trail, ox - 1, oy, hx - 1, hy, smk_r, smk_g, smk_b);
+          gfx_line(g_trail, ox + 1, oy, hx + 1, hy, smk_r, smk_g, smk_b);
+          gfx_line(g_trail, ox, oy, mx, my, mix(smk_r, trl_r, 50), mix(smk_g, trl_g, 50), mix(smk_b, trl_b, 50));
+          gfx_line(g_trail, mx, my, hx, hy, trl_r, trl_g, trl_b);
+        ELSE
+          IF (e_kind[k] == 2)
+            hx = e_x[k]; hy = e_y[k];
+            zr = 255; zg = 110; zb = 255;
+            gfx_line(g_trail, hx - e_vx[k] * 14, hy - e_vy[k] * 14, hx, hy, 150, 60, 190);
+            gfx_line(g_trail, hx - e_vx[k] * 7 + rand(-2, 2), hy - e_vy[k] * 7 + rand(-2, 2), hx, hy, zr, zg, zb);
+          END
+        END
+      END
+      k++;
+    END
+    // interceptors: a cyan line and a blinking mark where they will burst
+    k = 0;
+    WHILE (k <= IMAX)
+      IF (i_on[k])
+        gfx_line(g_trail, i_ox[k], i_oy[k], i_x[k], i_y[k], 60, 150, 200);
+        gfx_line(g_trail, (i_ox[k] + i_x[k] * 3) * 0.25, (i_oy[k] + i_y[k] * 3) * 0.25, i_x[k], i_y[k], 170, 240, 255);
+        c = 255; IF ((frame_no / 4) % 2) c = 120; END
+        hx = i_tx[k]; hy = i_ty[k];
+        gfx_line(g_trail, hx - 4, hy - 4, hx + 4, hy + 4, c, c, 255);
+        gfx_line(g_trail, hx - 4, hy + 4, hx + 4, hy - 4, c, c, 255);
+      END
+      k++;
+    END
+    x = 320 + shx; y = 240 + shy;
+    FRAME;
+  END
+END
+
+// The crosshair: follows the mouse, or the keys. Hidden on a touch
+// screen until a finger touches.
+PROCESS crosshair();
+BEGIN
+  z = -50; graph = g_cross;
+  LOOP
+    x = aim_x; y = aim_y;
+    alpha = 100;
+    IF (state == ST_TITLE OR state == ST_OVER) alpha = 0; END
+    IF (touched AND NOT mouse.left) alpha = clamp(cross_t * 4, 0, 70); END
+    IF (cross_t > 0) cross_t--; END
+    angle += 1500;
+    FRAME;
+  END
+END
+
+// =====================================================================
+// Waves
+// =====================================================================
+
+FUNCTION all_types(sig);
+BEGIN
+  signal(TYPE missile, sig); signal(TYPE zipper, sig); signal(TYPE bomber, sig);
+  signal(TYPE carrier, sig); signal(TYPE interceptor, sig); signal(TYPE blast, sig);
+  signal(TYPE spark, sig); signal(TYPE smoke, sig); signal(TYPE popup, sig);
+  signal(TYPE banner, sig); signal(TYPE jingle, sig);
+  RETURN 0;
+END
+
+// Removes every enemy, shot, blast and particle and empties the slots.
+FUNCTION clear_world();
+PRIVATE k;
+BEGIN
+  all_types(s_kill);
+  signal(TYPE sprite, s_kill);
+  FROM k = 0 TO EMAX; e_on[k] = 0; bl_on[k] = 0; bl_r[k] = 0; END
+  FROM k = 0 TO IMAX; i_on[k] = 0; END
+  n_enemies = 0; n_int = 0; n_blasts = 0; bl_hi = 0; n_parts = 0;
+  pend_on = 0; boss_state = 0; flash = 0;
+  RETURN 0;
+END
+
+// Repaints the sky into the hidden buffer over a few frames (a process
+// has its own instruction budget), shows it, then the districts.
+PROCESS repaint();
+PRIVATE k;
+BEGIN
+  draw_sky(g_skybuf[1 - sky_cur]);
+  sky_cur = 1 - sky_cur;
+  FROM k = 0 TO 5;
+    draw_city(k);
+    IF (k % 2 == 1) FRAME; END
+  END
+END
+
+FUNCTION redraw_world();
+BEGIN
+  signal(TYPE repaint, s_kill);
+  repaint();
+  RETURN 0;
+END
+
+FUNCTION start_wave();
+PRIVATE k, n;
+BEGIN
+  wave++; wave_t = 0;
+  boss_wave = 0; IF (wave % 5 == 0) boss_wave = 1; END
+  mult = min(1 + (wave - 1) / 2, 6);
+  m_left = min(10 + wave * 4, 52);
+  b_left = 0; IF (wave >= 2) b_left = min(1 + wave / 2, 5); END
+  z_left = 0; IF (wave >= 4) z_left = min(wave - 3, 8); END
+  IF (boss_wave) m_left = 6 + wave; b_left = 1; z_left = wave / 4; END
+  m_spd = min(0.7 + wave * 0.12, 2.2);
+  split_p = 0; IF (wave >= 3) split_p = min(8 + wave * 4, 40); END
+  salvo_t = 40; bomb_t = 260; zip_t = 380;
+  boss_state = 0;
+  FROM k = 0 TO 2; bat_alive[k] = 1; bat_ammo[k] = AMMO; bat_cool[k] = 0; END
+  IF (boss_wave) FROM k = 0 TO 2; bat_ammo[k] = AMMO + 4; END END
+  set_palette((wave - 1) % 6);
+  redraw_world();
+  // the banner
+  gfx_fill_rgba(g_banner, 0, 0, 0, 0);
+  n = 5 + ndig(wave);
+  ctext(g_banner, 260, 2, "WAVE " + wave, n, 44, 255, 230, 120);
+  IF (boss_wave)
+    ctext(g_banner, 260, 54, "WARNING: HIVE CARRIER INBOUND", 29, 16, 255, 120, 110);
+  ELSE
+    IF (wave == 1) ctext(g_banner, 260, 54, "DEFEND THE CITY", 15, 16, 220, 235, 255);
+    ELSE ctext(g_banner, 260, 54, "SCORE x" + mult, 7 + ndig(mult), 16, 160, 255, 180); END
+  END
+  banner(320, 200, g_banner, 130);
+  jingle(s_alarm, 16, 100, 100, 0, 0);
+  IF (boss_wave == 0) music(mus_play, 1); END
+  state = ST_PLAY;
+  RETURN 0;
+END
+
+// Spawning during a wave: salvos of missiles, bombers, zippers, the
+// carrier; the wave is over when everything is gone.
+FUNCTION wave_step();
+PRIVATE n, i, sp;
+BEGIN
+  wave_t++;
+  IF (wave_t < 80) RETURN 0; END
+  IF (m_left > 0)
+    salvo_t--;
+    IF (salvo_t <= 0)
+      n = min(rand(2, 3 + wave / 2), m_left);
+      n = min(n, 7);
+      FROM i = 1 TO n;
+        sp = 0;
+        IF (rand(0, 99) < split_p) sp = rand(150, 280); END
+        missile(rand(20, 620), -6, pick_target(), m_spd * rand(88, 112) * 0.01, sp);
+      END
+      m_left -= n;
+      salvo_t = max(160 - wave * 10, 60) + rand(0, 40);
+    END
+  END
+  IF (b_left > 0)
+    bomb_t--;
+    IF (bomb_t <= 0)
+      bomber(rand(0, 1) * 2 - 1, rand(90, 170), 0.9 + wave * 0.05, 2 + wave / 3);
+      b_left--; bomb_t = rand(360, 560);
+    END
+  END
+  IF (z_left > 0)
+    zip_t--;
+    IF (zip_t <= 0)
+      zipper(rand(40, 600), pick_target(), min(2.0 + wave * 0.1, 3.4));
+      z_left--; zip_t = rand(200, 330);
+    END
+  END
+  IF (boss_wave AND boss_state == 0 AND wave_t > 150) carrier(); END
+  IF (m_left == 0 AND b_left == 0 AND z_left == 0 AND n_enemies == 0 AND n_int == 0
+      AND n_blasts == 0 AND (boss_wave == 0 OR boss_state == 2))
+    start_tally();
+  END
+  RETURN 1;
+END
+
+FUNCTION start_tally();
+BEGIN
+  state = ST_TALLY; tally_step = 0; tally_t = 50; tally_ammo = 0; tally_city = 0; tally_k = 0;
+  waves_cleared++;
+  pend_on = 0;
+  jingle(s_note[0], 6, 100, 126, 150, 200);
+  draw_panel();
+  sprite(320, 210, g_panel, -44);
+  RETURN 0;
+END
+
+FUNCTION draw_panel();
+PRIVATE s;
+BEGIN
+  gfx_fill_rgba(g_panel, 8, 12, 30, 78);
+  gfx_rect_outline(g_panel, 0, 0, 420, 170, 120, 200, 255);
+  ctext(g_panel, 210, 10, "WAVE " + wave + " CLEARED", 13 + ndig(wave), 30, 255, 230, 120);
+  s = "INTERCEPTORS LEFT  " + digits(tally_ammo * 5 * mult, 5);
+  ctext(g_panel, 210, 62, s, 24, 16, 200, 235, 255);
+  s = "DISTRICTS STANDING " + digits(tally_city, 5);
+  ctext(g_panel, 210, 88, s, 24, 16, 200, 235, 255);
+  IF (tally_step >= 3 AND rebuild_bank > 0) ctext(g_panel, 210, 124, "BONUS DISTRICTS IN RESERVE: " + rebuild_bank, 29, 14, 160, 255, 180); END
+  IF (tally_step >= 3 AND rebuild_bank == 0) ctext(g_panel, 210, 124, "NEXT DISTRICT AT " + next_rebuild, 17 + ndig(next_rebuild), 14, 170, 190, 220); END
+  RETURN 0;
+END
+
+// The tally, a step every few frames: ammo left, standing districts,
+// rebuilding, then the next wave.
+FUNCTION tally_update();
+PRIVATE k, done;
+BEGIN
+  tally_t--;
+  IF (tally_t > 0) RETURN 0; END
+  IF (tally_step == 0)
+    done = 1;
+    FROM k = 0 TO 2;
+      IF (done AND bat_ammo[k] > 0)
+        bat_ammo[k]--; tally_ammo++; add_score(5 * mult); done = 0;
+        play_sound(s_tick, 40, 100 + tally_ammo * 3, pan(bat_x[k]));
+      END
+    END
+    tally_t = 3;
+    IF (done) tally_step = 1; tally_t = 20; END
+    draw_panel();
+    RETURN 0;
+  END
+  IF (tally_step == 1)
+    WHILE (tally_k < 6 AND city_hp[tally_k] == 0) tally_k++; END
+    IF (tally_k < 6)
+      k = 100 * mult; IF (city_hp[tally_k] == 1) k = 50 * mult; END
+      tally_city += k; add_score(k);
+      city_flash[tally_k] = 8;
+      play_sound(s_note[4], 50, 100 + tally_k * 12, pan(city_x[tally_k]));
+      popup(city_x[tally_k] - 10, GROUND - 76, "" + k, '#a0ffb0');
+      tally_k++; tally_t = 14;
+    ELSE
+      tally_step = 2; tally_t = 20;
+    END
+    draw_panel();
+    RETURN 0;
+  END
+  IF (tally_step == 2)
+    // a bonus district rebuilds a destroyed one
+    tally_step = 3; tally_t = 90;
+    IF (rebuild_bank > 0)
+      FROM k = 0 TO 5;
+        IF (rebuild_bank > 0 AND city_hp[k] == 0)
+          rebuild_bank--; city_hp[k] = 2; draw_city(k); city_flash[k] = 20;
+          play_sound(s_rebuild, 70, 100, pan(city_x[k]));
+          popup(city_x[k] - 24, GROUND - 90, "REBUILT!", '#a0ffb0');
+          sparks(city_x[k], GROUND - 30, 16, 3);
+          tally_t = 120;
+        END
+      END
+    END
+    draw_panel();
+    RETURN 0;
+  END
+  signal(TYPE sprite, s_kill);
+  start_wave();
+  RETURN 1;
+END
+
+FUNCTION new_game();
+PRIVATE k;
+BEGIN
+  clear_world();
+  score = 0; wave = 0; next_rebuild = 10000; rebuild_bank = 0;
+  kills = 0; shots = 0; cities_lost = 0; max_chain = 0;
+  FROM k = 0 TO 5; city_hp[k] = 2; END
+  play_sound(s_start, 60, 100, 0);
+  start_wave();
+  RETURN 0;
+END
+
+FUNCTION go_title();
+PRIVATE k;
+BEGIN
+  clear_world();
+  state = ST_TITLE; st_t = 0; wave = 0; mult = 1;
+  FROM k = 0 TO 5; city_hp[k] = 2; END
+  FROM k = 0 TO 2; bat_alive[k] = 1; bat_ammo[k] = AMMO; END
+  set_palette(3);
+  redraw_world();
+  draw_help();
+  sprite(320, 118, g_title, -40);
+  sprite(320, 170, g_sub, -40);
+  sprite(320, 285, g_help, -40);
+  music(mus_title, 1);
+  RETURN 0;
+END
+
+FUNCTION game_over();
+PRIVATE n;
+BEGIN
+  state = ST_OVER; st_t = 0;
+  pend_on = 0;
+  do_flash(90, 255, 200, 160);
+  add_shake(20);
+  music(mus_over, 0);
+  gfx_fill_rgba(g_over, 8, 10, 26, 80);
+  gfx_rect_outline(g_over, 0, 0, 520, 190, 255, 120, 100);
+  ctext(g_over, 260, 12, "THE LIGHTS GO OUT", 17, 36, 255, 120, 100);
+  ctext(g_over, 260, 66, "SCORE " + score, 6 + ndig(score), 22, 255, 255, 255);
+  n = 14 + ndig(wave) + ndig(kills);
+  ctext(g_over, 260, 98, "WAVE " + wave + "   KILLS " + kills, n, 16, 200, 220, 255);
+  IF (score >= best AND score > 0) ctext(g_over, 260, 124, "NEW BEST!", 9, 18, 160, 255, 180);
+  ELSE ctext(g_over, 260, 124, "BEST " + best, 5 + ndig(best), 16, 170, 210, 255); END
+  RETURN 0;
+END
+
+// The title's own defence: fires at the lowest missile, leading it.
+FUNCTION demo_defence();
+PRIVATE k, bk, low, ly, ax, ay, t, i, d;
+BEGIN
+  low = -1; ly = 150;
+  FROM k = 0 TO EMAX;
+    IF (e_on[k] AND e_claim[k] == 0 AND e_y[k] > ly) low = k; ly = e_y[k]; END
+  END
+  IF (low < 0) RETURN 0; END
+  bk = 0; IF (e_x[low] > 213) bk = 1; END IF (e_x[low] > 426) bk = 2; END
+  t = 0.0;
+  FROM i = 1 TO 3;
+    ax = e_x[low] + e_vx[low] * (t + 12); ay = e_y[low] + e_vy[low] * (t + 12);
+    d = fget_distance(bat_x[bk], GROUND - 26, ax, ay);
+    t = fdiv(d, bat_spd[bk]);
+  END
+  e_claim[low] = 1;
+  bat_ammo[bk] = AMMO;
+  fire_from(bk, ax, ay);
+  shots--;
+  RETURN 1;
+END
+
+// =====================================================================
+// Input
+// =====================================================================
+
+FUNCTION read_input();
+PRIVATE ax, ay;
+BEGIN
+  pressed = mouse.left AND NOT prev_left;
+  prev_left = mouse.left;
+  IF (mouse.x != last_mx OR mouse.y != last_my)
+    IF (last_mx >= 0) aim_x = mouse.x; aim_y = mouse.y; END
+    last_mx = mouse.x; last_my = mouse.y;
+  END
+  IF (is_touch() AND mouse.left) touched = 1; cross_t = 20; aim_x = mouse.x; aim_y = mouse.y; END
+  ax = 0; ay = 0;
+  IF (key(_left) OR key(_a)) ax = -1; END
+  IF (key(_right) OR key(_d)) ax = 1; END
+  IF (key(_up) OR key(_w)) ay = -1; END
+  IF (key(_down) OR key(_s)) ay = 1; END
+  IF (ax != 0) aim_vx = clamp(aim_vx + ax * 0.7, -7.5, 7.5); ELSE aim_vx = 0; END
+  IF (ay != 0) aim_vy = clamp(aim_vy + ay * 0.7, -7.5, 7.5); ELSE aim_vy = 0; END
+  IF (ax != 0 OR ay != 0) touched = 0; END
+  aim_x = clamp(aim_x + aim_vx, 4, 636);
+  aim_y = clamp(aim_y + aim_vy, 30, GROUND - 36);
+  RETURN 0;
+END
+
+FUNCTION play_input();
+BEGIN
+  IF (pressed) fire_at(mouse.x, mouse.y); END
+  IF (key_pressed(_1)) IF (fire_from(0, aim_x, aim_y) == 0) play_sound(s_empty, 50, 100, -50); END END
+  IF (key_pressed(_2)) IF (fire_from(1, aim_x, aim_y) == 0) play_sound(s_empty, 50, 100, 0); END END
+  IF (key_pressed(_3)) IF (fire_from(2, aim_x, aim_y) == 0) play_sound(s_empty, 50, 100, 50); END END
+  IF (key_pressed(_space)) fire_at(aim_x, aim_y); END
+  IF (pend_on)
+    pend_t--;
+    IF (bat_cool[0] == 0 OR bat_cool[1] == 0 OR bat_cool[2] == 0)
+      pend_on = 0; fire_at(pend_x, pend_y);
+    END
+    IF (pend_t <= 0) pend_on = 0; END
+  END
+  RETURN 0;
+END
+
+FUNCTION pause_game();
+PRIVATE t, spr, pl;
+BEGIN
+  all_types(s_freeze);
+  paused = 1;
+  music_volume(16);
+  shx = 0; shy = 0;
+  spr = sprite(320, 220, g_pause, -70);
+  t = 0; pl = 1;
+  LOOP
+    t++;
+    draw_rect(0, 0, 640, 480, 'rgba(4,6,18,0.55)');
+    IF (t > 10 AND (key_pressed(_p) OR key_pressed(_esc) OR (mouse.left AND NOT pl))) BREAK; END
+    pl = mouse.left;
+    IF (key_pressed(_m)) music_on = 1 - music_on; mus_now = -1; END
+    FRAME;
+  END
+  signal(spr, s_kill);
+  prev_left = 1;
+  music_volume(42);
+  all_types(s_wakeup);
+  paused = 0;
+  RETURN 0;
+END
+
+// Ammo under each battery, the carrier's health, the flash.
+FUNCTION draw_overlay();
+PRIVATE k, i, bx, c;
+BEGIN
+  IF (state != ST_TITLE)
+    FROM k = 0 TO 2;
+      bx = bat_x[k];
+      IF (bat_alive[k] == 0)
+        set_color('#ff7060'); text(bx - 12, GROUND + 14, "DOWN");
+      ELSE
+        IF (bat_ammo[k] == 0)
+          set_color('#ffb060'); text(bx - 9, GROUND + 14, "OUT");
+        ELSE
+          i = 0;
+          WHILE (i < bat_ammo[k])
+            c = '#9ae8ff'; IF (bat_ammo[k] <= 3) c = '#ffc060'; END
+            draw_rect(bx - 22 + (i % 7) * 6, GROUND + 9 + (i / 7) * 10, 4, 8, c);
+            draw_rect(bx - 22 + (i % 7) * 6, GROUND + 9 + (i / 7) * 10, 4, 2, '#ffffff');
+            i++;
+          END
+        END
+      END
+    END
+  END
+  IF (boss_state == 1)
+    draw_rect(220, 30, 200, 8, 'rgba(0,0,0,0.6)');
+    draw_rect(221, 31, boss_hp * 198 / boss_max, 6, '#ff5a6a');
+    set_color('#ffd0d0'); text(254, 40, "HIVE CARRIER");
+  END
+  IF (flash > 0)
+    draw_rect(0, 0, 640, 480, 'rgba(' + flash_r + ',' + flash_g + ',' + flash_b + ',' + (flash * 0.006) + ')');
+    flash = flash * 0.82 - 1;
+  END
+  RETURN 0;
+END
+
+// =====================================================================
+// MAIN
+// =====================================================================
+PRIVATE k;
+BEGIN
+  set_mode(640, 480);
+  set_fps(60, 0);
+  screen_color('#05060f');
+  touch_pad(0); touch_buttons(""); touch_menu("p:Pause,m:Music");
+  make_graphics();
+  make_sounds();
+  make_songs();
+  sky(); painter(); crosshair();
+  FROM k = 0 TO 5; district(k); END
+  FROM k = 0 TO 2; battery(k); barrel(k); bat_ang[k] = 90000; END
+  hud_bar();
+  go_title();
+
+  LOOP
+    frame_no++; st_t++;
+    fps_now = get_fps();
+    read_input();
+    IF (key_pressed(_m) AND state != ST_OVER) music_on = 1 - music_on; k = mus_now; mus_now = -1; music(k, 1); END
+
+    // screen shake
+    IF (shake > 0.3)
+      shx = rand(-100, 100) * shake * 0.01; shy = rand(-100, 100) * shake * 0.01;
+      shake = shake * 0.86;
+    ELSE
+      shake = 0; shx = 0; shy = 0;
+    END
+
+    IF (state == ST_TITLE)
+      IF (st_t % 45 == 0 AND n_enemies < 8) missile(rand(40, 600), -6, rand(0, 5), 1.2, 0); END
+      IF (st_t % 26 == 0) demo_defence(); END
+      IF (st_t > 20 AND (pressed OR key_pressed(_enter) OR key_pressed(_space))) new_game(); pressed = 0; END
+    END
+
+    IF (state == ST_PLAY OR state == ST_TALLY)
+      IF (state == ST_PLAY) play_input(); wave_step(); ELSE tally_update(); END
+      IF (cities_standing() == 0 AND state != ST_OVER) game_over(); END
+      IF (key_pressed(_p) OR key_pressed(_esc)) pause_game(); END
+    END
+
+    IF (state == ST_OVER)
+      IF (st_t % 14 == 0 AND st_t < 110)
+        blast(rand(60, 580), GROUND - rand(10, 60), rand(24, 40), 0, 1);
+        boom_sound(320, 1); add_shake(8);
+      END
+      IF (st_t == 60) sprite(320, 220, g_over, -44); END
+      IF (st_t > 60)
+        IF ((st_t / 30) % 2 == 0) set_color('#ffe070'); text(248, 290, "CLICK, TAP OR ENTER: PLAY AGAIN"); END
+      END
+      IF (st_t > 90 AND (pressed OR key_pressed(_enter) OR key_pressed(_space))) new_game(); pressed = 0; END
+      IF (st_t > 90 AND key_pressed(_esc)) go_title(); END
+    END
+
+    draw_hud();
+    draw_overlay();
+    FRAME;
+  END
+END
