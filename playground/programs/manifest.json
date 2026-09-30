@@ -682,6 +682,18 @@
       "description": "A side-scrolling jump-and-stomp platformer: Rusty the fox runs, jumps and stomps through three worlds (Clover Meadow, Glowroot Cavern, Cloudtop Heights). Break bricks, open gift crates for glimmers, the Sun Berry that makes Rusty big and the Acorn Sling, light the lanterns and reach each Waystone. All pixel art, sound and music are made in code.",
       "controls": "Left/Right or A/D move, X or Shift run (hold), Z/Space/Up/W jump (hold for higher), X throws acorns once you have the sling; Enter/Space on screens",
       "touch": { "pad": "dpad", "buttons": "z:Jump,x:Run", "menu": "enter:Start" }
+    },
+    {
+      "id": "balloon-pop",
+      "title": "Balloon Pop",
+      "category": "kids",
+      "file": "balloon-pop.div",
+      "width": 640,
+      "height": 480,
+      "clearColor": "#9fd6f8",
+      "description": "A first game for small children (4-8): balloons float up and the card at the top shows, as a picture, which ones to pop - a colour, a shape, a number from 1 to 10 or a capital letter, or pop them all. Right balloons pop into confetti and fill a star, five stars bring fireworks and Bun the bunny; wrong ones only wobble. No timer, no losing; the pace adapts gently. Hold the little house to go back to the menu.",
+      "controls": "Tap (or click) the balloons; tap a picture on the menu to choose a game. Grown-ups: hold the house button (or Esc) for the menu, the speaker button (or M) turns the sound off; 1-5 pick a game on the menu",
+      "touch": false
     }
   ],
   "categories": [
@@ -712,6 +724,10 @@
     {
       "id": "online",
       "title": "Online"
+    },
+    {
+      "id": "kids",
+      "title": "For small children"
     }
   ]
 }
