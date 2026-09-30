@@ -25,6 +25,59 @@ Conventions used below:
   the call; called from MAIN they act on MAIN.
 - `—` in the Returns column means the function always returns `0`.
 
+## Language notes
+
+Behaviour of the language itself that the function tables below rely on.
+
+- **Names are case-insensitive**, as in DIV (DIV 2 manual 5.5: "ABc or abC
+  are the same name"): keywords, variables, constants, `STRUCT`s,
+  processes, functions and natives. `ST_CELEB`, `St_Celeb` and `st_celeb`
+  are one name: declaring two of them as `GLOBAL`s is a duplicate name
+  (the error shows the name in small letters), a `PRIVATE`, parameter or
+  process variable `st_celeb` hides a `GLOBAL ST_CELEB` inside its process,
+  and assigning `ST_CELEB = 4` in a process that declared neither creates
+  one variable that `st_celeb` also reads. Give different things names
+  that differ in more than case (a common pattern: `ST_CELEB` for a state
+  constant and `celeb_t` for a counter). Strings keep their case.
+- **Fields of another process** are read and written through anything
+  holding its id: a variable (`enemy.x`), an array cell (`enemies[i].x`)
+  or a `STRUCT` field (`squad[i].leader.x`), as well as `father`, `son`,
+  `bigbro` and `smallbro`. An id of no living process reads 0.
+- **SWITCH** takes DIV's form, each arm closed by its own `END`, a
+  CASE's values being numbers, expressions or ranges `min..max` (both
+  ends included) separated by commas:
+
+  ```
+  SWITCH (x)
+    CASE 1:        x = -1;  END
+    CASE 2..3, 99: x = -x;  END
+    DEFAULT:       x = 0;   END
+  END
+  ```
+
+  The first CASE that matches runs, and only that one (no fall-through,
+  so no `BREAK` is needed; `BREAK` inside a CASE leaves the loop around
+  the SWITCH). The older DivJS form, without `:` and without the arm's
+  `END` (an arm runs up to the next `CASE`, `DEFAULT` or the SWITCH's
+  `END`), is still accepted; the `:` decides, arm by arm.
+- **Division.** `/` is DIV's integer division (`7 / 2` is `3`, `-7 / 2` is
+  `-3`) unless a side of it is float-typed, and then it is an ordinary
+  division (`7 / 2.0` is `3.5`). Float-typed are: a number written with a
+  decimal point (`1.0`, `0.5`); `get_delta`, `get_time`, `sin`, `cos`,
+  `tan`, `torad`, `sqrt`, `lerp`, `hermite`, `smoothstep`, `song_time`;
+  arithmetic with a float-typed operand; a variable of a `PROCESS`, `FUNCTION` or the main
+  program from where it is given a float until it is given something
+  else (after an `IF`, a `SWITCH` or a loop, only if it is a float on
+  every path); and a `GLOBAL`, `LOCAL`, array, `STRUCT` field, parameter
+  or `FUNCTION` result that is given a float somewhere and otherwise only
+  whole literals (`speed = 0;`). `x`, `y`, `angle` and the other
+  predefined process fields are never float-typed. So `a = 5.0; a / 2` is
+  `2.5`, and `a = 5.0; a = int(a); a / 2` is `2`. `int(v) / n` always
+  divides whole numbers; `v * 1.0 / n` always divides as floats. When
+  neither side is float-typed but a value is not whole at run time
+  (`get_fps() / 2`), the division is not truncated either. Dividing by 0
+  gives 0.
+
 ## Input
 
 | Name | Arguments | Returns | Description |
@@ -147,7 +200,7 @@ layout for the next runs.
 |------|-----------|---------|-------------|
 | `advance` | `distance[, angle]` | — | Moves the current process `distance` pixels along its own `angle` (or the given one). |
 | `xadvance` | `distance, angle` | — | Moves the current process `distance` pixels along `angle`. |
-| `define_region` | `n, x, y, width, height` | `n` | Defines screen region `n` (1-31). An omitted size means the screen's. |
+| `define_region` | `n, x, y, width, height` | `n` | Defines screen region `n` (1-31). An omitted size means the screen's. A process whose `region` is `n` is only seen inside it (0, the default, is the whole screen; so is a region never defined); a scroll window started in it is drawn inside it. |
 | `out_region` | `id, region` | 1/0 | 1 when the graphic of process `id` is completely outside `region` (0 = the screen). A missing process gives 0. |
 | `out_of_region` | `[region]` | 1/0 | 1 when the current process's box touches or passes the edge of `region`. |
 | `exit_region` | `[region]` | 1/0 | Same as `out_of_region()`. |
@@ -155,6 +208,16 @@ layout for the next runs.
 | `exit_screen` | — | 1/0 | Same as `out_of_screen()`. |
 | `start_scroll` | `n, file, graph, back_graph, region, flags` | `n` | Starts scroll window `n`; flags 1/2 wrap the foreground horizontally/vertically. Driven by `scroll[n].x0/y0/camera/…`. |
 | `stop_scroll` | `n` | — | Stops scroll window `n`. |
+
+Drawing order: every process is painted by its `z`, the greatest first
+(furthest back), whether it is in a scroll window (`ctype = c_scroll`) or
+on the screen, so a screen process of a smaller `z` is painted over a
+scroll process and one of a greater `z` under it; the scroll windows'
+planes are painted behind every process. This differs from DIV, which
+paints each scroll window (its planes and its processes) as one layer at
+the depth `scroll[n].z` (512 by default, so screen processes at the
+default `z` 0 were over the whole window, and a screen process of `z`
+above 512 was hidden behind it); `scroll[n].z` has no effect in DivJS.
 
 ## Processes and signals
 
@@ -164,9 +227,9 @@ layout for the next runs.
 | `let_me_alone` | — | number | Kills every process except the current one. |
 | `__get_path` | `root, segments…` | value | Compiler-internal: reads `scroll[n].field`, `region…`, `father.field`, `son.field`, `bigbro.field`, `smallbro.field`. |
 | `__set_path` | `root, segments…, value` | value | Compiler-internal: writes the same paths. |
-| `__offset_local` | `slot` | reference | Compiler-internal: `OFFSET <local variable>` - a live reference to that slot of the running process or FUNCTION call. |
-| `__get_process_field` | `id, field` | value | Compiler-internal: reads `other.field` where `other` holds a process id. |
-| `__set_process_field` | `id, field, value` | value | Compiler-internal: writes `other.field`. |
+| `__offset_local` | `slot[, size]` | reference | Compiler-internal: `OFFSET <local variable>` - a live reference to that slot of the running process or FUNCTION call (with `size`, `OFFSET <local array>`). |
+| `__get_process_field` | `id, field` | value | Compiler-internal: reads `other.field` (or `a[i].field`, `s[i].f.field`) where `other` holds a process id. |
+| `__set_process_field` | `id, field, value` | value | Compiler-internal: writes `other.field` (or `a[i].field`, `s[i].f.field`). |
 
 ## Collision
 
@@ -219,10 +282,11 @@ layout for the next runs.
 | `gfx_circle` | `graph, cx, cy, radius, r, g, b` | — | Draws a filled circle. |
 | `gfx_circle_outline` | `graph, cx, cy, radius, r, g, b` | — | Draws a circle outline. |
 | `gfx_text` | `graph, x, y, text, r, g, b, size` | — | Draws text with the browser's monospace font. |
-| `circle` | `x, y, radius` | — | Draws a filled circle on screen for this frame, in the `set_color` colour. |
-| `draw_rect` | `x, y, width, height[, color]` | — | Draws a filled rectangle on screen for this frame. |
-| `text` | `x, y, text` | — | Draws text with the system font for this frame. |
+| `circle` | `x, y, radius` | — | Draws a filled circle on screen for this frame, in the `set_color` colour, on top of the processes (see `draw_z`). |
+| `draw_rect` | `x, y, width, height[, color]` | — | Draws a filled rectangle on screen for this frame, on top of the processes (see `draw_z`). |
+| `text` | `x, y, text` | — | Draws text with the system font for this frame, on top of the processes (see `draw_z`). |
 | `set_color` | `color` | — | Colour of later `write`, `text`, `circle`, `draw_rect`. |
+| `draw_z` | `[z]` | — | Depth plane of later `circle`, `text` and `draw_rect` calls, like a process's `z`: they are painted over the processes of a greater or equal `z` and under those of a smaller one, so an overlay can go behind sprites (`draw_z(1)` is behind processes at the default `z` 0). Without an argument (the start) they are painted on top of every process, as before. Like `set_color` it stays set until changed, for every process. Not a DIV function. |
 | `clear` | — | — | Drops this frame's `circle`/`text`/`draw_rect` drawings (`write` texts stay). |
 | `fade_off` | `[speed]` | — | Fades the screen to black (speed 1-64, default 8 = 8 frames). |
 | `fade_on` | `[speed]` | — | Fades back in. |
@@ -239,6 +303,53 @@ layout for the next runs.
 | `load_fnt` | `path` | font | Loads a DIV FNT font. |
 | `load_bdf_font` | `path` | font | Loads a BDF bitmap font. |
 | `load_bdf_font_text` | `bdf_source` | font | Loads a BDF font from its text. |
+
+## Strings
+
+Strings are values: `s = "text"` copies, `s = a + b` joins (numbers join
+as their text, `"score " + 10`), and `==` / `!=` compare them. So the DIV 2
+functions that change a string in place return the new one instead
+(`s = upper(s)`). Positions count from 0; anything that isn't a string
+is used as its text.
+
+| Name | Arguments | Returns | Description |
+|------|-----------|---------|-------------|
+| `strlen` | `string` | number | Number of characters. |
+| `char` | `string` | number | Character code of the first character (`char("A")` is 65); 0 for `""`. |
+| `asc` | `string[, index]` | number | Character code of the character at `index` (default 0); 0 past the end. Not a DIV function. |
+| `chr` | `code` | string | The one-character string with that character code (`chr(65)` is `"A"`). Not a DIV function. |
+| `substr` | `string, start[, count]` | string | `count` characters from `start` (all the rest without `count`); a negative `start` counts from the end (`substr(s, -3)` is the last three). Not a DIV function. |
+| `strdel` | `string, from_start, from_end` | string | The string without `from_start` characters at the start and `from_end` at the end. |
+| `upper` | `string` | string | The string in capitals. |
+| `lower` | `string` | string | The string in small letters. |
+| `strstr` | `string, part` | number | Position of the first `part` in `string`, -1 if it isn't there. |
+| `strchr` | `string, characters` | number | Position of the first character of `string` that is one of `characters`, -1 if none. |
+| `strcmp` | `a, b` | -1/0/1 | Compares two strings in character-code order: -1 if `a` comes first, 0 if equal, 1 if `b` comes first. |
+| `itoa` | `number` | string | The whole number as text (`itoa(42)` is `"42"`). |
+
+## Saved data
+
+Small data kept from one run of the game to the next (high scores,
+settings, progress): in the browser's `localStorage`, under the
+`PROGRAM`'s name, so the games of one site don't overwrite each other's
+(two programs with the same `PROGRAM` name share their data). Where the
+page may not use storage (blocked, a private window that refuses it) and
+outside a browser, the data lasts only while the page is open.
+
+Limits: numbers and strings only (other values save as 0 in a `save`
+block, and `save_data` refuses them); at most 65536 characters for one
+value or one `save` block once encoded (about 6000 numbers); and the
+browser's own limit, a few megabytes for everything a site stores. The
+calls return 0 instead of failing when the data can't be written; the
+player can clear it with the browser's site data.
+
+| Name | Arguments | Returns | Description |
+|------|-----------|---------|-------------|
+| `save_data` | `key, value` | 1/0 | Keeps a number or a string under the name `key`. 0 when it can't (not a number or string, too long, storage full or blocked). Not a DIV function. |
+| `load_data` | `key[, default]` | value | What `save_data` kept under `key`, or `default` (0 without it) when there is nothing. Not a DIV function. |
+| `delete_data` | `key` | 1/0 | Forgets what `save_data` or `save` kept under `key`; 1 if there was something. Not a DIV function. |
+| `save` | `name, OFFSET data[, count]` | 1/0 | DIV's `save`: keeps `count` cells from `data` under `name`. Without `count`, all of an array or `STRUCT` (`OFFSET scores`), or one variable; as in DIV, a count past one variable takes the `GLOBAL`s declared after it. |
+| `load` | `name, OFFSET data` | 1/0 | DIV's `load`: puts back what `save` kept under `name`, into `data` and the cells after it (no more than an array or `STRUCT` has). 0, leaving `data` alone, when nothing was saved under that name. |
 
 ## Path finding
 
@@ -307,6 +418,8 @@ shown with `[, id]` act on process `id`'s body instead when it is given.
 | `phys_raycast` | `x1, y1, x2, y2[, OFFSET hx, OFFSET hy]` | id | The first body the line from (x1, y1) to (x2, y2) hits (not the caller's), or 0; stores the hit point in `hx, hy`. |
 | `phys_awake` | `[id]` | 1/0 | 1 while the world simulates the body; 0 once it has come to rest and fallen asleep (until something touches it), and always 0 for static bodies. |
 | `phys_remove` | `[id]` | 1/0 | Removes the calling process's body (the process stays). |
+| `phys_ignore` | `a, b[, ignore]` | 1/0 | The bodies of processes `a` and `b` (0: the calling process) stop colliding with each other (`ignore` 1, the default), or collide again (0): a player and its own shots, a ghost through one wall. Works before the bodies exist and lasts until `phys_clear`. 0 when `a` and `b` are the same process or one doesn't exist. |
+| `phys_group` | `group[, id]` | 1/0 | Puts the body in `group` (a whole number from 1): bodies of the same group never collide with each other, and still collide with everything else (all of one player's shots). 0 takes it out of its group. Works before the body exists. |
 | `phys_clear` | — | 1 | Removes every body and joint (a new level). |
 | `phys_bodies` | — | number | How many bodies the world has. |
 
@@ -426,3 +539,5 @@ Constants: waveforms `wave_square`, `wave_triangle`, `wave_saw`,
 | `song_play` | `song[, loop]` | 1/0 | Plays the song (stopping the one playing), looping unless `loop` is 0. |
 | `song_stop` | — | 1 | Stops the music. |
 | `song_playing` | — | song | The song playing (or waiting for the player's first click), 0 for none. |
+| `song_time` | — | number | Seconds of the playing song heard so far, read from the audio clock (less the time the sound takes to reach the speakers), counting on through every loop: sync a rhythm game to this, not to frames. It stops while the sound is paused (a hidden page). 0 with no song, while it waits for the player's first click, and once a song that doesn't loop has ended. |
+| `song_step` | — | number | The step (sixteenth note, 4 a beat) of the song being heard, from 0 to the song's length - 1, back to 0 when it loops: `song_step() / 4` is the beat. -1 with no song. |

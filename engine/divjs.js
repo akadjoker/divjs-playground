@@ -98,6 +98,10 @@ var TokenType = {
   DOT: "DOT",
   COMMA: "COMMA",
   SEMICOLON: "SEMICOLON",
+  COLON: "COLON",
+  // : after a CASE's values or DEFAULT
+  DOTDOT: "DOTDOT",
+  // .. in a CASE range (1..3)
   // Special
   EOF: "EOF"
 };
@@ -246,6 +250,9 @@ var Lexer = class {
     let num = "";
     let seenDot = false;
     while (this.current() && /[0-9.]/.test(this.current())) {
+      if (this.current() === "." && this.peek() === ".") {
+        break;
+      }
       if (this.current() === ".") {
         if (seenDot) {
           throw new DivError(`Malformed number '${num}.'`, { stage: "lexer", line: startLine, col: startCol });
@@ -468,7 +475,16 @@ var Lexer = class {
           break;
         case ".":
           this.advance();
-          this.tokens.push(new Token(TokenType.DOT, ".", line, col));
+          if (this.current() === ".") {
+            this.advance();
+            this.tokens.push(new Token(TokenType.DOTDOT, "..", line, col));
+          } else {
+            this.tokens.push(new Token(TokenType.DOT, ".", line, col));
+          }
+          break;
+        case ":":
+          this.advance();
+          this.tokens.push(new Token(TokenType.COLON, ":", line, col));
           break;
         case ",":
           this.advance();
@@ -790,12 +806,12 @@ var Parser = class {
       this.pos++;
       return;
     }
-    const text = message || `Expected ${type}`;
+    const text2 = message || `Expected ${type}`;
     const previous = this.tokens[this.pos - 1];
     if (type === TokenType.SEMICOLON && previous && previous.endLine !== void 0) {
-      throw new DivError(text, { stage: "parser", line: previous.endLine, col: previous.endCol });
+      throw new DivError(text2, { stage: "parser", line: previous.endLine, col: previous.endCol });
     }
-    throw this.error(text);
+    throw this.error(text2);
   }
   // Consume a leading "COMPILER_OPTIONS ...;" directive, if present.
   // It isn't a keyword in the tokenizer - it arrives as a plain
@@ -1170,17 +1186,43 @@ var Parser = class {
   // sharing one body (matches if the subject equals *any* of them). At
   // least one CASE is required; DEFAULT is optional and - if present -
   // must be the last arm.
+  // SWITCH (subject) CASE ... END. Each arm takes DIV's form, "CASE 1, 3..5:
+  // statements END" and "DEFAULT: statements END" (DIV 2 manual, SWITCH
+  // statement), or the older DivJS form without ":" and without the arm's
+  // END, where an arm runs up to the next CASE, DEFAULT or the SWITCH's
+  // END. The ":" decides, arm by arm. A CASE value is an expression or a
+  // range "min..max" (both ends included).
   parseSwitch() {
     this.expect(TokenType.LPAREN, "Expected ( after SWITCH");
     const subject = this.parseExpression();
     this.expect(TokenType.RPAREN, "Expected ) after SWITCH subject");
+    this.match(TokenType.SEMICOLON);
+    const parseArmBody = (keyword) => {
+      if (this.match(TokenType.COLON)) {
+        const statements = this.parseBlockStatements();
+        this.expect(TokenType.END, `Expected END to close this ${keyword} (DIV form: ${keyword} ...: statements END)`);
+        this.match(TokenType.SEMICOLON);
+        return new Block(statements);
+      }
+      return new Block(this.parseBlockStatements());
+    };
+    const parseCaseValue = () => {
+      const value = this.parseExpression();
+      if (this.match(TokenType.DOTDOT)) {
+        const range = { type: "range", from: value, to: this.parseExpression() };
+        range.line = value.line;
+        range.col = value.col;
+        return range;
+      }
+      return value;
+    };
     const cases = [];
     while (this.match(TokenType.CASE)) {
-      const values = [this.parseExpression()];
+      const values = [parseCaseValue()];
       while (this.match(TokenType.COMMA)) {
-        values.push(this.parseExpression());
+        values.push(parseCaseValue());
       }
-      const body = new Block(this.parseBlockStatements());
+      const body = parseArmBody("CASE");
       cases.push({ values, body });
     }
     if (cases.length === 0) {
@@ -1188,7 +1230,7 @@ var Parser = class {
     }
     let defaultBody = null;
     if (this.match(TokenType.DEFAULT)) {
-      defaultBody = new Block(this.parseBlockStatements());
+      defaultBody = parseArmBody("DEFAULT");
     }
     this.expect(TokenType.END, "Expected END after SWITCH");
     return new Switch(subject, cases, defaultBody);
@@ -1481,7 +1523,10 @@ var Parser = class {
   }
   parsePrimaryInner() {
     if (this.match(TokenType.NUMBER)) {
-      return new Number2(parseFloat(this.previous().value));
+      const raw = this.previous().value;
+      const literal = new Number2(parseFloat(raw));
+      literal.isFloat = raw.includes(".");
+      return literal;
     }
     if (this.match(TokenType.STRING)) {
       return new String2(this.previous().value);
@@ -1531,7 +1576,9 @@ var OpCodes = {
   MUL: 34,
   // Multiplication
   DIV: 35,
-  // Division
+  // Division (integer when both values are whole)
+  FDIV: 38,
+  // Float division (a float-typed side, see Compiler.compile)
   MOD: 36,
   // Modulo
   NEG: 37,
@@ -1603,6 +1650,386 @@ function hashCode(str) {
 }
 function processTypeCode(name) {
   return -(1 + hashCode(String(name)) % 2147483646);
+}
+
+// compiler/floattypes.js
+function isFlowKey(key) {
+  return typeof key === "string" && !key.endsWith("[]") && (key.startsWith("PROCESS:") || key.startsWith("FUNCTION:") || key.startsWith("MAIN:"));
+}
+function isWholeLiteral(expr) {
+  if (!expr) {
+    return false;
+  }
+  if (expr.type === "number") {
+    return expr.isFloat !== true;
+  }
+  return expr.type === "unary" && expr.operator === "-" && isWholeLiteral(expr.operand);
+}
+function meet(states) {
+  const live = states.filter(Boolean);
+  if (live.length === 0) {
+    return null;
+  }
+  const out = /* @__PURE__ */ new Map();
+  for (const [key, value] of live[0]) {
+    if (value && live.every((s) => s.get(key) === true)) {
+      out.set(key, true);
+    }
+  }
+  return out;
+}
+function sameState(a2, b) {
+  if (a2 === null || b === null) {
+    return a2 === b;
+  }
+  if (a2.size !== b.size) {
+    return false;
+  }
+  for (const [key, value] of a2) {
+    if (b.get(key) !== value) {
+      return false;
+    }
+  }
+  return true;
+}
+var Walker = class {
+  constructor(info, floatNatives, typed) {
+    this.keys = info.keys;
+    this.calls = info.calls;
+    this.floatNatives = floatNatives;
+    this.typed = typed;
+    this.decisions = /* @__PURE__ */ new Map();
+    this.records = /* @__PURE__ */ new Map();
+    this.state = /* @__PURE__ */ new Map();
+    this.loops = [];
+    this.routine = null;
+  }
+  isTyped(key) {
+    return this.typed === null ? true : this.typed.has(key);
+  }
+  readKey(key) {
+    if (!key) {
+      return false;
+    }
+    if (isFlowKey(key)) {
+      return this.state !== null && this.state.get(key) === true;
+    }
+    return this.isTyped(key);
+  }
+  // `node` gives `key` the value `valueExpr`, which is a float or not.
+  give(node, key, isFloat, valueExpr) {
+    if (!key) {
+      return;
+    }
+    if (isFlowKey(key)) {
+      if (this.state !== null) {
+        this.state.set(key, isFloat);
+      }
+      return;
+    }
+    this.records.set(node, { key, isFloat, neutral: !isFloat && isWholeLiteral(valueExpr) });
+  }
+  // Walks the index expressions of an access path (they can hold
+  // divisions and calls of their own).
+  walkPath(expr) {
+    let node = expr;
+    while (node.type === "member_access" || node.type === "index_access") {
+      if (node.type === "index_access") {
+        this.expr(node.index);
+      }
+      node = node.object;
+    }
+  }
+  // Evaluates an expression for its effects (assignments, calls, nested
+  // divisions) and returns whether it is a float.
+  expr(expr) {
+    if (!expr) {
+      return false;
+    }
+    switch (expr.type) {
+      case "number":
+        return expr.isFloat === true;
+      case "identifier":
+        return this.readKey(this.keys.get(expr));
+      case "member_access":
+      case "index_access":
+        this.walkPath(expr);
+        return this.readKey(this.keys.get(expr));
+      case "unary": {
+        const operand = this.expr(expr.operand);
+        return expr.operator === "-" && operand;
+      }
+      case "binary": {
+        if (expr.operator === "&&" || expr.operator === "||") {
+          this.expr(expr.left);
+          const afterLeft = this.state && new Map(this.state);
+          this.expr(expr.right);
+          this.state = meet([afterLeft, this.state]);
+          return false;
+        }
+        const left = this.expr(expr.left);
+        const right = this.expr(expr.right);
+        if (expr.operator === "/") {
+          this.decisions.set(expr, left || right);
+        }
+        return ["+", "-", "*", "/", "%"].includes(expr.operator) && (left || right);
+      }
+      case "assign":
+        return this.assign(expr);
+      case "call":
+        return this.call(expr);
+      default:
+        return false;
+    }
+  }
+  assign(node) {
+    const target = node.target;
+    if (target.type === "member_access" || target.type === "index_access") {
+      this.walkPath(target);
+    }
+    const key = this.keys.get(target);
+    let isFloat;
+    if (node.operator) {
+      const current = this.readKey(key);
+      const value = this.expr(node.value);
+      if (node.operator === "/") {
+        this.decisions.set(node, current || value);
+      }
+      isFloat = current || value;
+      this.give(node, key, isFloat, null);
+    } else {
+      isFloat = this.expr(node.value);
+      this.give(node, key, isFloat, node.value);
+    }
+    return isFloat;
+  }
+  call(node) {
+    const info = this.calls.get(node);
+    const floats = node.args.map((arg) => this.expr(arg));
+    if (!info) {
+      return false;
+    }
+    if (info.kind === "NATIVE") {
+      return this.floatNatives.has(info.name);
+    }
+    info.params.forEach((param, i) => {
+      const key = info.paramKeys[i];
+      if (key) {
+        this.records.set(node.args[i], { key, isFloat: floats[i], neutral: !floats[i] && isWholeLiteral(node.args[i]) });
+      }
+    });
+    return info.kind === "FUNCTION" && this.isTyped(`R:${info.name}`);
+  }
+  block(block) {
+    for (const stmt of block && block.statements || []) {
+      this.stmt(stmt);
+    }
+  }
+  // Runs `body` (a function walking one pass of the loop) until the state
+  // at the top of the loop stops changing; continue states feed the top,
+  // break states the exit.
+  loop(pass) {
+    const entry = this.state;
+    let head = entry;
+    let exit = null;
+    for (let i = 0; i < 64; i++) {
+      const ctx = { breaks: [], continues: [] };
+      this.loops.push(ctx);
+      this.state = head && new Map(head);
+      const leftAt = pass();
+      this.loops.pop();
+      const end = this.state;
+      const next = meet([entry, end, ...ctx.continues]);
+      exit = meet([leftAt === void 0 ? head : leftAt, end, ...ctx.breaks]);
+      if (sameState(next, head)) {
+        break;
+      }
+      head = next;
+    }
+    this.state = exit;
+  }
+  stmt(stmt) {
+    switch (stmt.type) {
+      case "expression":
+        this.expr(stmt.expression);
+        break;
+      case "var":
+        this.give(stmt, this.keys.get(stmt), this.expr(stmt.value), stmt.value);
+        break;
+      case "frame":
+        this.expr(stmt.value);
+        break;
+      case "return":
+        if (stmt.value) {
+          const isFloat = this.expr(stmt.value);
+          if (this.routine.kind === "FUNCTION") {
+            this.records.set(stmt, { key: `R:${this.routine.name}`, isFloat, neutral: !isFloat && isWholeLiteral(stmt.value) });
+          }
+        }
+        this.state = null;
+        break;
+      case "break":
+        if (this.loops.length > 0) {
+          this.loops[this.loops.length - 1].breaks.push(this.state);
+        }
+        this.state = null;
+        break;
+      case "continue":
+        if (this.loops.length > 0) {
+          this.loops[this.loops.length - 1].continues.push(this.state);
+        }
+        this.state = null;
+        break;
+      case "if": {
+        this.expr(stmt.condition);
+        const before = this.state;
+        this.state = before && new Map(before);
+        this.block(stmt.thenBranch);
+        const afterThen = this.state;
+        this.state = before && new Map(before);
+        if (stmt.elseBranch) {
+          this.block(stmt.elseBranch);
+        }
+        this.state = meet([afterThen, this.state]);
+        break;
+      }
+      case "switch": {
+        this.expr(stmt.subject);
+        const before = this.state;
+        const ends = [];
+        for (const c of stmt.cases) {
+          this.state = before && new Map(before);
+          for (const value of c.values) {
+            this.expr(value.type === "range" ? value.from : value);
+            if (value.type === "range") {
+              this.expr(value.to);
+            }
+          }
+          this.block(c.body);
+          ends.push(this.state);
+        }
+        this.state = before && new Map(before);
+        if (stmt.defaultBody) {
+          this.block(stmt.defaultBody);
+        }
+        ends.push(this.state);
+        this.state = meet(ends);
+        break;
+      }
+      case "while":
+        this.loop(() => {
+          this.expr(stmt.condition);
+          const leftAt = this.state && new Map(this.state);
+          this.block(stmt.body);
+          return leftAt;
+        });
+        break;
+      case "loop":
+        this.loop(() => {
+          this.block(stmt.body);
+          return null;
+        });
+        break;
+      case "repeat":
+        this.loop(() => {
+          this.block(stmt.body);
+          this.expr(stmt.condition);
+          return void 0;
+        });
+        break;
+      case "cfor":
+        this.expr(stmt.init);
+        this.loop(() => {
+          this.expr(stmt.condition);
+          const leftAt = this.state && new Map(this.state);
+          this.block(stmt.body);
+          this.expr(stmt.step);
+          return leftAt;
+        });
+        break;
+      case "for": {
+        const key = this.keys.get(stmt);
+        this.give(stmt, key, this.expr(stmt.start), stmt.start);
+        this.expr(stmt.end);
+        const stepFloat = this.expr(stmt.step);
+        this.loop(() => {
+          const leftAt = this.state && new Map(this.state);
+          this.block(stmt.body);
+          if (key && isFlowKey(key) && this.state !== null) {
+            this.state.set(key, this.readKey(key) || stepFloat);
+          }
+          return leftAt;
+        });
+        if (key && !isFlowKey(key) && stmt.step) {
+          this.records.set(stmt.step, { key, isFloat: stepFloat, neutral: !stepFloat && isWholeLiteral(stmt.step) });
+        }
+        break;
+      }
+      default:
+        break;
+    }
+  }
+  // One body: its parameters start as their entry typing, PRIVATEs as
+  // their initial value.
+  routineBody(routine) {
+    this.routine = routine;
+    this.state = /* @__PURE__ */ new Map();
+    this.loops = [];
+    for (const key of routine.paramKeys) {
+      if (key && isFlowKey(key) && this.isTyped(key)) {
+        this.state.set(key, true);
+      }
+    }
+    for (const { node, key, value } of routine.inits) {
+      this.give(node, key, value ? this.expr(value) : false, value);
+    }
+    this.block(routine.body);
+  }
+  run(program) {
+    this.routine = { kind: "MAIN", name: "" };
+    this.state = null;
+    for (const { node, key, value } of program.declarations) {
+      this.give(node, key, this.expr(value), value);
+    }
+    for (const routine of program.routines) {
+      this.routineBody(routine);
+    }
+  }
+};
+function analyzeFloatDivisions(program, info, floatNatives) {
+  const run = (typed2) => {
+    const walker = new Walker(info, floatNatives, typed2);
+    walker.run(program);
+    const byKey = /* @__PURE__ */ new Map();
+    for (const record of walker.records.values()) {
+      if (!byKey.has(record.key)) {
+        byKey.set(record.key, []);
+      }
+      byKey.get(record.key).push(record);
+    }
+    return { walker, byKey };
+  };
+  let typed = null;
+  for (let i = 0; i < 64; i++) {
+    const { byKey } = run(typed);
+    const next = new Set([...byKey.keys()].filter((key) => byKey.get(key).every((r) => r.isFloat || r.neutral) && (typed === null || typed.has(key))));
+    if (typed !== null && next.size === typed.size) {
+      break;
+    }
+    typed = next;
+  }
+  const candidates = typed;
+  let reached = /* @__PURE__ */ new Set();
+  let last = run(reached);
+  for (let i = 0; i < 64; i++) {
+    const next = new Set([...candidates].filter((key) => reached.has(key) || (last.byKey.get(key) || []).some((r) => r.isFloat)));
+    if (next.size === reached.size) {
+      break;
+    }
+    reached = next;
+    last = run(reached);
+  }
+  return last.walker.decisions;
 }
 
 // compiler/compiler.js
@@ -1765,6 +2192,19 @@ var BUILTIN_CONSTANTS = Object.freeze({
 });
 var PROCESS_FIELD_NAMES = Object.freeze([...CANONICAL_LOCAL_SLOTS.keys()]);
 var RESERVED_PATH_ROOTS = /* @__PURE__ */ new Set(["scroll", "region", "father", "son", "bigbro", "smallbro", "mouse"]);
+var FLOAT_NATIVES = /* @__PURE__ */ new Set([
+  "get_delta",
+  "get_time",
+  "sin",
+  "cos",
+  "tan",
+  "torad",
+  "sqrt",
+  "lerp",
+  "hermite",
+  "smoothstep",
+  "song_time"
+]);
 function hasSideEffects(expr) {
   if (!expr) {
     return false;
@@ -1822,8 +2262,30 @@ var Compiler = class {
       col: node && Number.isInteger(node.col) ? node.col : null
     });
   }
-  // Compile program
+  // Compile program.
+  //
+  // "/" is DIV's integer division, but DivJS also has fractional numbers,
+  // and a JS number can't tell 5.0 from 5 at run time. So a first pass
+  // resolves every name, compiler/floattypes.js works out which "/" have
+  // a float-typed side ("1.0 / 2", "a = 5.0; a / 2") and, if any has, a
+  // second pass compiles those to FDIV (always a real division). Every
+  // other "/" stays DIV: an integer division when both values are whole.
   compile(program) {
+    this.floatInfo = { keys: /* @__PURE__ */ new WeakMap(), calls: /* @__PURE__ */ new WeakMap() };
+    this.floatDecisions = /* @__PURE__ */ new Map();
+    const bytecode = this.compileOnce(program);
+    const decisions = analyzeFloatDivisions(this.describeForFloatTyping(program), this.floatInfo, FLOAT_NATIVES);
+    this.floatInfo = null;
+    if (![...decisions.values()].some(Boolean)) {
+      return bytecode;
+    }
+    this.floatDecisions = decisions;
+    return this.compileOnce(program);
+  }
+  compileOnce(program) {
+    this.routine = { kind: "MAIN", name: "" };
+    this.switchDepth = 0;
+    this.forDepth = 0;
     this.constants = [];
     this.constantIndex = /* @__PURE__ */ new Map();
     this.instructions = [];
@@ -1871,6 +2333,7 @@ var Compiler = class {
     }
     const mainAddr = this.instructions.length;
     this.instructions[jumpToMain].operands[0] = mainAddr;
+    this.routine = { kind: "MAIN", name: "" };
     this.resetCanonicalLocals();
     this.declarePrivates(program.mainPrivates);
     this.emitLocalInitializers();
@@ -1894,6 +2357,8 @@ var Compiler = class {
         [...this.globalMap.entries()].filter(([, v]) => typeof v === "number")
       ),
       mainAddr,
+      // PROGRAM <name>: keys the program's saved data (save_data, save).
+      programName: program.name || "",
       // Same idea as functionTable/processTable entries' .locals - VAR
       // declarations made directly in the top-level BEGIN/END block, not
       // inside any PROCESS or FUNCTION, previously had no name-to-slot
@@ -2015,6 +2480,7 @@ var Compiler = class {
   // Compile function
   compileFunction(stmt) {
     const startAddr = this.instructions.length;
+    this.routine = { kind: "FUNCTION", name: stmt.name };
     const savedLocals = new Map(this.localMap);
     this.localMap = /* @__PURE__ */ new Map();
     for (let i = 0; i < stmt.params.length; i++) {
@@ -2133,6 +2599,7 @@ var Compiler = class {
   // Compile process
   compileProcess(stmt) {
     const startAddr = this.instructions.length;
+    this.routine = { kind: "PROCESS", name: stmt.name };
     this.processTable.set(stmt.name, {
       addr: startAddr,
       params: stmt.params,
@@ -2321,15 +2788,11 @@ var Compiler = class {
       }
       const matchJumps = [];
       for (let i = 0; i < switchCase.values.length - 1; i++) {
-        this.emit(OpCodes.LOAD_LOCAL, subjectIdx);
-        this.compileExpression(switchCase.values[i]);
-        this.emit(OpCodes.EQ);
+        this.emitCaseTest(subjectIdx, switchCase.values[i]);
         this.emit(OpCodes.JUMP_IF_TRUE, 0);
         matchJumps.push(this.instructions.length - 1);
       }
-      this.emit(OpCodes.LOAD_LOCAL, subjectIdx);
-      this.compileExpression(switchCase.values[switchCase.values.length - 1]);
-      this.emit(OpCodes.EQ);
+      this.emitCaseTest(subjectIdx, switchCase.values[switchCase.values.length - 1]);
       this.emit(OpCodes.JUMP_IF_FALSE, 0);
       nextCaseJump = this.instructions.length - 1;
       const bodyStart = this.instructions.length;
@@ -2348,6 +2811,23 @@ var Compiler = class {
     for (const jumpIdx of endJumps) {
       this.instructions[jumpIdx].operands[0] = switchEnd;
     }
+  }
+  // Pushes 1 when the SWITCH subject (in local slot subjectIdx) matches a
+  // CASE value: equal to it, or within a "min..max" range, ends included.
+  emitCaseTest(subjectIdx, value) {
+    if (value.type !== "range") {
+      this.emit(OpCodes.LOAD_LOCAL, subjectIdx);
+      this.compileExpression(value);
+      this.emit(OpCodes.EQ);
+      return;
+    }
+    this.emit(OpCodes.LOAD_LOCAL, subjectIdx);
+    this.compileExpression(value.from);
+    this.emit(OpCodes.GTE);
+    this.emit(OpCodes.LOAD_LOCAL, subjectIdx);
+    this.compileExpression(value.to);
+    this.emit(OpCodes.LTE);
+    this.emit(OpCodes.MUL);
   }
   // Compile for
   compileFor(stmt) {
@@ -2368,6 +2848,7 @@ var Compiler = class {
         stmt
       );
     }
+    this.recordKey(stmt, this.varKey(stmt.varName));
     const autoDirection = stmt.step === null;
     let constantStepValue;
     if (autoDirection) {
@@ -2546,6 +3027,7 @@ var Compiler = class {
       this.nextLocalSlot += 1;
       this.localMap.set(stmt.name, idx);
     }
+    this.recordKey(stmt, this.varKey(stmt.name));
     this.compileExpression(stmt.value);
     this.emit(OpCodes.STORE_LOCAL, idx);
   }
@@ -2555,6 +3037,10 @@ var Compiler = class {
       this.compileCompoundAssignment(stmt, false);
       return;
     }
+    this.compilePlainAssignment(stmt);
+    this.recordKey(stmt.target, this.targetKey(stmt.target));
+  }
+  compilePlainAssignment(stmt) {
     if (stmt.target.type === "identifier") {
       const name = stmt.target.name;
       if (this.localMap.has(name)) {
@@ -2629,6 +3115,8 @@ var Compiler = class {
       operator: stmt.operator,
       left: target,
       right: stmt.value,
+      // "t /= v" divides as floattypes.js decided for the statement.
+      floatDivision: this.floatDecisions.get(stmt) === true,
       line: stmt.line,
       col: stmt.col
     };
@@ -2641,6 +3129,7 @@ var Compiler = class {
     for (const temp of temps) {
       this.freeTemp(temp);
     }
+    this.recordKey(stmt.target, this.targetKey(stmt.target));
   }
   // Assignment in expression position: perform the store, then leave the
   // assigned value on the stack for the enclosing expression to consume
@@ -2674,12 +3163,132 @@ var Compiler = class {
       for (const temp of temps) {
         this.freeTemp(temp);
       }
+      this.recordKey(expr.target, this.targetKey(expr.target));
       return;
     }
     throw this.error(`Invalid assignment target: ${expr.target.type}`, expr);
   }
+  // Float typing (see compile()). Keys name what a value is stored in:
+  // G:<global>, G:<array>[], S:<struct>.<field>, L:<LOCAL>, R:<function>
+  // (its result) and <kind>:<routine>:<name> for parameters, PRIVATEs and
+  // other variables of one PROCESS/FUNCTION/MAIN. The predefined process
+  // fields (x, y, angle...) have no key: they are never float-typed.
+  routineVarKey(kind, routine, name) {
+    if (kind !== "FUNCTION") {
+      if (CANONICAL_LOCAL_SLOTS.has(name)) {
+        return null;
+      }
+      if ((this.localDecls || []).some((decl) => decl.name === name)) {
+        return `L:${name}`;
+      }
+    }
+    return `${kind}:${routine}:${name}`;
+  }
+  varKey(name) {
+    if (this.localMap.has(name)) {
+      if (name.startsWith("@tmp")) {
+        return null;
+      }
+      const entry = this.localMap.get(name);
+      const key = this.routineVarKey(this.routine.kind, this.routine.name, name);
+      return key && typeof entry === "object" && entry.isArray ? `${key}[]` : key;
+    }
+    if (this.globalMap.has(name)) {
+      const entry = this.globalMap.get(name);
+      return typeof entry === "object" && entry.isArray ? `G:${name}[]` : `G:${name}`;
+    }
+    return null;
+  }
+  // Key of an assignment target or a read: a variable, a cell of a
+  // declared array, or a field of a STRUCT (any record, any nesting).
+  targetKey(expr) {
+    if (expr.type === "identifier") {
+      return this.varKey(expr.name);
+    }
+    if (expr.type !== "member_access" && expr.type !== "index_access") {
+      return null;
+    }
+    let root = expr;
+    while (root.type === "member_access" || root.type === "index_access") {
+      root = root.object;
+    }
+    if (root.type !== "identifier") {
+      return null;
+    }
+    if (this.structMap.has(root.name) && !this.localMap.has(root.name)) {
+      return expr.type === "member_access" ? `S:${root.name}.${expr.property}` : null;
+    }
+    if (expr.type === "index_access" && expr.object === root) {
+      const key = this.varKey(root.name);
+      return key && key.endsWith("[]") ? key : null;
+    }
+    return null;
+  }
+  // First pass only: remembers what an assignment target, VAR or FOR
+  // variable names (see compiler/floattypes.js).
+  recordKey(node, key) {
+    if (this.floatInfo && node) {
+      this.floatInfo.keys.set(node, key);
+    }
+  }
+  // What floattypes.js needs to know about the program besides the bodies:
+  // the values given by declarations, and each PROCESS/FUNCTION/MAIN with
+  // the keys of its parameters and PRIVATEs.
+  describeForFloatTyping(program) {
+    const declarations = [];
+    for (const g2 of program.globals || []) {
+      if (g2.size !== void 0) {
+        for (const value of g2.initializers || []) {
+          declarations.push({ node: value, key: `G:${g2.name}[]`, value });
+        }
+      } else if (g2.value) {
+        declarations.push({ node: g2, key: `G:${g2.name}`, value: g2.value });
+      }
+    }
+    const structFields = (structName, def) => {
+      for (const f of def.fields || []) {
+        if (f.nested) {
+          structFields(structName, f.nested);
+        } else if (f.defaultValue && !f.size) {
+          declarations.push({ node: f, key: `S:${structName}.${f.name}`, value: f.defaultValue });
+        }
+      }
+    };
+    for (const st2 of program.structs || []) {
+      structFields(st2.name, st2);
+    }
+    for (const decl of program.locals || []) {
+      if (decl.value && decl.size === void 0 && !CANONICAL_LOCAL_SLOTS.has(decl.name)) {
+        declarations.push({ node: decl, key: `L:${decl.name}`, value: decl.value });
+      }
+    }
+    const routine = (kind, name, params, privates, body) => {
+      const inits = [];
+      for (const priv of privates || []) {
+        if (priv.size === void 0 && !params.includes(priv.name)) {
+          inits.push({ node: priv, key: this.routineVarKey(kind, name, priv.name), value: priv.value || null });
+        }
+      }
+      return {
+        kind,
+        name,
+        body,
+        paramKeys: params.map((param) => this.routineVarKey(kind, name, param)),
+        inits
+      };
+    };
+    const routines = [
+      ...(program.functions || []).map((f) => routine("FUNCTION", f.name, f.params, f.privates, f.body)),
+      ...(program.processes || []).map((p) => routine("PROCESS", p.name, p.params, p.privates, p.body)),
+      routine("MAIN", "", [], program.mainPrivates, { statements: program.mainBlock })
+    ];
+    return { declarations, routines };
+  }
   // Compile expression
   compileExpression(expr) {
+    if (this.floatInfo && (expr.type === "identifier" || expr.type === "member_access" || expr.type === "index_access")) {
+      this.floatInfo.keys.set(expr, this.targetKey(expr));
+    }
     switch (expr.type) {
       case "number":
         this.emit(OpCodes.LOAD_CONST, this.addConstant(expr.value));
@@ -2754,17 +3363,27 @@ var Compiler = class {
   // whichever process or call is running - the manual gives OFFSET for
   // any datum; it used to be refused for everything but GLOBALs, so DIV
   // code doing get_real_point(0, OFFSET my_x, OFFSET my_y) did not
-  // compile. Whole arrays aren't supported (DIV's pointer arithmetic on
-  // offsets has no equivalent here).
+  // compile. OFFSET of a whole array or STRUCT is a reference to its
+  // first cell that also carries its number of cells (`size`), for
+  // save/load; the natives that take one variable use the first cell.
+  // DIV's pointer arithmetic on offsets has no equivalent here.
   compileOffsetOperator(expr) {
     const name = expr.name;
     const local = this.localMap.get(name);
     if (local !== void 0) {
       if (typeof local === "object" && local.isArray) {
-        throw this.error(`OFFSET "${name}" - arrays aren't supported`, expr);
+        this.emit(OpCodes.LOAD_CONST, this.addConstant(local.base));
+        this.emit(OpCodes.LOAD_CONST, this.addConstant(local.size));
+        this.emit(OpCodes.CALL_NATIVE, "__offset_local", 2);
+        return;
       }
       this.emit(OpCodes.LOAD_CONST, this.addConstant(local));
       this.emit(OpCodes.CALL_NATIVE, "__offset_local", 1);
+      return;
+    }
+    const struct = this.structMap.get(name);
+    if (struct && !this.globalMap.has(name)) {
+      this.emit(OpCodes.LOAD_CONST, this.addConstant({ __divOffsetGlobal: true, slot: struct.base, size: struct.count * struct.instanceSize }));
       return;
     }
     if (!this.globalMap.has(name)) {
@@ -2772,7 +3391,8 @@ var Compiler = class {
     }
     const entry = this.globalMap.get(name);
     if (typeof entry === "object" && entry.isArray) {
-      throw this.error(`OFFSET "${name}" - arrays aren't supported`, expr);
+      this.emit(OpCodes.LOAD_CONST, this.addConstant({ __divOffsetGlobal: true, slot: entry.base, size: entry.size }));
+      return;
     }
     this.emit(OpCodes.LOAD_CONST, this.addConstant({ __divOffsetGlobal: true, slot: entry }));
   }
@@ -2825,7 +3445,7 @@ var Compiler = class {
         this.emit(OpCodes.MUL);
         break;
       case "/":
-        this.emit(OpCodes.DIV);
+        this.emit(expr.floatDivision || this.floatDecisions.get(expr) ? OpCodes.FDIV : OpCodes.DIV);
         break;
       case "%":
         this.emit(OpCodes.MOD);
@@ -2886,6 +3506,16 @@ var Compiler = class {
         `FUNCTION "${name}" expects ${functionInfo.params.length} argument(s), got ${argc}`,
         expr
       );
+    }
+    if (this.floatInfo) {
+      const kind = processInfo ? "PROCESS" : functionInfo ? "FUNCTION" : "NATIVE";
+      const params = (processInfo || functionInfo || { params: [] }).params;
+      this.floatInfo.calls.set(expr, {
+        kind,
+        name,
+        params,
+        paramKeys: params.map((param) => this.routineVarKey(kind, name, param))
+      });
     }
     for (const arg of expr.args) {
       this.compileExpression(arg);
@@ -3068,7 +3698,65 @@ var Compiler = class {
     this.emit(OpCodes.POP);
     return true;
   }
+  // True when `expr` (an access path) reads one plain value: a cell of a
+  // declared array, or a scalar field of a STRUCT record. Such a value can
+  // hold a process id, whose fields "a[0].x" / "s[i].enemy.x" then name.
+  isScalarValuePath(expr) {
+    if (expr.type !== "index_access" && expr.type !== "member_access") {
+      return false;
+    }
+    const path = this.collectPath(expr);
+    if (RESERVED_PATH_ROOTS.has(path.root)) {
+      return false;
+    }
+    if (path.segments.length === 1 && path.segments[0].kind === "index") {
+      const entry = this.localMap.has(path.root) ? this.localMap.get(path.root) : this.globalMap.get(path.root);
+      return !!entry && typeof entry === "object" && entry.isArray;
+    }
+    const st2 = this.localMap.has(path.root) ? null : this.structMap.get(path.root);
+    if (!st2) {
+      return false;
+    }
+    let fields = st2.fields;
+    let i = 0;
+    let scalar = false;
+    const segs = path.segments;
+    while (i < segs.length) {
+      scalar = false;
+      if (segs[i].kind === "index") {
+        i++;
+        continue;
+      }
+      const f = fields.get(segs[i].value);
+      if (!f) {
+        return false;
+      }
+      if (f.isNested) {
+        fields = f.nestedDef.fields;
+        i++;
+      } else if (f.size > 1) {
+        if (i + 1 >= segs.length || segs[i + 1].kind !== "index") {
+          return false;
+        }
+        i += 2;
+        scalar = true;
+      } else {
+        i++;
+        scalar = true;
+      }
+      if (scalar && i < segs.length) {
+        return false;
+      }
+    }
+    return scalar;
+  }
   compilePathGet(expr) {
+    if (expr.type === "member_access" && this.isScalarValuePath(expr.object)) {
+      this.compileExpression(expr.object);
+      this.emit(OpCodes.LOAD_CONST, this.addConstant(expr.property));
+      this.emit(OpCodes.CALL_NATIVE, "__get_process_field", 2);
+      return;
+    }
     const path = this.collectPath(expr);
     if (path.segments.length === 1 && path.segments[0].kind === "index") {
       const localEntry = this.localMap.get(path.root);
@@ -3146,6 +3834,14 @@ var Compiler = class {
     throw this.error(`"${path.root}" is not declared with this shape (not a STRUCT, and not an array with one index)`, path.node);
   }
   compilePathSet(targetExpr, valueExpr) {
+    if (targetExpr.type === "member_access" && this.isScalarValuePath(targetExpr.object)) {
+      this.compileExpression(targetExpr.object);
+      this.emit(OpCodes.LOAD_CONST, this.addConstant(targetExpr.property));
+      this.compileExpression(valueExpr);
+      this.emit(OpCodes.CALL_NATIVE, "__set_process_field", 3);
+      this.emit(OpCodes.POP);
+      return;
+    }
     const path = this.collectPath(targetExpr);
     if (path.segments.length === 1 && path.segments[0].kind === "index") {
       const localEntry = this.localMap.get(path.root);
@@ -4211,6 +4907,7 @@ var VM = class _VM {
   }
   // Load bytecode
   load(bytecode) {
+    this.programName = bytecode.programName || "";
     this.constants = bytecode.constants;
     this.bytecode = bytecode.instructions;
     this.processTable = bytecode.processTable || /* @__PURE__ */ new Map();
@@ -4556,6 +5253,16 @@ var VM = class _VM {
         } else {
           this.push(a2 / b);
         }
+        this.ip++;
+        break;
+      }
+      // "/" with a float-typed side (a float literal, a variable given a
+      // float value...): always a real division, since a whole value
+      // such as 5.0 can't be told from 5 at run time.
+      case OpCodes.FDIV: {
+        const b = this.pop();
+        const a2 = this.pop();
+        this.push(b === 0 ? 0 : a2 / b);
         this.ip++;
         break;
       }
@@ -5512,11 +6219,11 @@ async function loadDivFpgFromUrl(url) {
 async function loadDivFntFromUrl(url) {
   return parseDivFntBuffer(await fetchBuffer(url));
 }
-function renderDivFontText(ctx, font, x2, y, text, align = 0) {
+function renderDivFontText(ctx, font, x2, y, text2, align = 0) {
   if (!ctx || !font) {
     return 0;
   }
-  const lines = String(text).split("\n");
+  const lines = String(text2).split("\n");
   const widths = lines.map((line) => {
     let w = 0;
     for (let i = 0; i < line.length; i++) {
@@ -10438,6 +11145,8 @@ var PhysicsWorld = class _PhysicsWorld {
     this.nextJointId = 1;
     this.impacts = /* @__PURE__ */ new Map();
     this.pendingMaterials = /* @__PURE__ */ new Map();
+    this.groups = /* @__PURE__ */ new Map();
+    this.ignoredPairs = /* @__PURE__ */ new Set();
     this.anchor = null;
     this.substeps = 1;
     this.velocityIterations = 8;
@@ -10510,6 +11219,14 @@ var PhysicsWorld = class _PhysicsWorld {
         angle: -(Number(process.angle) || 0) * DIV_TO_RAD
       });
       body.setUserData(process);
+      const collides = body.shouldCollide;
+      body.shouldCollide = (that) => {
+        const other = that.getUserData();
+        if (other && this.ignoredPairs.has(_PhysicsWorld.pairKey(process.id, other.id))) {
+          return false;
+        }
+        return collides.call(body, that);
+      };
       entry = {
         process,
         body,
@@ -10525,8 +11242,62 @@ var PhysicsWorld = class _PhysicsWorld {
   }
   addFixture(entry, shape) {
     const m = entry.material;
-    entry.body.createFixture({ shape, density: m.density, friction: m.friction, restitution: m.restitution });
+    entry.body.createFixture({
+      shape,
+      density: m.density,
+      friction: m.friction,
+      restitution: m.restitution,
+      filterGroupIndex: -(this.groups.get(entry.process.id) || 0)
+    });
     entry.body.resetMassData();
+  }
+  // ── Collision filtering ───────────────────────────────────────────────
+  static pairKey(a2, b) {
+    return a2 < b ? `${a2}:${b}` : `${b}:${a2}`;
+  }
+  // Makes the contacts of the process's body be checked again (after a
+  // change of group or of ignored pairs): ones no longer allowed end.
+  refilter(processId) {
+    const entry = this.entries.get(processId);
+    if (!entry) {
+      return;
+    }
+    for (let f = entry.body.getFixtureList(); f; f = f.getNext()) {
+      f.setFilterGroupIndex(-(this.groups.get(processId) || 0));
+    }
+    entry.body.setAwake(true);
+  }
+  // Bodies in the same group (a whole number above 0) never collide with
+  // each other; 0 takes the body out of its group. Set before or after
+  // the body exists.
+  setGroup(process, group) {
+    if (!process) {
+      return 0;
+    }
+    const g2 = Math.max(0, Math.trunc(Number(group)) || 0);
+    if (g2 > 0) {
+      this.groups.set(process.id, g2);
+    } else {
+      this.groups.delete(process.id);
+    }
+    this.refilter(process.id);
+    return 1;
+  }
+  // The two processes' bodies stop (ignore 1) or go back to (0)
+  // colliding with each other, now or once they have bodies.
+  setIgnored(a2, b, ignore) {
+    if (!a2 || !b || a2 === b) {
+      return 0;
+    }
+    const key = _PhysicsWorld.pairKey(a2.id, b.id);
+    if (ignore) {
+      this.ignoredPairs.add(key);
+    } else {
+      this.ignoredPairs.delete(key);
+    }
+    this.refilter(a2.id);
+    this.refilter(b.id);
+    return 1;
   }
   pixels(process, value) {
     return (Number(value) || 0) / _PhysicsWorld.resolutionOf(process) / this.scale;
@@ -10600,6 +11371,8 @@ var PhysicsWorld = class _PhysicsWorld {
       this.destroyEntry(id, entry);
     }
     this.pendingMaterials.clear();
+    this.groups.clear();
+    this.ignoredPairs.clear();
   }
   // ── Motion ────────────────────────────────────────────────────────────
   setVelocity(process, vx, vy) {
@@ -10971,8 +11744,8 @@ function bytesToBase64Url(bytes) {
   }
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
-function base64UrlToBytes(text) {
-  const base64 = text.replace(/-/g, "+").replace(/_/g, "/");
+function base64UrlToBytes(text2) {
+  const base64 = text2.replace(/-/g, "+").replace(/_/g, "/");
   const binary = atob(base64 + "=".repeat((4 - base64.length % 4) % 4));
   return Uint8Array.from(binary, (c) => c.charCodeAt(0));
 }
@@ -10981,11 +11754,11 @@ async function encodeCode(value) {
   return CODE_PREFIX + bytesToBase64Url(new Uint8Array(await new Response(stream).arrayBuffer()));
 }
 async function decodeCode(code) {
-  const text = String(code || "").trim();
-  if (!text.startsWith(CODE_PREFIX)) {
+  const text2 = String(code || "").trim();
+  if (!text2.startsWith(CODE_PREFIX)) {
     throw new Error("That is not a DivJS connection code");
   }
-  const bytes = base64UrlToBytes(text.slice(CODE_PREFIX.length));
+  const bytes = base64UrlToBytes(text2.slice(CODE_PREFIX.length));
   const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
   return JSON.parse(await new Response(stream).text());
 }
@@ -11565,8 +12338,8 @@ function noteFrequency(token) {
   const midi = 12 * (Number(m[3]) + 1) + semitone;
   return 440 * Math.pow(2, (midi - 69) / 12);
 }
-function parseNotes(text, drums = false) {
-  const tokens = String(text || "").split(/[\s|]+/).filter((t) => t.length > 0);
+function parseNotes(text2, drums = false) {
+  const tokens = String(text2 || "").split(/[\s|]+/).filter((t) => t.length > 0);
   const events = [];
   let last = null;
   tokens.forEach((token, step) => {
@@ -11613,6 +12386,7 @@ var AudioEngine = class {
     this.songs = /* @__PURE__ */ new Map();
     this.nextSongId = 1;
     this.song = null;
+    this.endingSong = null;
     this.soundVolume = 1;
     this.musicVolume = 0.6;
     this.timer = 0;
@@ -11875,10 +12649,12 @@ var AudioEngine = class {
     this.context();
     s.started = true;
     s.nextTime = ctx.currentTime + 0.05;
+    s.startTime = s.nextTime;
     this.schedule();
     this.timer = setInterval(() => this.schedule(), SCHEDULE_EVERY_MS);
   }
   stopSong() {
+    this.endingSong = null;
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = 0;
@@ -11896,6 +12672,42 @@ var AudioEngine = class {
   get songPlaying() {
     return this.song ? this.song.id : 0;
   }
+  // The song being heard: the playing one, or a song that doesn't loop
+  // whose last steps are scheduled but not over yet.
+  heardSong(now) {
+    if (this.song) {
+      return this.song.started ? this.song : null;
+    }
+    const s = this.endingSong;
+    return s && now < s.nextTime ? s : null;
+  }
+  // Seconds of the song heard so far, from the audio clock (so it stays
+  // in step with the music, and stops while the sound is paused), less
+  // the time the sound takes to reach the speakers. Counts on through
+  // every loop. 0 with no song, or while it waits for the player's first
+  // click.
+  songTime() {
+    const ctx = sharedContext;
+    if (!ctx) {
+      return 0;
+    }
+    const latency = Number(ctx.outputLatency) || Number(ctx.baseLatency) || 0;
+    const now = ctx.currentTime - latency;
+    const s = this.heardSong(now);
+    return s ? Math.max(0, now - s.startTime) : 0;
+  }
+  // The step (sixteenth note) of the song being heard: 0 up to the song's
+  // length - 1, back to 0 when it loops. -1 with no song.
+  songStep() {
+    const ctx = sharedContext;
+    const latency = ctx ? Number(ctx.outputLatency) || Number(ctx.baseLatency) || 0 : 0;
+    const s = ctx ? this.heardSong(ctx.currentTime - latency) : null;
+    if (!s) {
+      return -1;
+    }
+    const stepTime = 60 / s.def.bpm / STEPS_PER_BEAT;
+    return Math.floor(this.songTime() / stepTime + 1e-9) % s.length;
+  }
   // Schedules every step that starts within the lookahead.
   schedule() {
     const s = this.song;
@@ -11911,6 +12723,7 @@ var AudioEngine = class {
           this.timer = 0;
           const nodes = s.nodes;
           setTimeout(() => nodes.clear(), 2e3);
+          this.endingSong = s;
           this.song = null;
           return;
         }
@@ -12028,6 +12841,138 @@ var AudioEngine = class {
   }
 };
 
+// vm/strings.js
+function text(value) {
+  return value === void 0 || value === null ? "" : String(value);
+}
+function whole(value, fallback = 0) {
+  const n = Math.trunc(Number(value));
+  return Number.isFinite(n) ? n : fallback;
+}
+var STRING_NATIVES = {
+  // DIV 2 names.
+  strlen: (s) => text(s).length,
+  strcmp: (a2, b) => {
+    const x2 = text(a2);
+    const y = text(b);
+    return x2 < y ? -1 : x2 > y ? 1 : 0;
+  },
+  strstr: (s, part) => text(s).indexOf(text(part)),
+  strchr: (s, chars) => {
+    const str = text(s);
+    const set = text(chars);
+    for (let i = 0; i < str.length; i++) {
+      if (set.includes(str[i])) {
+        return i;
+      }
+    }
+    return -1;
+  },
+  upper: (s) => text(s).toUpperCase(),
+  lower: (s) => text(s).toLowerCase(),
+  strdel: (s, fromStart, fromEnd) => {
+    const str = text(s);
+    const start = Math.max(0, whole(fromStart));
+    const end = Math.max(0, whole(fromEnd));
+    return start + end >= str.length ? "" : str.slice(start, str.length - end);
+  },
+  itoa: (n) => String(whole(n)),
+  char: (s) => {
+    const str = text(s);
+    return str.length > 0 ? str.charCodeAt(0) : 0;
+  },
+  // DivJS additions.
+  substr: (s, start, count) => {
+    const str = text(s);
+    let from = whole(start);
+    if (from < 0) {
+      from = Math.max(0, str.length + from);
+    }
+    const n = count === void 0 ? str.length : Math.max(0, whole(count));
+    return str.substr(from, n);
+  },
+  asc: (s, index) => {
+    const str = text(s);
+    const i = whole(index);
+    return i >= 0 && i < str.length ? str.charCodeAt(i) : 0;
+  },
+  chr: (code) => String.fromCharCode(Math.max(0, whole(code)) & 65535)
+};
+function registerStringNatives(vm) {
+  for (const [name, fn2] of Object.entries(STRING_NATIVES)) {
+    vm.registerNative(name, fn2);
+  }
+}
+
+// vm/storage.js
+var MAX_SAVED_CHARS = 65536;
+var memory = /* @__PURE__ */ new Map();
+var memoryStore = {
+  getItem: (key) => memory.has(key) ? memory.get(key) : null,
+  setItem: (key, value) => {
+    memory.set(key, String(value));
+  },
+  removeItem: (key) => {
+    memory.delete(key);
+  }
+};
+var backend = null;
+function storageBackend() {
+  if (backend) {
+    return backend;
+  }
+  backend = memoryStore;
+  try {
+    const ls = globalThis.localStorage;
+    if (ls) {
+      const probe = "__divjs_probe__";
+      ls.setItem(probe, "1");
+      ls.removeItem(probe);
+      backend = ls;
+    }
+  } catch {
+  }
+  return backend;
+}
+function isSavable(value) {
+  return typeof value === "number" && Number.isFinite(value) || typeof value === "string";
+}
+function storageWrite(key, value) {
+  let text2;
+  try {
+    text2 = JSON.stringify(value);
+  } catch {
+    return false;
+  }
+  if (text2.length > MAX_SAVED_CHARS) {
+    return false;
+  }
+  try {
+    storageBackend().setItem(key, text2);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function storageRead(key) {
+  try {
+    const text2 = storageBackend().getItem(key);
+    return text2 === null || text2 === void 0 ? void 0 : JSON.parse(text2);
+  } catch {
+    return void 0;
+  }
+}
+function storageRemove(key) {
+  try {
+    const store = storageBackend();
+    const had = store.getItem(key) !== null;
+    store.removeItem(key);
+    return had;
+  } catch {
+    return false;
+  }
+}
+
 // vm/runtime.js
 var CType = {
   C_SCREEN: 0,
@@ -12107,6 +13052,7 @@ var CanvasEngineRuntime = class _CanvasEngineRuntime {
     this.keyQueryCache = /* @__PURE__ */ new Map();
     this.drawCommands = [];
     this.currentColor = "#ffffff";
+    this.drawZ = null;
     this.cameraX = 0;
     this.cameraY = 0;
     this.totalTime = 0;
@@ -12673,6 +13619,13 @@ var CanvasEngineRuntime = class _CanvasEngineRuntime {
       }
     }
     return false;
+  }
+  // Not a DIV function: the depth plane (like a process's z) of the
+  // circle/text/draw_rect calls that follow, so they can sit between
+  // processes. Without an argument they go back on top of everything.
+  drawZNative(z2) {
+    this.drawZ = z2 === void 0 ? null : Number(z2) || 0;
+    return 0;
   }
   setColorNative(color) {
     this.currentColor = String(color);
@@ -13443,14 +14396,93 @@ var CanvasEngineRuntime = class _CanvasEngineRuntime {
       }
     }
   }
-  // OFFSET <local variable>: see compileOffsetOperator.
-  offsetLocalNative(slot) {
-    return {
+  // OFFSET <local variable> (and, with its size, OFFSET <local array>):
+  // see compileOffsetOperator.
+  offsetLocalNative(slot, size) {
+    const ref = {
       __divOffsetLocal: true,
       locals: this.vm.locals,
       slot: Number(slot),
       processId: this.vm.currentProcess ? this.vm.currentProcess.id : 0
     };
+    if (size !== void 0) {
+      ref.size = Number(size) || 1;
+    }
+    return ref;
+  }
+  // Saved data (save_data/load_data, DIV's save/load) is kept under the
+  // PROGRAM's name, so the games of one site don't overwrite each other's
+  // (two programs with the same name share it).
+  storageKey(kind, name) {
+    return `divjs:${this.vm.programName || ""}:${kind}:${String(name)}`;
+  }
+  saveDataNative(key, value) {
+    if (!isSavable(value) || !storageWrite(this.storageKey("data", key), value)) {
+      this.warnStorage("save_data", key);
+      return 0;
+    }
+    return 1;
+  }
+  loadDataNative(key, fallback) {
+    const value = storageRead(this.storageKey("data", key));
+    if (isSavable(value)) {
+      return value;
+    }
+    return fallback === void 0 ? 0 : fallback;
+  }
+  deleteDataNative(key) {
+    const hadData = storageRemove(this.storageKey("data", key));
+    const hadFile = storageRemove(this.storageKey("file", key));
+    return hadData || hadFile ? 1 : 0;
+  }
+  // References to the `count` cells that start at an OFFSET reference.
+  offsetCells(ref, count) {
+    const cells = [];
+    for (let i = 0; i < count; i++) {
+      cells.push({ ...ref, slot: ref.slot + i });
+    }
+    return cells;
+  }
+  // DIV's save(file, OFFSET data[, count]): stores `count` cells from
+  // `data` under the name `file` - without `count`, all of an array or
+  // STRUCT, or one variable. As in DIV, a count past one variable takes
+  // the variables declared after it.
+  saveNative(file, ref, count) {
+    if (!this.isOffsetRef(ref)) {
+      this.logFn("[warn] save(): the second argument must be OFFSET of a variable, array or STRUCT");
+      return 0;
+    }
+    const n = Math.max(1, Math.trunc(Number(count ?? ref.size ?? 1)) || 1);
+    const values = this.offsetCells(ref, n).map((cell) => {
+      const value = this.resolveOffsetRef(cell);
+      return isSavable(value) ? value : 0;
+    });
+    if (!storageWrite(this.storageKey("file", file), values)) {
+      this.warnStorage("save", file);
+      return 0;
+    }
+    return 1;
+  }
+  // DIV's load(file, OFFSET data): puts back what save() stored, as many
+  // cells as were saved (no more than an array or STRUCT has). 0 when
+  // nothing was saved under that name.
+  loadNative(file, ref) {
+    if (!this.isOffsetRef(ref)) {
+      this.logFn("[warn] load(): the second argument must be OFFSET of a variable, array or STRUCT");
+      return 0;
+    }
+    const values = storageRead(this.storageKey("file", file));
+    if (!Array.isArray(values)) {
+      return 0;
+    }
+    const n = Math.min(values.length, ref.size ?? values.length);
+    this.offsetCells(ref, n).forEach((cell, i) => {
+      this.writeOffsetRef(cell, isSavable(values[i]) ? values[i] : 0);
+    });
+    return 1;
+  }
+  warnStorage(what, key) {
+    this.logFn(`[warn] ${what}("${key}"): not saved - only numbers and strings of up to ${MAX_SAVED_CHARS} characters in all, and the browser's storage must be available and not full`);
   }
   countPersistentTexts() {
     let count = 0;
@@ -13461,7 +14493,7 @@ var CanvasEngineRuntime = class _CanvasEngineRuntime {
     }
     return count;
   }
-  writeNative(font, x2, y, align, text) {
+  writeNative(font, x2, y, align, text2) {
     if (this.drawCommands.length >= this.maxTexts && this.countPersistentTexts() >= this.maxTexts) {
       if (!this._warnedTextLimit) {
         this._warnedTextLimit = true;
@@ -13471,7 +14503,7 @@ var CanvasEngineRuntime = class _CanvasEngineRuntime {
       }
       return 0;
     }
-    const isOffset = this.isOffsetRef(text);
+    const isOffset = this.isOffsetRef(text2);
     const id = this.nextTextId++;
     this.drawCommands.push({
       type: "text",
@@ -13486,7 +14518,7 @@ var CanvasEngineRuntime = class _CanvasEngineRuntime {
       y: Number(y),
       // Keep the descriptor itself when it's an OFFSET, so the draw pass
       // re-resolves it; plain values are stringified once here as before.
-      text: isOffset ? text : String(text),
+      text: isOffset ? text2 : String(text2),
       color: this.currentColor,
       ctype: this.getCurrentCType(),
       fontId: Number(font) || 0,
@@ -13536,18 +14568,20 @@ var CanvasEngineRuntime = class _CanvasEngineRuntime {
       y: Number(y),
       r: Math.max(0, Number(radius)),
       color: this.currentColor,
-      ctype: this.getCurrentCType()
+      ctype: this.getCurrentCType(),
+      z: this.drawZ
     });
     return 0;
   }
-  textNative(x2, y, text) {
+  textNative(x2, y, text2) {
     this.drawCommands.push({
       type: "text",
       x: Number(x2),
       y: Number(y),
-      text: String(text),
+      text: String(text2),
       color: this.currentColor,
-      ctype: this.getCurrentCType()
+      ctype: this.getCurrentCType(),
+      z: this.drawZ
     });
     return 0;
   }
@@ -13559,7 +14593,8 @@ var CanvasEngineRuntime = class _CanvasEngineRuntime {
       width: Number(width),
       height: Number(height),
       color: color !== void 0 ? String(color) : this.currentColor,
-      ctype: this.getCurrentCType()
+      ctype: this.getCurrentCType(),
+      z: this.drawZ
     });
     return 0;
   }
@@ -13601,22 +14636,22 @@ var CanvasEngineRuntime = class _CanvasEngineRuntime {
   // for this program.
   registerTouchNatives() {
     const host = () => this.touchHost;
-    const text = (value) => value === void 0 || value === null || value === 0 ? "" : String(value);
+    const text2 = (value) => value === void 0 || value === null || value === 0 ? "" : String(value);
     this.vm.registerNative("touch_controls", (state = 1) => {
       host()?.setEnabled(Number(state) || 0);
       return 0;
     });
     this.vm.registerNative("touch_pad", (kind = 1, keys) => {
       const pad = ["none", "dpad", "stick"][Number(kind)] || "dpad";
-      host()?.patchLayout(keys === void 0 ? { pad } : { pad, padKeys: text(keys) });
+      host()?.patchLayout(keys === void 0 ? { pad } : { pad, padKeys: text2(keys) });
       return 0;
     });
     this.vm.registerNative("touch_buttons", (list) => {
-      host()?.patchLayout({ buttons: text(list) });
+      host()?.patchLayout({ buttons: text2(list) });
       return 0;
     });
     this.vm.registerNative("touch_menu", (list) => {
-      host()?.patchLayout({ menu: text(list) });
+      host()?.patchLayout({ menu: text2(list) });
       return 0;
     });
     this.vm.registerNative("is_touch", () => {
@@ -13678,7 +14713,9 @@ var CanvasEngineRuntime = class _CanvasEngineRuntime {
         audio.stopSong();
         return 1;
       },
-      song_playing: () => audio.songPlaying
+      song_playing: () => audio.songPlaying,
+      song_time: () => audio.songTime(),
+      song_step: () => audio.songStep()
     };
     for (const [name, fn2] of Object.entries(natives)) {
       this.vm.registerNative(name, fn2);
@@ -13786,6 +14823,8 @@ var CanvasEngineRuntime = class _CanvasEngineRuntime {
         return hit.id;
       },
       phys_remove: (id) => physics.remove(who(id)),
+      phys_group: (group, id) => physics.setGroup(who(id), group),
+      phys_ignore: (a2, b, on2) => physics.setIgnored(who(a2), who(b), on2 === void 0 ? 1 : Number(on2) || 0),
       phys_clear: () => {
         physics.clear();
         return 1;
@@ -14572,14 +15611,14 @@ var CanvasEngineRuntime = class _CanvasEngineRuntime {
     });
     return id;
   }
-  loadBdfFontTextNative(text) {
-    if (!text) {
+  loadBdfFontTextNative(text2) {
+    if (!text2) {
       return 0;
     }
     const id = this.reserveBitmapFont();
     const entry = this.bitmapFonts.get(id);
     try {
-      entry.font = parseBennuBdfFont(String(text));
+      entry.font = parseBennuBdfFont(String(text2));
       entry.loaded = true;
     } catch (error) {
       entry.error = error?.message || String(error);
@@ -14599,8 +15638,8 @@ var CanvasEngineRuntime = class _CanvasEngineRuntime {
         throw new Error(`HTTP ${response.status}`);
       }
       return response.text();
-    }).then((text) => {
-      entry.font = parseBennuBdfFont(text);
+    }).then((text2) => {
+      entry.font = parseBennuBdfFont(text2);
       entry.loaded = true;
     }).catch((error) => {
       entry.error = error?.message || String(error);
@@ -14668,11 +15707,11 @@ var CanvasEngineRuntime = class _CanvasEngineRuntime {
       dy: row === 1 ? -Math.round(height * 0.5) : row === 2 ? -height : 0
     };
   }
-  drawSystemText(x2, y, align, text, color) {
+  drawSystemText(x2, y, align, text2, color) {
     const w = FONT_6X8_WIDTH;
     const h = FONT_6X8_HEIGHT;
     const atlas = this.systemFontAtlas(color);
-    const str = String(text);
+    const str = String(text2);
     const offset = _CanvasEngineRuntime.textAlignOffset(align, str.length * w, h);
     let penX = Math.round(Number(x2) || 0) + offset.dx;
     const penY = Math.round(Number(y) || 0) + offset.dy;
@@ -14731,12 +15770,12 @@ var CanvasEngineRuntime = class _CanvasEngineRuntime {
     }
     return canvas;
   }
-  drawBitmapText(fontId, x2, y, align, text, color) {
+  drawBitmapText(fontId, x2, y, align, text2, color) {
     const entry = this.bitmapFonts.get(Number(fontId) || 0);
     if (!entry || !entry.loaded || !entry.font) {
       return false;
     }
-    const str = String(text);
+    const str = String(text2);
     const font = entry.font;
     const fillColor = String(color || this.ctx.fillStyle || "#ffffff");
     const lines = str.split("\n");
@@ -14879,6 +15918,7 @@ var CanvasEngineRuntime = class _CanvasEngineRuntime {
     this.vm.registerNative("write_int", this.writeIntNative.bind(this));
     this.vm.registerNative("delete_text", this.deleteTextNative.bind(this));
     this.vm.registerNative("set_color", this.setColorNative.bind(this));
+    this.vm.registerNative("draw_z", this.drawZNative.bind(this));
     this.vm.registerNative("clear", this.clearNative.bind(this));
     this.vm.registerNative("circle", this.circleNative.bind(this));
     this.vm.registerNative("text", this.textNative.bind(this));
@@ -14889,6 +15929,12 @@ var CanvasEngineRuntime = class _CanvasEngineRuntime {
     this.registerPhysicsNatives();
     this.registerNetNatives();
     this.registerAudioNatives();
+    registerStringNatives(this.vm);
+    this.vm.registerNative("save_data", this.saveDataNative.bind(this));
+    this.vm.registerNative("load_data", this.loadDataNative.bind(this));
+    this.vm.registerNative("delete_data", this.deleteDataNative.bind(this));
+    this.vm.registerNative("save", this.saveNative.bind(this));
+    this.vm.registerNative("load", this.loadNative.bind(this));
     this.vm.registerNative("collision_circle", this.collisionCircleNative.bind(this));
     this.vm.registerNative("collision_obb", this.collisionOBBNative.bind(this));
     this.vm.registerNative("collision_point", this.collisionPointNative.bind(this));
@@ -15065,13 +16111,13 @@ var CanvasEngineRuntime = class _CanvasEngineRuntime {
     c.stroke();
     return 0;
   }
-  gfxTextNative(id, x2, y, text, r, g2, b, size) {
+  gfxTextNative(id, x2, y, text2, r, g2, b, size) {
     const c = this._gfxCtx(id);
     if (!c) return 0;
     c.fillStyle = this._cssRGB(r, g2, b);
     c.font = `${Math.round(size || 12)}px monospace`;
     c.textBaseline = "top";
-    c.fillText(String(text), x2, y);
+    c.fillText(String(text2), x2, y);
     return 0;
   }
   transformPoint(x2, y, ctype) {
@@ -15546,7 +16592,20 @@ var CanvasEngineRuntime = class _CanvasEngineRuntime {
   drawProcessesFallback() {
     const processes = this.vm.processManager.getDrawList();
     const activeScrollEntries = this.state.scroll.map((entry, index) => ({ entry, index })).filter(({ entry }) => entry && entry.active);
+    const layered = this.drawCommands.filter((cmd) => cmd.z !== null && cmd.z !== void 0).sort((a2, b) => b.z - a2.z);
+    let nextLayered = 0;
+    const drawLayeredDeeperThan = (z2) => {
+      if (nextLayered >= layered.length || !(layered[nextLayered].z > z2)) {
+        return;
+      }
+      this.beginCommandDrawing();
+      while (nextLayered < layered.length && layered[nextLayered].z > z2) {
+        this.drawCommand(layered[nextLayered++]);
+      }
+      this.ctx.restore();
+    };
     for (const process of processes) {
+      drawLayeredDeeperThan(process.z || 0);
       if (process.sleeping) {
         continue;
       }
@@ -15565,14 +16624,23 @@ var CanvasEngineRuntime = class _CanvasEngineRuntime {
         }
         continue;
       }
+      const regionId = Number(process.region) || 0;
+      if (regionId > 0) {
+        this.withRegionClip(this.getRegionRect(regionId), () => this.drawProcessAt(process, 0, 0));
+        continue;
+      }
       this.drawProcessAt(process, 0, 0);
     }
+    drawLayeredDeeperThan(-Infinity);
   }
-  drawCommandsToCanvas() {
+  // Canvas state for drawing commands; the caller restores it.
+  beginCommandDrawing() {
     this.ctx.save();
     this.ctx.font = "8px JetBrains Mono, Consolas, monospace";
     this.ctx.textBaseline = "top";
-    const drawXput = (cmd, px, py) => {
+  }
+  drawCommand(cmd) {
+    const drawXput = (px, py) => {
       const drewSprite = this.drawGraphSprite(
         cmd.fileId,
         cmd.graphId,
@@ -15587,61 +16655,68 @@ var CanvasEngineRuntime = class _CanvasEngineRuntime {
         this.drawGraphPlaceholder(px, py, cmd.angle, cmd.size, cmd.size, cmd.color);
       }
     };
+    this.ctx.fillStyle = cmd.color;
+    this.ctx.strokeStyle = cmd.color;
+    const drawOne = (offsetX, offsetY) => {
+      const pos = {
+        x: cmd.x - offsetX,
+        y: cmd.y - offsetY
+      };
+      if (cmd.type === "circle") {
+        this.ctx.beginPath();
+        this.ctx.arc(pos.x, pos.y, cmd.r, 0, Math.PI * 2);
+        this.ctx.fill();
+        return;
+      }
+      if (cmd.type === "text") {
+        let text2 = cmd.text;
+        if (this.isOffsetRef(text2)) {
+          const value = this.resolveOffsetRef(text2);
+          text2 = text2.asInt ? String(Math.floor(Number(value) || 0)) : String(value);
+        }
+        const drewBitmap = cmd.fontId > 0 ? this.drawBitmapText(cmd.fontId, pos.x, pos.y, cmd.align || 0, text2, cmd.color) : false;
+        if (!drewBitmap) {
+          this.drawSystemText(pos.x, pos.y, cmd.align || 0, text2, cmd.color);
+        }
+        return;
+      }
+      if (cmd.type === "rect") {
+        this.ctx.fillRect(pos.x, pos.y, cmd.width, cmd.height);
+      }
+      if (cmd.type === "xput") {
+        drawXput(pos.x, pos.y);
+      }
+    };
+    const drawWithCommandRegion = (offsetX, offsetY) => {
+      if (cmd.region && cmd.region > 0) {
+        const regionRect = this.getRegionRect(cmd.region);
+        this.withRegionClip(regionRect, () => drawOne(offsetX, offsetY));
+        return;
+      }
+      drawOne(offsetX, offsetY);
+    };
+    if ((cmd.ctype ?? CType.C_SCREEN) === CType.C_SCROLL) {
+      const activeScrollEntries = this.state.scroll.map((entry, index) => ({ entry, index })).filter(({ entry }) => entry && entry.active);
+      if (activeScrollEntries.length === 0) {
+        drawWithCommandRegion(this.cameraX, this.cameraY);
+        return;
+      }
+      for (const { entry, index } of activeScrollEntries) {
+        const region = this.getRegionRect(entry.region);
+        const cam = this.getScrollCamera(index);
+        this.withRegionClip(region, () => drawWithCommandRegion(cam.x - region.x, cam.y - region.y));
+      }
+      return;
+    }
+    drawWithCommandRegion(0, 0);
+  }
+  drawCommandsToCanvas() {
+    this.beginCommandDrawing();
     for (const cmd of this.drawCommands) {
-      this.ctx.fillStyle = cmd.color;
-      this.ctx.strokeStyle = cmd.color;
-      const drawOne = (offsetX, offsetY) => {
-        const pos = {
-          x: cmd.x - offsetX,
-          y: cmd.y - offsetY
-        };
-        if (cmd.type === "circle") {
-          this.ctx.beginPath();
-          this.ctx.arc(pos.x, pos.y, cmd.r, 0, Math.PI * 2);
-          this.ctx.fill();
-          return;
-        }
-        if (cmd.type === "text") {
-          let text = cmd.text;
-          if (this.isOffsetRef(text)) {
-            const value = this.resolveOffsetRef(text);
-            text = text.asInt ? String(Math.floor(Number(value) || 0)) : String(value);
-          }
-          const drewBitmap = cmd.fontId > 0 ? this.drawBitmapText(cmd.fontId, pos.x, pos.y, cmd.align || 0, text, cmd.color) : false;
-          if (!drewBitmap) {
-            this.drawSystemText(pos.x, pos.y, cmd.align || 0, text, cmd.color);
-          }
-          return;
-        }
-        if (cmd.type === "rect") {
-          this.ctx.fillRect(pos.x, pos.y, cmd.width, cmd.height);
-        }
-        if (cmd.type === "xput") {
-          drawXput(cmd, pos.x, pos.y);
-        }
-      };
-      const drawWithCommandRegion = (offsetX, offsetY) => {
-        if (cmd.region && cmd.region > 0) {
-          const regionRect = this.getRegionRect(cmd.region);
-          this.withRegionClip(regionRect, () => drawOne(offsetX, offsetY));
-          return;
-        }
-        drawOne(offsetX, offsetY);
-      };
-      if ((cmd.ctype ?? CType.C_SCREEN) === CType.C_SCROLL) {
-        const activeScrollEntries = this.state.scroll.map((entry, index) => ({ entry, index })).filter(({ entry }) => entry && entry.active);
-        if (activeScrollEntries.length === 0) {
-          drawWithCommandRegion(this.cameraX, this.cameraY);
-          continue;
-        }
-        for (const { entry, index } of activeScrollEntries) {
-          const region = this.getRegionRect(entry.region);
-          const cam = this.getScrollCamera(index);
-          this.withRegionClip(region, () => drawWithCommandRegion(cam.x - region.x, cam.y - region.y));
-        }
+      if (cmd.z !== null && cmd.z !== void 0) {
         continue;
       }
-      drawWithCommandRegion(0, 0);
+      this.drawCommand(cmd);
     }
     this.ctx.restore();
     this.drawCommands = this.drawCommands.filter((cmd) => cmd.persistent);
@@ -16401,13 +17476,13 @@ function createNetPanel(doc = document, { inviteLink = null } = {}) {
     close,
     error
   };
-  function el(tag, style, text) {
+  function el(tag, style, text2) {
     const node = doc.createElement(tag);
     if (style) {
       node.style.cssText = style;
     }
-    if (text !== void 0) {
-      node.textContent = text;
+    if (text2 !== void 0) {
+      node.textContent = text2;
     }
     return node;
   }
@@ -16437,9 +17512,9 @@ function createNetPanel(doc = document, { inviteLink = null } = {}) {
     doc.body.appendChild(root);
     return { body, status, buttons, cancel };
   }
-  async function copyText(button, text, done) {
+  async function copyText(button, text2, done) {
     try {
-      await navigator.clipboard.writeText(text);
+      await navigator.clipboard.writeText(text2);
       button.textContent = done;
     } catch {
       button.textContent = "Select and copy it";
@@ -17105,9 +18180,9 @@ async function bootDivDemo(options) {
     onFrame,
     onError
   } = options || {};
-  const setLoading = (text) => {
+  const setLoading = (text2) => {
     if (!loadingElement) return;
-    loadingElement.textContent = text;
+    loadingElement.textContent = text2;
     loadingElement.classList.remove("hidden");
   };
   const hideLoading = () => {
@@ -17256,8 +18331,8 @@ function disassemble(bytecode) {
     for (let addr = range.addr; addr < range.end; addr++) {
       const instr = bytecode.instructions[addr];
       const opName = OpCodeNames[instr.opcode] || `UNKNOWN(0x${instr.opcode.toString(16)})`;
-      const { text, comment } = formatOperands(bytecode, instr, localsByIdx, globalsByIdx);
-      let line = `${String(addr).padStart(5, " ")}: ${opName.padEnd(14)} ${text}`;
+      const { text: text2, comment } = formatOperands(bytecode, instr, localsByIdx, globalsByIdx);
+      let line = `${String(addr).padStart(5, " ")}: ${opName.padEnd(14)} ${text2}`;
       if (comment) {
         line += `  ; ${comment}`;
       }
@@ -17362,8 +18437,8 @@ function bytesToBase64(bytes) {
 function scriptJson(value) {
   return JSON.stringify(value).replace(/</g, "\\u003c").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
 }
-function escapeHtml(text) {
-  return String(text).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+function escapeHtml(text2) {
+  return String(text2).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 }
 var ENGINE_NOTICE = `DivJS engine - https://github.com/akadjoker/divjs
 MIT License. Copyright (c) 2026 akadjoker
