@@ -268,6 +268,44 @@ for (const name of readdirSync(programsDir)) {
 	}
 }
 
+// Keep of Embers: the top-down adventure compiles with the processes and
+// functions its hero, foes, rooms and sprite sheet tiles are made of.
+{
+	const problems = [];
+	try
+	{
+		const { bytecode } = compileSource(readFileSync(join(programsDir, 'ember-keep.div'), 'utf-8'));
+		for (const name of ['hero', 'blade', 'slime', 'rat', 'brute', 'bandit', 'ghost', 'bat', 'spider', 'mimic', 'boss', 'chest', 'spikes', 'tl'])
+		{
+			if (!bytecode.processTable.has(name))
+			{
+				problems.push(`no PROCESS ${name}`);
+			}
+		}
+		for (const name of ['load_tiles', 'build_room', 'wall_tile', 'solid_at', 'fits', 'hurt_hero', 'open_door', 'font_part'])
+		{
+			if (!bytecode.functionTable.has(name))
+			{
+				problems.push(`no FUNCTION ${name}`);
+			}
+		}
+	}
+	catch (err)
+	{
+		problems.push(err?.message || String(err));
+	}
+	if (problems.length > 0)
+	{
+		console.log(`FAIL  ${'ember-keep (compile)'.padEnd(35)} ${problems.join(', ')}`);
+		fail += 1;
+	}
+	else
+	{
+		console.log(`OK    ${'ember-keep (compile)'.padEnd(35)} processes and functions present`);
+		ok += 1;
+	}
+}
+
 // Sky Shield: the missile defence game compiles with the processes and
 // functions its enemies, interceptors, blasts and waves are built from.
 {

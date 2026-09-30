@@ -130,6 +130,13 @@ const SHOTS = {
       ['press', 'ArrowUp'], ['wait', 500], ['press', 'ArrowUp'], ['wait', 500], ['press', 'Enter'], ['wait', 2700], ['press', 'f'], ['wait', 600],
       ['press', 'j'], ['wait', 300], ['press', 'k']]
   },
+  'ember-keep': {
+    seconds: 8,
+    setup: [['wait', 3000], ['press', 'Enter'], ['wait', 1200]],
+    play: [hold('ArrowLeft', 350), ['press', 'z'], ['wait', 300], ['press', 'z'], ['wait', 300], hold('ArrowRight', 800),
+      ['press', 'z'], ['wait', 300], ['press', 'z'], ['wait', 300], ['press', 'z'], ['wait', 200], hold('ArrowLeft', 2600),
+      ['press', 'z'], ['wait', 300], ['press', 'z']]
+  },
   'vector-asteroids': {
     seconds: 6,
     setup: [['wait', 1200], ['press', 'Enter'], ['wait', 800]],
