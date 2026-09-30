@@ -1,0 +1,2805 @@
+PROGRAM keyhole_hop;
+
+// ---------------------------------------------------------------------
+// KEYHOLE HOP - a puzzle platformer in fifteen small rooms.
+//
+// Pip the space scout has landed on the Keyhole Isles, where every path
+// home is shut behind a door. Each room fits on one screen: find a way
+// to its exit door. Keys open lock blocks, levers swap the yellow and
+// brown blocks, crates can be pushed (and slide on ice), blue buttons
+// hold the blue gates open while something stands on them, springs
+// throw you (and crates) up high, platforms ride along, and ladders
+// climb. Every room teaches one new idea.
+//
+// * Three worlds: CLOVER ISLE (grass), FROSTBITE PEAKS (ice: you and
+//   the crates slide) and SUNBAKED DUNES (enemies and angry blocks).
+// * Up to three stars a room: reach the door, pick up every gem, beat
+//   the par time. Progress and best times are saved (save_data).
+// * Controls with some weight: speed builds up and runs down, the jump
+//   is higher the longer it is held, it still works a few frames after
+//   running off a ledge (coyote time) and a press just before landing
+//   is kept (jump buffer).
+//
+// How it is made
+// * Every sprite and tile is cut out of Kenney's Pixel Platformer
+//   sheets (CC0) with load_tile: tiles are 18x18, characters 24x24,
+//   backgrounds 24x24. The screen is 432x252: a HUD bar of 18 pixels
+//   and a room of 24x13 tiles.
+// * Rooms are written as 13 strings of 24 characters (see lrow below).
+//   The still parts (ground, bridges, ladders, spikes, the door) are
+//   drawn once into the background with xput; the ground picks its
+//   edge tiles from its neighbours. Things that change (locks, yellow
+//   and brown blocks, gates, crates...) are processes.
+// * Collisions are tested against the room's cell array lv[] and a list
+//   of boxes (crates and angry blocks) and platforms, never against
+//   graphics; one controller process moves them all in a fixed order.
+// * Texts use a 5x7 pixel font built as a BDF font at start-up; sound
+//   effects are sfx_tone recipes and every world has its own tune.
+// Art: Kenney (kenney.nl), CC0.
+// ---------------------------------------------------------------------
+
+GLOBAL
+  // ---- screen and room geometry
+  SW = 432; SH = 252; TS = 18; GW = 24; GH = 13; OY = 18;
+  SHEET = '../assets/kenney/pixel-platformer/tilemap_packed.png';
+  CHARS = '../assets/kenney/pixel-platformer/tilemap-characters_packed.png';
+  BACKS = '../assets/kenney/pixel-platformer/tilemap-backgrounds_packed.png';
+
+  // ---- cell kinds of lv[]
+  C_AIR = 0; C_GROUND = 1; C_BRIDGE = 2; C_YEL = 3; C_BRN = 4; C_LOCK = 5;
+  C_SPIKE = 6; C_LADDER = 7; C_GATE = 8; C_STOP = 9; C_SPRING = 10;
+  lv[311];                   // the room: cell (tx, ty) is lv[ty * GW + tx]
+
+  // ---- graphics
+  tg[179];                   // the 180 tiles of the tile sheet
+  cg[26];                    // the 27 characters
+  bgt[23];                   // the 24 background tiles
+  g_hud = 0; g_star = 0; g_star_off = 0; g_sstar = 0; g_sstar_off = 0;
+  g_px[9];                   // particles: small squares of the palette
+  g_dot = 0; g_dot_off = 0; g_panel = 0; g_screen = 0; g_bar = 0; g_cold = 0; g_cold_s = 0;
+  f_small = 0; f_big = 0; f_huge = 0;
+
+  // ---- the current room
+  cur = 0;                   // room 0..14
+  world = 0;                 // 0 grass, 1 ice, 2 desert
+  NLEV = 15;
+  sw_state = 0;              // lever state: 0 yellow solid, 1 brown solid
+  plate_on = 0; gate_open = 0;
+  nkeys = 0; has_keys = 0;
+  gems_got = 0; gems_total = 0;
+  lt = 0; tsec = 0;          // frames and seconds spent in the room
+  frz = 0;                   // 1 while the room is frozen (door, death)
+  won = 0; dead_t = 0; exit_t = 0;
+  door_x = 0; door_y = 0;    // door cell
+  hint_t = 0; hint_id = 0; hint_sh = 0; up_id = 0; up_sh = 0;
+
+  // ---- player: feet at (pfx, pfy), box PHW each side, PH tall
+  pfx = 0.0; pfy = 0.0; pvx = 0.0; pvy = 0.0;
+  PHW = 6; PH = 19;
+  pground = 0; pcoy = 0; pbuf = 0; pjump = 0; pface = 1; pdead = 0;
+  pclimb = 0; pspring = 0; ppush = 0; pice = 0; pwalk = 0.0; pland = 0;
+  pon_k = 0; pon_i = 0;      // standing on: 0 floor, 1 platform, 2 box
+  stomp_fc = -1; fc = 0;
+
+  // ---- boxes: crates (1) and angry blocks (2); x, y is the top-left
+  NB = 0; BK_CRATE = 1; BK_THWOMP = 2;
+  bx_k[9]; bx_x[9]; bx_y[9]; bx_vx[9]; bx_vy[9]; bx_on[9]; bx_dx[9]; bx_dy[9];
+  bx_st[9]; bx_t[9]; bx_oy[9]; bx_live[9];
+
+  // ---- moving platforms (3 tiles wide), x, y top-left
+  NMP = 0;
+  mp_x[5]; mp_y[5]; mp_vx[5]; mp_vy[5]; mp_dx[5]; mp_dy[5]; mp_wait[5];
+
+  // ---- plates (buttons) and springs
+  NPL = 0; pl_x[7]; pl_y[7]; pl_down[7];
+  NSP = 0; sp_x[7]; sp_y[7]; sp_t[7];
+
+  // ---- flood fill for locks
+  fst[311];
+
+  // ---- screens
+  scr = 0;                   // 0 title, 1 map, 2 room
+  map_sel = 0; map_t = 0;
+  wipe_mode = 0; wipe_t = 0; WIPE_N = 30;
+  txt_a = 0; txt_sh = 0; fbuf = "";
+  load_n = 0;
+  first_clear = 0;
+
+  // ---- saved progress: stars (bits: 1 cleared, 2 all gems, 4 par) and
+  // best times in frames
+  lstars[14]; lbest[14];
+
+  // ---- sounds and music
+  s_jump = 0; s_land = 0; s_gem = 0; s_key = 0; s_unlock = 0; s_lever = 0;
+  s_deny = 0; s_spring = 0; s_push = 0; s_thud = 0; s_plate = 0; s_stomp = 0;
+  s_die = 0; s_door = 0; s_star = 0; s_select = 0; s_move = 0; s_step = 0;
+  s_climb = 0; s_slam = 0; s_gate = 0; s_nostar = 0;
+  m_title = 0; m_map = 0; m_world[2]; m_clear = 0;
+
+  // ---- 5x7 pixel font (rows of 5 bits written as 0/1 digits)
+  NGLYPH = 50;
+  fcode[49] = 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 33, 45, 58, 46, 39, 44, 47, 63, 42, 32, 40, 41, 43, 94;
+  fglyph[349] =
+    01110, 10011, 10101, 10101, 10101, 11001, 01110,   // 0
+    00100, 01100, 00100, 00100, 00100, 00100, 01110,   // 1
+    01110, 10001, 00001, 00010, 00100, 01000, 11111,   // 2
+    11110, 00001, 00001, 01110, 00001, 00001, 11110,   // 3
+    00010, 00110, 01010, 10010, 11111, 00010, 00010,   // 4
+    11111, 10000, 11110, 00001, 00001, 10001, 01110,   // 5
+    00110, 01000, 10000, 11110, 10001, 10001, 01110,   // 6
+    11111, 00001, 00010, 00100, 01000, 01000, 01000,   // 7
+    01110, 10001, 10001, 01110, 10001, 10001, 01110,   // 8
+    01110, 10001, 10001, 01111, 00001, 00010, 01100,   // 9
+    01110, 10001, 10001, 11111, 10001, 10001, 10001,   // A
+    11110, 10001, 10001, 11110, 10001, 10001, 11110,   // B
+    01110, 10001, 10000, 10000, 10000, 10001, 01110,   // C
+    11110, 10001, 10001, 10001, 10001, 10001, 11110,   // D
+    11111, 10000, 10000, 11110, 10000, 10000, 11111,   // E
+    11111, 10000, 10000, 11110, 10000, 10000, 10000,   // F
+    01110, 10001, 10000, 10111, 10001, 10001, 01111,   // G
+    10001, 10001, 10001, 11111, 10001, 10001, 10001,   // H
+    01110, 00100, 00100, 00100, 00100, 00100, 01110,   // I
+    00111, 00010, 00010, 00010, 00010, 10010, 01100,   // J
+    10001, 10010, 10100, 11000, 10100, 10010, 10001,   // K
+    10000, 10000, 10000, 10000, 10000, 10000, 11111,   // L
+    10001, 11011, 10101, 10101, 10001, 10001, 10001,   // M
+    10001, 11001, 10101, 10011, 10001, 10001, 10001,   // N
+    01110, 10001, 10001, 10001, 10001, 10001, 01110,   // O
+    11110, 10001, 10001, 11110, 10000, 10000, 10000,   // P
+    01110, 10001, 10001, 10001, 10101, 10010, 01101,   // Q
+    11110, 10001, 10001, 11110, 10100, 10010, 10001,   // R
+    01111, 10000, 10000, 01110, 00001, 00001, 11110,   // S
+    11111, 00100, 00100, 00100, 00100, 00100, 00100,   // T
+    10001, 10001, 10001, 10001, 10001, 10001, 01110,   // U
+    10001, 10001, 10001, 10001, 10001, 01010, 00100,   // V
+    10001, 10001, 10001, 10101, 10101, 10101, 01010,   // W
+    10001, 10001, 01010, 00100, 01010, 10001, 10001,   // X
+    10001, 10001, 01010, 00100, 00100, 00100, 00100,   // Y
+    11111, 00001, 00010, 00100, 01000, 10000, 11111,   // Z
+    00100, 00100, 00100, 00100, 00100, 00000, 00100,   // !
+    00000, 00000, 00000, 01110, 00000, 00000, 00000,   // -
+    00000, 00100, 00100, 00000, 00100, 00100, 00000,   // :
+    00000, 00000, 00000, 00000, 00000, 01100, 01100,   // .
+    00100, 00100, 01000, 00000, 00000, 00000, 00000,   // '
+    00000, 00000, 00000, 00000, 00100, 00100, 01000,   // ,
+    00001, 00010, 00010, 00100, 01000, 01000, 10000,   // /
+    01110, 10001, 00001, 00010, 00100, 00000, 00100,   // ?
+    00000, 10101, 01110, 11111, 01110, 10101, 00000,   // *
+    00000, 00000, 00000, 00000, 00000, 00000, 00000,   // space
+    00010, 00100, 01000, 01000, 01000, 00100, 00010,   // (
+    01000, 00100, 00010, 00010, 00010, 00100, 01000,   // )
+    00000, 00100, 00100, 11111, 00100, 00100, 00000,   // +
+    00100, 01110, 10101, 00100, 00100, 00100, 00100;   // ^ (an arrow up)
+  hexd[15] = '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F';
+
+  // ---- star shapes (rows of 0/1 digits): an 11x11 star and a 5x5 one
+  STAR_BIG[10] = 00000100000, 00000100000, 00001110000, 00001110000, 11111111111,
+    01111111110, 00111111100, 00111111100, 01111011110, 01110001110, 11000000011;
+  STAR_SMALL[4] = 00100, 01110, 11111, 01110, 01010;
+
+  // ---- the rooms: 13 rows of 24 cells each
+  //   #  ground              =  bridge (jump up through it)
+  //   a  yellow block        b  brown block (a lever swaps them)
+  //   L  lock block          K  key            *  gem
+  //   ^  spikes              H  ladder         I  blue gate
+  //   _  blue button         C  crate          S  spring
+  //   /  lever               M  platform (moves across)
+  //   V  platform (moves up and down)          !  platform stop
+  //   w  walker              f  bat            T  angry block
+  //   P  start               D  exit door      p  plant
+  lrow[194] =
+    // 1-1 FIRST STEPS
+    "........................",
+    "........................",
+    "........................",
+    "........................",
+    "........................",
+    "........................",
+    "..............*.........",
+    ".............===........",
+    ".........*..........*.D.",
+    "........###........#####",
+    "....*..#####p......#####",
+    ".P..p.########.....#####",
+    "########################",
+    // 1-2 KEY IDEA
+    "..................#.....",
+    "..................#.....",
+    "..................#.....",
+    "..................#.....",
+    "..................#.....",
+    "..K.....*.........#..*..",
+    ".===..............#.....",
+    ".......===........#.....",
+    "...........===....L.....",
+    "..................L...D.",
+    "..............p...L..###",
+    ".P..*.....#####...L..###",
+    "########################",
+    // 1-3 BOX STEP
+    "........................",
+    "........................",
+    "........................",
+    "........................",
+    "........................",
+    "........................",
+    "........................",
+    "...*..............*..D..",
+    "..===..........#########",
+    "...............#########",
+    ".........*.....#########",
+    ".P.......C.....#########",
+    "########################",
+    // 1-4 FLIP SIDE
+    "........................",
+    "........................",
+    "........................",
+    "........................",
+    "................*....D..",
+    "...................#####",
+    ".............aaaaaa.....",
+    "........../.............",
+    "........####............",
+    "...*....................",
+    "....bb..................",
+    "./.P..................*.",
+    "########################",
+    // 1-5 LADDER LANE
+    "........................",
+    "........................",
+    ".D..........*...........",
+    "####H...................",
+    "....H...................",
+    "....H.......*...........",
+    "....H....w..............",
+    "....################H...",
+    "....................H...",
+    "........*...........H...",
+    "....................H...",
+    ".P.....^^^.......*..H...",
+    "########################",
+    // 2-1 SLIDE RULE
+    "........................",
+    "........................",
+    "........................",
+    "........................",
+    "........................",
+    "............*...........",
+    "......................D.",
+    ".......*.......*.....###",
+    "...........####.........",
+    ".................###....",
+    ".....####...............",
+    ".P..^^^^^^^^^^^^^^^^^^^^",
+    "########################",
+    // 2-2 SPRING FEVER
+    "........................",
+    "........................",
+    "....................D...",
+    ".................#######",
+    "........................",
+    ".....*..................",
+    "...........*............",
+    "...............S........",
+    "........########........",
+    "........................",
+    "........................",
+    ".P...S......^^^^.....*..",
+    "########################",
+    // 2-3 ICE CUBES
+    "........................",
+    "........................",
+    "........................",
+    "........................",
+    "................I.......",
+    ".........*......I.......",
+    "....C...........I.......",
+    ".H######........I.......",
+    ".H..............I.......",
+    ".H............*.I.....*.",
+    ".H............#.I.......",
+    "PH..........._#.I....D..",
+    "########################",
+    // 2-4 LIFT OFF
+    "........................",
+    "........................",
+    "..................*.....",
+    "...............!........",
+    ".....................D..",
+    "....................####",
+    "..........*.............",
+    "........................",
+    ".*......................",
+    ".P......................",
+    "###M.........!V.........",
+    "###^^^^^^^^^^^^^^^^^^^^^",
+    "########################",
+    // 2-5 COLD STORAGE
+    "...#....................",
+    "...#....................",
+    "...#....................",
+    "...#......*.............",
+    "...#....................",
+    "...#......a.............",
+    "...#......a...*.........",
+    "...L..K...a.............",
+    "...L.aaa..a.............",
+    "...L......a.......*.....",
+    "...L......a.............",
+    ".D.L..../.a...C.......P/",
+    "########################",
+    // 3-1 HEAD HOPPER
+    "........................",
+    "........................",
+    "........................",
+    "......*.................",
+    "........................",
+    "...................*....",
+    "......f.................",
+    "...............####...D.",
+    "..........###......#####",
+    ".....###................",
+    "...........*............",
+    ".P...w...........w......",
+    "##########...###########",
+    // 3-2 THUD
+    "........................",
+    ".................*......",
+    "......T.....T....T......",
+    ".....................D..",
+    "...................#####",
+    "........................",
+    "........................",
+    "........................",
+    "........................",
+    "........................",
+    "........................",
+    ".P....*.....*...........",
+    "########################",
+    // 3-3 SKY LIFT
+    "....................L...",
+    "....K...............L.D.",
+    "..#####...!........#####",
+    "........................",
+    "................*.......",
+    ".........V..............",
+    "..........*.......S.....",
+    "..............######....",
+    ".......*................",
+    ".P........!.............",
+    "###M.........!..........",
+    "###^^^^^^^^^^^^^^^^^^^^^",
+    "########################",
+    // 3-4 PRESSURE POINT
+    "........................",
+    "........................",
+    "...........*............",
+    "..K........C............",
+    ".===...*...L............",
+    "......===.#.............",
+    "..........#........I....",
+    "....S.....#........I....",
+    "...###.H..#........I.D..",
+    ".......H..#........I####",
+    ".......H...........I####",
+    ".P.....H..._...*...I####",
+    "########################",
+    // 3-5 LAST DOOR
+    "...L....................",
+    "...L............*.......",
+    ".D.L............!....K/.",
+    "####aaaaaaaaaaa...######",
+    "........................",
+    "..........f.............",
+    "........................",
+    "...............V..####..",
+    "..*.............!.......",
+    "...........*............",
+    "........bbbbbbbb........",
+    ".P..w./.^^^^^^^^.S......",
+    "########################";
+
+  lname[14] = 'FIRST STEPS', 'KEY IDEA', 'BOX STEP', 'FLIP SIDE', 'LADDER LANE',
+    'SLIDE RULE', 'SPRING FEVER', 'ICE CUBES', 'LIFT OFF', 'COLD STORAGE',
+    'HEAD HOPPER', 'THUD', 'SKY LIFT', 'PRESSURE POINT', 'LAST DOOR';
+  lhint[14] =
+    'ARROWS MOVE - Z JUMPS - UP AT THE DOOR GOES IN',
+    'GRAB THE KEY, THEN TOUCH THE LOCK',
+    'WALK INTO THE CRATE TO PUSH IT - THEN CLIMB IT',
+    'X OR DOWN AT A LEVER SWAPS YELLOW AND BROWN',
+    'UP AND DOWN CLIMB LADDERS - JUMP ON ENEMIES',
+    'ICE! STEER AGAINST THE SLIDE TO STOP',
+    'SPRINGS THROW YOU UP - STEER IN THE AIR',
+    'CRATES SLIDE ON ICE - A CRATE HOLDS A BUTTON',
+    'RIDE THE PLATFORMS',
+    'FLIP, PUSH, FLIP AGAIN',
+    'A BOUNCE OFF AN ENEMY GOES HIGHER',
+    'ANGRY BLOCKS DROP - RIDE ONE BACK UP',
+    'PLATFORMS, A SPRING... AND A KEY',
+    'WHAT IS THAT LOCK HOLDING UP?',
+    'EVERYTHING YOU KNOW - GOOD LUCK!';
+  lpar[14] = 12, 22, 16, 22, 22, 12, 14, 18, 16, 36, 16, 20, 34, 40, 46;
+  wname[2] = 'CLOVER ISLE', 'FROSTBITE PEAKS', 'SUNBAKED DUNES';
+
+  // ---- world map: where each room's node is
+  node_x[14] = 26, 54, 30, 72, 116, 162, 196, 232, 212, 258, 306, 334, 372, 400, 392;
+  node_y[14] = 196, 160, 120, 92, 112, 152, 188, 156, 108, 76, 108, 150, 184, 142, 88;
+
+LOCAL
+  fx = 0.0; fy = 0.0;       // exact position of a moving thing
+
+// =====================================================================
+// Small helpers
+// =====================================================================
+
+FUNCTION iabs(v);
+BEGIN
+  IF (v < 0) RETURN -v; END
+  RETURN v;
+END
+
+FUNCTION sgn(v);
+BEGIN
+  IF (v > 0) RETURN 1; END
+  IF (v < 0) RETURN -1; END
+  RETURN 0;
+END
+
+// Cell coordinate of a pixel coordinate (floor, also for negatives)
+FUNCTION tcell(p);
+BEGIN
+  RETURN floor(p / 18.0);
+END
+
+// Cell kind at (tx, ty); the sides are walls, above the room is a
+// ceiling (the HUD), below it is open
+FUNCTION cell(tx, ty);
+BEGIN
+  IF (tx < 0 OR tx >= GW) RETURN C_GROUND; END
+  IF (ty < 0) RETURN C_GROUND; END
+  IF (ty >= GH) RETURN C_AIR; END
+  RETURN lv[ty * GW + tx];
+END
+
+// 1 when cell kind t blocks movement right now
+FUNCTION kind_solid(t);
+BEGIN
+  IF (t == C_GROUND OR t == C_LOCK) RETURN 1; END
+  IF (t == C_YEL) RETURN sw_state == 0; END
+  IF (t == C_BRN) RETURN sw_state == 1; END
+  IF (t == C_GATE) RETURN NOT gate_open; END
+  RETURN 0;
+END
+
+FUNCTION solid_c(tx, ty);
+BEGIN
+  RETURN kind_solid(cell(tx, ty));
+END
+
+FUNCTION solid_px(px, py);
+BEGIN
+  RETURN kind_solid(cell(tcell(px), tcell(py)));
+END
+
+// 1 when cell (tx, ty) is the top of a ladder
+FUNCTION ladder_top(tx, ty);
+BEGIN
+  RETURN cell(tx, ty) == C_LADDER AND cell(tx, ty - 1) != C_LADDER;
+END
+
+// 1 when the ground under a moving thing is solid from above: solid
+// cells, bridges and ladder tops (only from above)
+FUNCTION floor_c(tx, ty);
+PRIVATE t;
+BEGIN
+  t = cell(tx, ty);
+  IF (kind_solid(t)) RETURN 1; END
+  IF (t == C_BRIDGE) RETURN 1; END
+  IF (t == C_LADDER AND cell(tx, ty - 1) != C_LADDER) RETURN 1; END
+  RETURN 0;
+END
+
+FUNCTION k_left();  BEGIN RETURN key(_left) OR key(_a); END
+FUNCTION k_right(); BEGIN RETURN key(_right) OR key(_d); END
+FUNCTION k_up();    BEGIN RETURN key(_up) OR key(_w); END
+FUNCTION k_down();  BEGIN RETURN key(_down) OR key(_s); END
+FUNCTION k_jump();  BEGIN RETURN key(_z) OR key(_space) OR key(_k); END
+FUNCTION k_jump_p();
+BEGIN
+  RETURN key_pressed(_z) OR key_pressed(_space) OR key_pressed(_k);
+END
+FUNCTION k_act_p();
+BEGIN
+  RETURN key_pressed(_x) OR key_pressed(_down) OR key_pressed(_s) OR key_pressed(_j);
+END
+FUNCTION k_up_p();
+BEGIN
+  RETURN key_pressed(_up) OR key_pressed(_w);
+END
+FUNCTION k_ok_p();
+BEGIN
+  RETURN key_pressed(_enter) OR key_pressed(_z) OR key_pressed(_space) OR key_pressed(_k);
+END
+
+// A tile of the tile sheet as a graphic, cut out of the packed sheet
+FUNCTION cut_tile(n);
+BEGIN
+  RETURN load_tile(SHEET, (n % 20) * 18, (n / 20) * 18, 18, 18);
+END
+
+// =====================================================================
+// Pixel font: builds a BDF font text from the 5x7 glyphs, every pixel
+// drawn as sc x sc, and loads it
+// =====================================================================
+
+FUNCTION hex4(v);
+BEGIN
+  RETURN hexd[(v / 4096) % 16] + hexd[(v / 256) % 16] + hexd[(v / 16) % 16] + hexd[v % 16];
+END
+
+FUNCTION font_start(sc);
+BEGIN
+  fbuf = "STARTFONT 2.1\nFONT keyhole" + sc + "\nSIZE " + (7 * sc) + " 75 75\nFONTBOUNDINGBOX " + (5 * sc) + " " + (7 * sc) + " 0 0\n";
+  fbuf = fbuf + "CHARS " + (NGLYPH + 26) + "\n";
+  RETURN 0;
+END
+
+// Adds glyphs i0..i1 to the font text being built (spread over frames:
+// the whole font in one go is too much work for one frame)
+FUNCTION font_part(sc, i0, i1);
+PRIVATE s, i, r, k, c, n, bits, v, w, code, pass, row_s;
+BEGIN
+  w = 5 * sc;
+  s = "";
+  FOR i = i0 TO min(i1, NGLYPH - 1)
+    FOR pass = 0 TO 1
+      code = fcode[i];
+      IF (pass == 1)
+        // small letters are the capitals
+        IF (code < 65 OR code > 90) CONTINUE; END
+        code = code + 32;
+      END
+      s = s + "STARTCHAR g" + code + "\nENCODING " + code + "\nSWIDTH 500 0\nDWIDTH " + (6 * sc) + " 0\nBBX " + w + " " + (7 * sc) + " 0 0\nBITMAP\n";
+      FOR r = 0 TO 6
+        n = fglyph[i * 7 + r];
+        bits = 0;
+        FOR c = 0 TO 4
+          v = (n / pow(10, 4 - c)) % 10;
+          FOR k = 0 TO sc - 1
+            bits = bits * 2 + v;
+          END
+        END
+        bits = bits * pow(2, 16 - w);
+        row_s = hex4(bits) + "\n";
+        FOR k = 1 TO sc
+          s = s + row_s;
+        END
+      END
+      s = s + "ENDCHAR\n";
+    END
+  END
+  fbuf = fbuf + s;
+  RETURN 0;
+END
+
+FUNCTION font_finish();
+BEGIN
+  fbuf = fbuf + "ENDFONT\n";
+  RETURN load_bdf_font_text(fbuf);
+END
+
+// Text with a drop shadow (write texts stay until delete_text); the
+// shadow's id is left in txt_sh
+FUNCTION shadow_text(f, x, y, al, s, col);
+BEGIN
+  set_color('#2a2e3e');
+  txt_sh = write(f, x + 1, y + 1, al, s);
+  set_color(col);
+  RETURN write(f, x, y, al, s);
+END
+
+// =====================================================================
+// Graphics made in code: particles, stars, panels
+// =====================================================================
+
+FUNCTION make_square(sz, r, g, b);
+PRIVATE gr;
+BEGIN
+  gr = new_graphic(sz, sz);
+  gfx_fill(gr, r, g, b);
+  RETURN gr;
+END
+
+// A star from rows of 0/1 digits: filled with (r, g, b), outlined dark,
+// its top half a little lighter
+FUNCTION make_star(big, r, g, b, lr, lg, lb);
+PRIVATE n, gr, xx, yy, d, row, on, nb, i, pw;
+BEGIN
+  IF (big) n = 11; ELSE n = 5; END
+  gr = new_graphic(n + 2, n + 2);
+  // outline: every empty pixel next to a filled one
+  FOR yy = -1 TO n
+    FOR xx = -1 TO n
+      IF (NOT star_px(big, n, xx, yy))
+        nb = star_px(big, n, xx - 1, yy) OR star_px(big, n, xx + 1, yy) OR star_px(big, n, xx, yy - 1) OR star_px(big, n, xx, yy + 1);
+        IF (nb) gfx_pixel(gr, xx + 1, yy + 1, 67, 74, 95); END
+      ELSE
+        IF (yy < n / 2) gfx_pixel(gr, xx + 1, yy + 1, lr, lg, lb); ELSE gfx_pixel(gr, xx + 1, yy + 1, r, g, b); END
+      END
+    END
+  END
+  RETURN gr;
+END
+
+FUNCTION star_px(big, n, xx, yy);
+PRIVATE row;
+BEGIN
+  IF (xx < 0 OR yy < 0 OR xx >= n OR yy >= n) RETURN 0; END
+  IF (big) row = STAR_BIG[yy]; ELSE row = STAR_SMALL[yy]; END
+  RETURN (row / pow(10, n - 1 - xx)) % 10;
+END
+
+// A panel: dark outline, light face and a darker bottom lip
+FUNCTION make_panel(w, h);
+PRIVATE gr;
+BEGIN
+  gr = new_graphic(w, h);
+  gfx_rect(gr, 1, 0, w - 2, h, 67, 74, 95);
+  gfx_rect(gr, 0, 1, w, h - 2, 67, 74, 95);
+  gfx_rect(gr, 2, 2, w - 4, h - 4, 223, 246, 245);
+  gfx_rect(gr, 2, h - 6, w - 4, 4, 194, 227, 232);
+  gfx_rect(gr, 2, 2, w - 4, 2, 255, 255, 255);
+  RETURN gr;
+END
+
+FUNCTION make_graphics();
+PRIVATE i;
+BEGIN
+  FOR i = 0 TO 179
+    tg[i] = cut_tile(i);
+  END
+  FOR i = 0 TO 26
+    cg[i] = load_tile(CHARS, (i % 9) * 24, (i / 9) * 24, 24, 24);
+  END
+  FOR i = 0 TO 23
+    bgt[i] = load_tile(BACKS, (i % 8) * 24, (i / 8) * 24, 24, 24);
+  END
+  g_hud = new_graphic(SW, 18);
+  gfx_fill(g_hud, 67, 74, 95);
+  gfx_rect(g_hud, 0, 17, SW, 1, 42, 46, 62);
+  gfx_rect(g_hud, 0, 0, SW, 1, 110, 118, 146);
+  g_screen = new_graphic(SW, SH);
+  gfx_fill(g_screen, 29, 32, 48);
+  g_px[0] = make_square(2, 255, 255, 255);
+  g_px[1] = make_square(2, 254, 228, 129);
+  g_px[2] = make_square(3, 244, 180, 27);
+  g_px[3] = make_square(2, 54, 227, 119);
+  g_px[4] = make_square(3, 46, 176, 130);
+  g_px[5] = make_square(2, 221, 68, 44);
+  g_px[6] = make_square(3, 203, 129, 94);
+  g_px[7] = make_square(2, 76, 229, 253);
+  g_px[8] = make_square(3, 223, 246, 245);
+  g_px[9] = make_square(2, 159, 90, 82);
+  g_star = make_star(1, 244, 180, 27, 254, 228, 129);
+  g_star_off = make_star(1, 149, 154, 177, 190, 196, 214);
+  g_sstar = make_star(0, 244, 180, 27, 254, 228, 129);
+  g_sstar_off = make_star(0, 116, 122, 144, 149, 154, 177);
+  g_dot = new_graphic(4, 4);
+  gfx_rect(g_dot, 1, 0, 2, 4, 67, 74, 95);
+  gfx_rect(g_dot, 0, 1, 4, 2, 67, 74, 95);
+  gfx_rect(g_dot, 1, 1, 2, 2, 254, 228, 129);
+  g_dot_off = new_graphic(4, 4);
+  gfx_rect(g_dot_off, 1, 0, 2, 4, 67, 74, 95);
+  gfx_rect(g_dot_off, 0, 1, 4, 2, 67, 74, 95);
+  gfx_rect(g_dot_off, 1, 1, 2, 2, 190, 196, 214);
+  g_panel = make_panel(252, 128);
+  g_cold = new_graphic(SW, SH);
+  gfx_fill_rgba(g_cold, 110, 150, 235, 16);
+  g_cold_s = new_graphic(144, SH);
+  gfx_fill_rgba(g_cold_s, 110, 150, 235, 16);
+  g_bar = make_panel(300, 40);
+  RETURN 0;
+END
+
+// =====================================================================
+// Sound and music
+// =====================================================================
+
+FUNCTION make_sounds();
+BEGIN
+  s_jump = sfx_tone(wave_square, 300, 720, 110, 22);
+  s_land = sfx_tone(wave_sine, 160, 70, 50, 30);
+  s_gem = sfx_tone(wave_square, 1318, 1976, 90, 20);
+  s_key = sfx_tone(wave_triangle, 880, 1760, 180, 44);
+  s_unlock = sfx_tone(wave_noise, 1800, 300, 260, 36);
+  s_lever = sfx_tone(wave_square, 520, 390, 70, 26);
+  s_deny = sfx_tone(wave_saw, 150, 120, 140, 30);
+  s_spring = sfx_tone(wave_sine, 260, 1000, 180, 40);
+  s_push = sfx_tone(wave_noise, 400, 300, 40, 10);
+  s_thud = sfx_tone(wave_triangle, 140, 60, 90, 60);
+  s_plate = sfx_tone(wave_square, 700, 1050, 60, 20);
+  s_stomp = sfx_tone(wave_square, 700, 160, 110, 34);
+  s_die = sfx_tone(wave_saw, 620, 90, 420, 34);
+  s_door = sfx_tone(wave_triangle, 392, 1568, 320, 40);
+  s_star = sfx_tone(wave_square, 1568, 2093, 130, 22);
+  s_nostar = sfx_tone(wave_triangle, 330, 250, 120, 30);
+  s_select = sfx_tone(wave_square, 660, 990, 70, 22);
+  s_move = sfx_tone(wave_triangle, 700, 900, 50, 30);
+  s_step = sfx_tone(wave_noise, 900, 500, 20, 6);
+  s_climb = sfx_tone(wave_triangle, 500, 560, 30, 18);
+  s_slam = sfx_tone(wave_noise, 700, 80, 300, 60);
+  s_gate = sfx_tone(wave_sine, 300, 180, 160, 34);
+  RETURN 0;
+END
+
+FUNCTION make_songs();
+BEGIN
+  // Title: a cheerful call and answer in F major
+  m_title = song_new(138);
+  song_track(m_title, inst_square,
+    "F5 . A5 . C6 . A5 . G5 . . F5 E5 . C5 . | D5 . F5 . A5 . G5 . F5 - - . . . . . |" +
+    "F5 . A5 . C6 . D6 . C6 . A5 . G5 . F5 . | G5 . E5 . C5 . E5 . F5 - - - . . . . ", 22);
+  song_track(m_title, inst_bass,
+    "F2 . C3 . F3 . C3 . C3 . G3 . C3 . G3 . | Bb2 . F3 . Bb2 . F3 . F2 . C3 . F3 . C3 . |" +
+    "F2 . C3 . F3 . C3 . Bb2 . F3 . D3 . A3 . | C3 . G3 . C3 . G3 . F2 . C3 . F3 . . . ", 44);
+  song_track(m_title, inst_pluck,
+    ". . A4 . . . A4 . . . G4 . . . G4 . | . . F4 . . . F4 . . . A4 . . . A4 . |" +
+    ". . A4 . . . A4 . . . D4 . . . F4 . | . . E4 . . . G4 . . . A4 . . . . . ", 16);
+  song_track(m_title, inst_drums, "k . h . s . h . k k h . s . h h ", 26);
+
+  // Map: a slow stroll
+  m_map = song_new(104);
+  song_track(m_map, inst_triangle,
+    "C5 . . E5 . . G5 . A5 . G5 . E5 . . . | F5 . . A5 . . G5 . E5 . D5 . C5 . . . |" +
+    "D5 . . F5 . . A5 . G5 . F5 . E5 . . . | D5 . . E5 . . C5 - - - . . . . . . ", 34);
+  song_track(m_map, inst_bass,
+    "C3 . . . G3 . . . A2 . . . E3 . . . | F2 . . . C3 . . . C3 . . . G3 . . . |" +
+    "D3 . . . A3 . . . G2 . . . D3 . . . | G2 . . . G3 . . . C3 . . . . . . . ", 44);
+  song_track(m_map, inst_drums, "k . . h . . h . s . . h . . h . ", 18);
+
+  // Clover Isle: bouncy, C major
+  m_world[0] = song_new(132);
+  song_track(m_world[0], inst_square,
+    "G5 . E5 . C5 . E5 G5 . . A5 . G5 . E5 . | F5 . D5 . B4 . D5 F5 . . G5 . F5 . D5 . |" +
+    "E5 . G5 . C6 . B5 A5 . . G5 . E5 . C5 . | D5 . E5 . F5 . D5 C5 - - - . . . . . ", 20);
+  song_track(m_world[0], inst_bass,
+    "C3 . G3 . C3 . G3 . A2 . E3 . A2 . E3 . | D3 . A3 . D3 . A3 . G2 . D3 . G2 . D3 . |" +
+    "C3 . G3 . C3 . G3 . F2 . C3 . F2 . C3 . | G2 . D3 . G2 . B2 . C3 . G3 . C3 . . . ", 44);
+  song_track(m_world[0], inst_pluck,
+    ". . E4 . . . E4 . . . C4 . . . C4 . | . . F4 . . . F4 . . . D4 . . . D4 . |" +
+    ". . E4 . . . E4 . . . A4 . . . A4 . | . . B4 . . . F4 . . . E4 . . . . . ", 16);
+  song_track(m_world[0], inst_drums, "k . h . s . h . k . h k s . h . ", 26);
+
+  // Frostbite Peaks: glassy plucks in E minor over a pad
+  m_world[1] = song_new(112);
+  song_track(m_world[1], inst_pluck,
+    "E5 . B4 . G5 . B4 . F#5 . B4 . E5 . D5 . | C5 . G4 . E5 . G4 . D5 . A4 . B4 . . . |" +
+    "E5 . B4 . G5 . B4 . A5 . G5 . F#5 . E5 . | D5 . C5 . B4 . A4 . B4 - - - . . . . ", 34);
+  song_track(m_world[1], inst_pad,
+    "E4 - - - - - - - - - - - - - - - | C4 - - - - - - - D4 - - - - - - - |" +
+    "E4 - - - - - - - C4 - - - - - - - | A3 - - - - - - - B3 - - - - - - - ", 22);
+  song_track(m_world[1], inst_bass,
+    "E2 . . . E3 . . . E2 . . . B2 . . . | C3 . . . G2 . . . D3 . . . A2 . . . |" +
+    "E2 . . . E3 . . . C3 . . . G2 . . . | A2 . . . E3 . . . B2 . . . . . . . ", 42);
+  song_track(m_world[1], inst_drums, "k . . . h . . . s . . h . . h . ", 18);
+
+  // Sunbaked Dunes: a swaying D minor tune
+  m_world[2] = song_new(124);
+  song_track(m_world[2], inst_square,
+    "D5 . F5 . A5 . G5 F5 . E5 . F5 . D5 . . | C5 . E5 . G5 . F5 E5 . D5 . E5 . C5 . . |" +
+    "D5 . F5 . A5 . Bb5 A5 . G5 . A5 . F5 . . | E5 . C#5 . E5 . A4 D5 - - - . . . . . ", 20);
+  song_track(m_world[2], inst_bass,
+    "D3 . . A2 . . D3 . F3 . . A2 . . D3 . | C3 . . G2 . . C3 . E3 . . G2 . . C3 . |" +
+    "Bb2 . . F2 . . Bb2 . D3 . . F2 . . Bb2 . | A2 . . E2 . . A2 . D3 . . A2 . . D3 . ", 44);
+  song_track(m_world[2], inst_drums, "k . . h s . h . k . k h s . h h ", 26);
+
+  // Room clear: a short fanfare, played once
+  m_clear = song_new(160);
+  song_track(m_clear, inst_square, "C5 E5 G5 C6 . . G5 C6 - - - - . . . . ", 26);
+  song_track(m_clear, inst_bass, "C3 . G3 . C3 . G3 . C3 - - - . . . . ", 44);
+  RETURN 0;
+END
+
+// =====================================================================
+// Saved progress
+// =====================================================================
+
+FUNCTION load_progress();
+PRIVATE i;
+BEGIN
+  FOR i = 0 TO NLEV - 1
+    lstars[i] = load_data("s" + (i + 1), 0);
+    lbest[i] = load_data("t" + (i + 1), 0);
+  END
+  RETURN 0;
+END
+
+FUNCTION save_progress(i);
+BEGIN
+  save_data("s" + (i + 1), lstars[i]);
+  save_data("t" + (i + 1), lbest[i]);
+  RETURN 0;
+END
+
+// Bits without bit operators: b is 1, 2 or 4
+FUNCTION hasb(v, b);
+BEGIN
+  RETURN (v / b) % 2;
+END
+
+FUNCTION orb(v, b);
+BEGIN
+  IF (hasb(v, b)) RETURN v; END
+  RETURN v + b;
+END
+
+FUNCTION star_count(bits);
+BEGIN
+  RETURN hasb(bits, 1) + hasb(bits, 2) + hasb(bits, 4);
+END
+
+FUNCTION total_stars();
+PRIVATE i, n;
+BEGIN
+  n = 0;
+  FOR i = 0 TO NLEV - 1
+    n += star_count(lstars[i]);
+  END
+  RETURN n;
+END
+
+FUNCTION unlocked(i);
+BEGIN
+  IF (i == 0) RETURN 1; END
+  RETURN hasb(lstars[i - 1], 1) != 0;
+END
+
+// Seconds as M:SS
+FUNCTION clock_txt(s);
+PRIVATE m;
+BEGIN
+  m = s / 60;
+  s = s % 60;
+  IF (s < 10) RETURN "" + m + ":0" + s; END
+  RETURN "" + m + ":" + s;
+END
+
+// =====================================================================
+// Backgrounds: the sky of a world, xput into the screen's background
+// =====================================================================
+
+FUNCTION sky_tiles(w, x0, x1, y0);
+PRIVATE xx, yy, t;
+BEGIN
+  FOR xx = x0 TO x1 - 1 STEP 24
+    FOR yy = y0 TO SH - 1 STEP 24
+      t = 0;
+      IF (w == 0)
+        t = 0;
+        IF (yy >= 114) t = 16; END
+        IF (yy == 90) t = 9 + ((xx / 24) % 2) * 2; END
+      END
+      IF (w == 1)
+        t = 2;
+        IF (yy >= 114) t = 18; END
+        IF (yy == 90) t = 8 + ((xx / 24) % 2) * 2; END
+      END
+      IF (w == 2)
+        t = 4;
+        IF (yy >= 114) t = 20; END
+        IF (yy == 90) t = 12 + (xx / 24) % 2; END
+      END
+      xput(0, bgt[t], xx + 12, yy + 12, 0, 100, 0, 0);
+    END
+  END
+  // the ice world's sky is a little colder
+  IF (w == 1)
+    IF (x1 - x0 == SW) xput(0, g_cold, SW / 2, SH / 2, 0, 100, 0, 0); ELSE xput(0, g_cold_s, x0 + 72, SH / 2, 0, 100, 0, 0); END
+  END
+  RETURN 0;
+END
+
+// Top tiles of a world's ground: the closed row and the open row
+FUNCTION top_closed(w);
+BEGIN
+  IF (w == 1) RETURN 80; END
+  IF (w == 2) RETURN 40; END
+  RETURN 0;
+END
+
+FUNCTION top_open(w);
+BEGIN
+  RETURN top_closed(w) + 20;
+END
+
+FUNCTION is_ground(tx, ty);
+BEGIN
+  IF (tx < 0 OR tx >= GW OR ty < 0 OR ty >= GH) RETURN 1; END
+  RETURN lv[ty * GW + tx] == C_GROUND;
+END
+
+// The tile that draws ground cell (tx, ty): its edges follow the
+// neighbours (Kenney's sheet has top, middle and bottom rows of
+// left end, middle, right end and single pieces, and inner corners)
+FUNCTION ground_tile(tx, ty);
+PRIVATE su, sd, sl, sr, col, base;
+BEGIN
+  su = is_ground(tx, ty - 1); sd = is_ground(tx, ty + 1);
+  sl = is_ground(tx - 1, ty); sr = is_ground(tx + 1, ty);
+  col = 0;
+  IF (sl AND sr) col = 2; END
+  IF (sl AND NOT sr) col = 3; END
+  IF (sr AND NOT sl) col = 1; END
+  IF (NOT su)
+    IF (sd) base = top_open(world); ELSE base = top_closed(world); END
+  ELSE
+    IF (sd) base = 120; ELSE base = 140; END
+  END
+  IF (su AND sd AND sl AND sr)
+    IF (NOT is_ground(tx + 1, ty + 1)) RETURN 4; END
+    IF (NOT is_ground(tx - 1, ty + 1)) RETURN 5; END
+    IF (NOT is_ground(tx + 1, ty - 1)) RETURN 24; END
+    IF (NOT is_ground(tx - 1, ty - 1)) RETURN 25; END
+  END
+  RETURN base + col;
+END
+
+// =====================================================================
+// Rooms: reading the strings, painting the still parts, spawning
+// =====================================================================
+
+FUNCTION room_char(tx, ty);
+BEGIN
+  RETURN asc(lrow[cur * 13 + ty], tx);
+END
+
+// Reads room cur into lv[] (only the cells; things come later)
+FUNCTION read_room();
+PRIVATE tx, ty, c, k;
+BEGIN
+  FOR ty = 0 TO GH - 1
+    FOR tx = 0 TO GW - 1
+      c = room_char(tx, ty);
+      k = C_AIR;
+      SWITCH (c)
+        CASE 35: k = C_GROUND; END          // #
+        CASE 61: k = C_BRIDGE; END          // =
+        CASE 97: k = C_YEL; END             // a
+        CASE 98: k = C_BRN; END             // b
+        CASE 76: k = C_LOCK; END            // L
+        CASE 94: k = C_SPIKE; END           // ^
+        CASE 72: k = C_LADDER; END          // H
+        CASE 73: k = C_GATE; END            // I
+        CASE 33: k = C_STOP; END            // !
+        CASE 83: k = C_SPRING; END          // S
+      END
+      lv[ty * GW + tx] = k;
+    END
+  END
+  RETURN 0;
+END
+
+// Paints the room's still parts into the background: sky, HUD bar,
+// ground, bridges, ladders, spikes, plants and the door
+FUNCTION paint_room();
+PRIVATE tx, ty, t, c, px, py, l, r, h;
+BEGIN
+  put_screen(0, g_screen);
+  sky_tiles(world, 0, SW, 18);
+  xput(0, g_hud, SW / 2, 9, 0, 100, 0, 0);
+  FOR ty = 0 TO GH - 1
+    FOR tx = 0 TO GW - 1
+      t = lv[ty * GW + tx];
+      px = tx * 18 + 9; py = ty * 18 + 9 + OY;
+      IF (t == C_GROUND)
+        xput(0, tg[ground_tile(tx, ty)], px, py, 0, 100, 0, 0);
+      END
+      IF (t == C_BRIDGE)
+        l = cell(tx - 1, ty) == C_BRIDGE; r = cell(tx + 1, ty) == C_BRIDGE;
+        c = 146;
+        IF (l AND r) c = 49; END
+        IF (r AND NOT l) c = 48; END
+        IF (l AND NOT r) c = 50; END
+        xput(0, tg[c], px, py, 0, 100, 0, 0);
+      END
+      IF (t == C_LADDER)
+        IF (ladder_top(tx, ty)) c = 51; ELSE c = 71; END
+        xput(0, tg[c], px, py, 0, 100, 0, 0);
+      END
+      IF (t == C_SPIKE)
+        xput(0, tg[68], px, py, 0, 100, 0, 0);
+      END
+      c = room_char(tx, ty);
+      IF (c == 112)                          // p: a plant of the world
+        h = (tx * 7 + ty * 3 + cur) % 3;
+        IF (world == 0) c = 124 + h; IF (h == 2) c = 128; END END
+        IF (world == 1) c = 126; IF (h == 1) c = 145; END IF (h == 2) c = 144; END END
+        IF (world == 2) c = 127; IF (h == 1) c = 124; END IF (h == 2) c = 129; END END
+        xput(0, tg[c], px, py, 0, 100, 0, 0);
+      END
+      IF (c == 68)                           // D: the exit door
+        xput(0, tg[150], px, py, 0, 100, 0, 0);
+        xput(0, tg[130], px, py - 18, 0, 100, 0, 0);
+        door_x = tx; door_y = ty;
+      END
+    END
+  END
+  RETURN 0;
+END
+
+// Starts the room's processes and resets its state
+FUNCTION spawn_room();
+PRIVATE tx, ty, c, px, py;
+BEGIN
+  read_room();
+  NB = 0; NMP = 0; NPL = 0; NSP = 0;
+  sw_state = 0; plate_on = 0; gate_open = 0; nkeys = 0; has_keys = 0;
+  gems_got = 0; gems_total = 0; lt = 0; tsec = 0; frz = 0; won = 0;
+  dead_t = 0; exit_t = 0;
+  FOR ty = 0 TO GH - 1
+    FOR tx = 0 TO GW - 1
+      c = room_char(tx, ty);
+      px = tx * 18; py = ty * 18;
+      SWITCH (c)
+        CASE 80:                             // P
+          pfx = px + 9; pfy = py + 18;
+        END
+        CASE 75: key_item(tx, ty); has_keys = 1; END
+        CASE 42: gem(tx, ty); gems_total++; END
+        CASE 97, 98: tblock(tx, ty); END
+        CASE 76: lock_block(tx, ty); END
+        CASE 73: gate_block(tx, ty); END
+        CASE 47: lever(tx, ty); END
+        CASE 95:                             // _: a blue button
+          IF (NPL < 8)
+            pl_x[NPL] = tx; pl_y[NPL] = ty; pl_down[NPL] = 0;
+            plate(NPL);
+            NPL++;
+          END
+        END
+        CASE 83:                             // S: spring
+          IF (NSP < 8)
+            sp_x[NSP] = tx; sp_y[NSP] = ty; sp_t[NSP] = 0;
+            spring(NSP);
+            NSP++;
+          END
+        END
+        CASE 67, 84:                         // C crate, T angry block
+          IF (NB < 10)
+            IF (c == 67) bx_k[NB] = BK_CRATE; ELSE bx_k[NB] = BK_THWOMP; END
+            bx_x[NB] = px; bx_y[NB] = py; bx_oy[NB] = py;
+            bx_vx[NB] = 0; bx_vy[NB] = 0; bx_on[NB] = 0; bx_dx[NB] = 0; bx_dy[NB] = 0;
+            bx_st[NB] = 0; bx_t[NB] = 0; bx_live[NB] = 1;
+            box_spr(NB);
+            NB++;
+          END
+        END
+        CASE 77, 86:                         // M, V: moving platforms
+          IF (NMP < 6)
+            mp_x[NMP] = px; mp_y[NMP] = py; mp_dx[NMP] = 0; mp_dy[NMP] = 0; mp_wait[NMP] = 20;
+            IF (c == 77) mp_vx[NMP] = 1; mp_vy[NMP] = 0; ELSE mp_vx[NMP] = 0; mp_vy[NMP] = -1; END
+            platform(NMP);
+            NMP++;
+          END
+        END
+        CASE 119: walker(px + 9, py + 18); END   // w
+        CASE 102: bat(px + 9, py + 9); END       // f
+      END
+    END
+  END
+  // the player
+  pvx = 0; pvy = 0; pground = 1; pcoy = 0; pbuf = 0; pjump = 0; pface = 1; pdead = 0;
+  pclimb = 0; pspring = 0; ppush = 0; pice = 0; pon_k = 0; pon_i = 0; pland = 0;
+  pip();
+  room_ctl();
+  IF (world == 1) snowfall(); END
+  IF (world == 2) sand_drift(); END
+  RETURN 0;
+END
+
+// =====================================================================
+// Moving platforms
+// =====================================================================
+
+// 1 when a platform may not enter cell (tx, ty)
+FUNCTION mp_block(tx, ty);
+PRIVATE t;
+BEGIN
+  IF (tx < 0 OR tx >= GW OR ty < 0 OR ty >= GH) RETURN 1; END
+  t = lv[ty * GW + tx];
+  IF (t == C_STOP OR t == C_SPIKE OR t == C_SPRING) RETURN 1; END
+  RETURN kind_solid(t) OR t == C_BRIDGE OR t == C_LADDER;
+END
+
+FUNCTION platforms_update();
+PRIVATE i, c, r, blocked;
+BEGIN
+  FOR i = 0 TO NMP - 1
+    mp_dx[i] = 0; mp_dy[i] = 0;
+    IF (mp_wait[i] > 0)
+      mp_wait[i]--;
+      CONTINUE;
+    END
+    blocked = 0;
+    IF (mp_vx[i] != 0 AND mp_x[i] % 18 == 0)
+      r = mp_y[i] / 18;
+      IF (mp_vx[i] > 0) c = mp_x[i] / 18 + 3; ELSE c = mp_x[i] / 18 - 1; END
+      blocked = mp_block(c, r);
+    END
+    IF (mp_vy[i] != 0 AND mp_y[i] % 18 == 0)
+      c = mp_x[i] / 18;
+      IF (mp_vy[i] > 0) r = mp_y[i] / 18 + 1; ELSE r = mp_y[i] / 18 - 1; END
+      blocked = mp_block(c, r) OR mp_block(c + 1, r) OR mp_block(c + 2, r);
+    END
+    IF (blocked)
+      mp_vx[i] = -mp_vx[i]; mp_vy[i] = -mp_vy[i];
+      mp_wait[i] = 30;
+      CONTINUE;
+    END
+    mp_x[i] += mp_vx[i]; mp_y[i] += mp_vy[i];
+    mp_dx[i] = mp_vx[i]; mp_dy[i] = mp_vy[i];
+  END
+  RETURN 0;
+END
+
+// =====================================================================
+// Boxes: crates and angry blocks
+// =====================================================================
+
+// 1 when box i could be at (nx, ny): no solid cell, no other box
+FUNCTION box_free(i, nx, ny);
+PRIVATE j, c0, c1, r0, r1, tx, ty;
+BEGIN
+  c0 = tcell(nx); c1 = tcell(nx + 17); r0 = tcell(ny); r1 = tcell(ny + 17);
+  FOR ty = r0 TO r1
+    FOR tx = c0 TO c1
+      IF (solid_c(tx, ty)) RETURN 0; END
+    END
+  END
+  FOR j = 0 TO NB - 1
+    IF (j != i AND bx_live[j])
+      IF (nx < bx_x[j] + 18 AND nx + 18 > bx_x[j] AND ny < bx_y[j] + 18 AND ny + 18 > bx_y[j]) RETURN 0; END
+    END
+  END
+  RETURN 1;
+END
+
+// What box i stands on: 0 nothing, 1 the room, 2 + platform, 20 + box;
+// springs answer -1 - spring
+FUNCTION box_support(i);
+PRIVATE j, by, c0, c1, r, t;
+BEGIN
+  by = bx_y[i] + 18;
+  FOR j = 0 TO NMP - 1
+    IF (mp_y[j] == by AND bx_x[i] < mp_x[j] + 54 AND bx_x[i] + 18 > mp_x[j]) RETURN 2 + j; END
+  END
+  FOR j = 0 TO NB - 1
+    IF (j != i AND bx_live[j] AND bx_y[j] == by AND bx_x[i] < bx_x[j] + 18 AND bx_x[i] + 18 > bx_x[j]) RETURN 20 + j; END
+  END
+  IF (by % 18 != 0) RETURN 0; END
+  r = by / 18;
+  c0 = tcell(bx_x[i]); c1 = tcell(bx_x[i] + 17);
+  FOR j = 0 TO NSP - 1
+    IF (sp_y[j] == r - 1 AND bx_x[i] + 9 >= sp_x[j] * 18 AND bx_x[i] + 9 < sp_x[j] * 18 + 18) RETURN -1 - j; END
+  END
+  IF (floor_c(c0, r) OR floor_c(c1, r)) RETURN 1; END
+  t = cell(c0, r);
+  IF (t == C_SPIKE) RETURN 1; END
+  t = cell(c1, r);
+  IF (t == C_SPIKE) RETURN 1; END
+  RETURN 0;
+END
+
+// Moves box i one pixel across (dir -1 / 1) if it can, with whatever
+// rides on it; returns 1 if it moved
+FUNCTION box_step(i, dir, depth);
+PRIVATE j;
+BEGIN
+  IF (NOT box_free(i, bx_x[i] + dir, bx_y[i])) RETURN 0; END
+  bx_x[i] += dir;
+  bx_dx[i] += dir;
+  IF (depth < 3)
+    FOR j = 0 TO NB - 1
+      IF (j != i AND bx_live[j] AND bx_k[j] == BK_CRATE AND bx_y[j] + 18 == bx_y[i] AND bx_x[j] < bx_x[i] + 18 - dir AND bx_x[j] + 18 > bx_x[i] - dir)
+        box_step(j, dir, depth + 1);
+      END
+    END
+  END
+  RETURN 1;
+END
+
+// 1 when the cell under box i is icy (the ice world's ground)
+FUNCTION box_on_ice(i);
+PRIVATE r;
+BEGIN
+  IF (world != 1 OR (bx_y[i] + 18) % 18 != 0) RETURN 0; END
+  r = (bx_y[i] + 18) / 18;
+  RETURN cell(tcell(bx_x[i]), r) == C_GROUND OR cell(tcell(bx_x[i] + 17), r) == C_GROUND;
+END
+
+// The player pushes crate i: returns how far it moved now
+FUNCTION push_box(i, amt, dir);
+PRIVATE s, moved;
+BEGIN
+  IF (bx_k[i] != BK_CRATE OR bx_on[i] == 0) RETURN 0; END
+  IF (box_on_ice(i))
+    // on ice a push sends the crate sliding on its own
+    IF (bx_vx[i] == 0)
+      IF (box_free(i, bx_x[i] + dir, bx_y[i]))
+        bx_vx[i] = dir * 2;
+        play_sound(s_push, 60, 140, 0);
+      END
+    END
+    RETURN 0;
+  END
+  moved = 0;
+  FOR s = 1 TO amt
+    IF (NOT box_step(i, dir, 0)) BREAK; END
+    moved++;
+  END
+  IF (moved > 0 AND fc % 12 == 0) play_sound(s_push, 50, 100, 0); END
+  RETURN moved;
+END
+
+// One frame of crate i
+FUNCTION crate_update(i);
+PRIVATE s, n, sup, j, dir;
+BEGIN
+  // carried by what it stands on
+  sup = bx_on[i];
+  IF (sup >= 2 AND sup < 20)
+    j = sup - 2;
+    IF (mp_dx[j] != 0) box_step(i, mp_dx[j], 0); END
+    IF (mp_dy[j] != 0)
+      IF (mp_dy[j] > 0 OR box_free(i, bx_x[i], bx_y[i] - 1))
+        bx_y[i] += mp_dy[j]; bx_dy[i] += mp_dy[j];
+      END
+    END
+  END
+  IF (sup >= 20)
+    j = sup - 20;
+    IF (bx_dx[j] != 0) box_step(i, sgn(bx_dx[j]), 0); END
+    IF (bx_dy[j] != 0)
+      IF (bx_dy[j] > 0 OR box_free(i, bx_x[i], bx_y[i] + bx_dy[j]))
+        bx_y[i] += bx_dy[j]; bx_dy[i] += bx_dy[j];
+      END
+    END
+  END
+  // sliding
+  IF (bx_vx[i] != 0)
+    dir = sgn(bx_vx[i]);
+    n = iabs(bx_vx[i]);
+    FOR s = 1 TO n
+      IF (NOT box_step(i, dir, 0))
+        bx_vx[i] = 0;
+        play_sound(s_thud, 70, 100, 0);
+        dust(bx_x[i] + 9 + dir * 9, bx_y[i] + 9 + OY, 4);
+        BREAK;
+      END
+    END
+  END
+  // falling
+  sup = box_support(i);
+  IF (sup < 0)
+    // on a spring: thrown up
+    j = -1 - sup;
+    bx_vy[i] = -7.2;
+    sp_t[j] = 12;
+    play_sound(s_spring, 70, 90, 0);
+    sup = 0;
+  END
+  IF (sup == 0 OR bx_vy[i] < 0)
+    bx_vy[i] = min(bx_vy[i] + 0.35, 6);
+    IF (bx_vy[i] < 0)
+      n = round(-bx_vy[i]);
+      FOR s = 1 TO n
+        IF (NOT box_free(i, bx_x[i], bx_y[i] - 1)) bx_vy[i] = 0; BREAK; END
+        bx_y[i]--; bx_dy[i]--;
+      END
+      bx_on[i] = 0;
+    ELSE
+      n = round(bx_vy[i]);
+      FOR s = 1 TO n
+        sup = box_support(i);
+        IF (sup != 0) BREAK; END
+        IF (NOT box_free(i, bx_x[i], bx_y[i] + 1)) sup = 1; BREAK; END
+        bx_y[i]++; bx_dy[i]++;
+      END
+      sup = box_support(i);
+      IF (sup > 0)
+        IF (bx_vy[i] > 2)
+          play_sound(s_thud, 70, 100, 0);
+          dust(bx_x[i] + 3, bx_y[i] + 18 + OY, 3);
+          dust(bx_x[i] + 15, bx_y[i] + 18 + OY, 3);
+        END
+        bx_vy[i] = 0;
+      END
+      bx_on[i] = max(sup, 0);
+    END
+  ELSE
+    bx_vy[i] = 0;
+    bx_on[i] = sup;
+  END
+  IF (bx_on[i] > 0 AND bx_vx[i] != 0 AND NOT box_on_ice(i)) bx_vx[i] = 0; END
+  IF (bx_y[i] > GH * 18 + 40)
+    bx_live[i] = 0;
+  END
+  RETURN 0;
+END
+
+// One frame of angry block i: waits, shakes, drops, rests, rises
+FUNCTION thwomp_update(i);
+PRIVATE s, n, sup;
+BEGIN
+  SWITCH (bx_st[i])
+    CASE 0:
+      IF (NOT pdead AND iabs(pfx - (bx_x[i] + 9)) < 22 AND pfy - PH > bx_y[i] + 10)
+        bx_st[i] = 1; bx_t[i] = 14;
+      END
+    END
+    CASE 1:
+      bx_t[i]--;
+      IF (bx_t[i] <= 0) bx_st[i] = 2; bx_vy[i] = 0; END
+    END
+    CASE 2:
+      bx_vy[i] = min(bx_vy[i] + 0.45, 7);
+      n = round(bx_vy[i]);
+      FOR s = 1 TO n
+        sup = box_support(i);
+        IF (sup != 0) BREAK; END
+        IF (NOT box_free(i, bx_x[i], bx_y[i] + 1)) sup = 1; BREAK; END
+        bx_y[i]++; bx_dy[i]++;
+      END
+      IF (box_support(i) != 0 OR NOT box_free(i, bx_x[i], bx_y[i] + 1))
+        bx_st[i] = 3; bx_t[i] = 50; bx_vy[i] = 0;
+        play_sound(s_slam, 80, 100, 0);
+        dust(bx_x[i] + 2, bx_y[i] + 18 + OY, 5);
+        dust(bx_x[i] + 16, bx_y[i] + 18 + OY, 5);
+      END
+      IF (bx_y[i] > GH * 18 + 40) bx_live[i] = 0; END
+    END
+    CASE 3:
+      bx_t[i]--;
+      IF (bx_t[i] <= 0) bx_st[i] = 4; END
+    END
+    CASE 4:
+      IF (fc % 2 == 0 OR bx_y[i] - bx_oy[i] > 60)
+        IF (box_free(i, bx_x[i], bx_y[i] - 1))
+          bx_y[i]--; bx_dy[i]--;
+        END
+      END
+      IF (bx_y[i] <= bx_oy[i]) bx_st[i] = 0; END
+    END
+  END
+  RETURN 0;
+END
+
+FUNCTION boxes_update();
+PRIVATE i;
+BEGIN
+  FOR i = 0 TO NB - 1
+    bx_dx[i] = 0; bx_dy[i] = 0;
+  END
+  FOR i = 0 TO NB - 1
+    IF (bx_live[i] AND bx_k[i] == BK_THWOMP) thwomp_update(i); END
+  END
+  FOR i = 0 TO NB - 1
+    IF (bx_live[i] AND bx_k[i] == BK_CRATE) crate_update(i); END
+  END
+  RETURN 0;
+END
+
+// =====================================================================
+// Buttons, gates, levers, locks
+// =====================================================================
+
+FUNCTION plates_update();
+PRIVATE i, j, on, was, cx, fy;
+BEGIN
+  was = plate_on;
+  plate_on = 0;
+  FOR i = 0 TO NPL - 1
+    on = 0;
+    cx = pl_x[i] * 18 + 9; fy = pl_y[i] * 18 + 18;
+    IF (NOT pdead AND pground AND iabs(pfx - cx) < 10 AND iabs(pfy - fy) < 2) on = 1; END
+    FOR j = 0 TO NB - 1
+      IF (bx_live[j] AND bx_y[j] + 18 == fy AND bx_x[j] < cx + 6 AND bx_x[j] + 18 > cx - 6) on = 1; END
+    END
+    IF (on AND NOT pl_down[i]) play_sound(s_plate, 60, 100, 0); END
+    pl_down[i] = on;
+    IF (on) plate_on = 1; END
+  END
+  // the gates stay open while something is in them
+  IF (plate_on)
+    gate_open = 1;
+  ELSE
+    IF (gate_open AND NOT gate_busy()) gate_open = 0; END
+  END
+  IF (was != plate_on AND NPL > 0) play_sound(s_gate, 60, 100, 0); END
+  RETURN 0;
+END
+
+// 1 when the player or a box overlaps a cell of kind k
+FUNCTION busy_kind(k);
+PRIVATE tx, ty, j;
+BEGIN
+  IF (NOT pdead)
+    FOR ty = tcell(pfy - PH + 1) TO tcell(pfy - 1)
+      FOR tx = tcell(pfx - PHW + 1) TO tcell(pfx + PHW - 1)
+        IF (cell(tx, ty) == k) RETURN 1; END
+      END
+    END
+  END
+  FOR j = 0 TO NB - 1
+    IF (bx_live[j])
+      FOR ty = tcell(bx_y[j]) TO tcell(bx_y[j] + 17)
+        FOR tx = tcell(bx_x[j]) TO tcell(bx_x[j] + 17)
+          IF (cell(tx, ty) == k) RETURN 1; END
+        END
+      END
+    END
+  END
+  RETURN 0;
+END
+
+FUNCTION gate_busy();
+BEGIN
+  RETURN busy_kind(C_GATE);
+END
+
+// Pulls a lever: swaps yellow and brown, unless a block would appear
+// inside the player or a crate
+FUNCTION pull_lever(tx, ty);
+BEGIN
+  IF (sw_state == 0)
+    IF (busy_kind(C_BRN)) play_sound(s_deny, 70, 100, 0); RETURN 0; END
+  ELSE
+    IF (busy_kind(C_YEL)) play_sound(s_deny, 70, 100, 0); RETURN 0; END
+  END
+  sw_state = 1 - sw_state;
+  play_sound(s_lever, 70, 100, 0);
+  sparks(tx * 18 + 9, ty * 18 + 9 + OY, 6, 2);
+  RETURN 1;
+END
+
+// Opens the lock at (tx, ty) and every lock block joined to it
+FUNCTION open_lock(tx, ty);
+PRIVATE n, c, cx, cy, k;
+BEGIN
+  n = 0;
+  fst[0] = ty * GW + tx; n = 1;
+  lv[ty * GW + tx] = C_AIR;
+  WHILE (n > 0)
+    n--;
+    c = fst[n];
+    cx = c % GW; cy = c / GW;
+    FOR k = 0 TO 3
+      tx = cx; ty = cy;
+      IF (k == 0) tx--; END
+      IF (k == 1) tx++; END
+      IF (k == 2) ty--; END
+      IF (k == 3) ty++; END
+      IF (cell(tx, ty) == C_LOCK AND tx >= 0 AND tx < GW AND ty >= 0 AND ty < GH)
+        lv[ty * GW + tx] = C_AIR;
+        fst[n] = ty * GW + tx; n++;
+      END
+    END
+  END
+  play_sound(s_unlock, 80, 100, 0);
+  RETURN 0;
+END
+
+// =====================================================================
+// The player
+// =====================================================================
+
+// 1 when the player's box overlaps cell kind k anywhere
+FUNCTION p_in_kind(k);
+PRIVATE tx, ty;
+BEGIN
+  FOR ty = tcell(pfy - PH + 1) TO tcell(pfy - 1)
+    FOR tx = tcell(pfx - PHW + 1) TO tcell(pfx + PHW - 1)
+      IF (cell(tx, ty) == k) RETURN 1; END
+    END
+  END
+  RETURN 0;
+END
+
+// The ladder cell the player's middle is on, or -1
+FUNCTION p_ladder();
+PRIVATE tx, ty;
+BEGIN
+  tx = tcell(pfx);
+  ty = tcell(pfy - 8);
+  IF (cell(tx, ty) == C_LADDER) RETURN ty; END
+  ty = tcell(pfy - 1);
+  IF (cell(tx, ty) == C_LADDER) RETURN ty; END
+  RETURN -1;
+END
+
+FUNCTION kill_player();
+BEGIN
+  IF (pdead OR won) RETURN 0; END
+  pdead = 1; dead_t = 0;
+  play_sound(s_die, 80, 100, 0);
+  burst(round(pfx), round(pfy) - 10 + OY);
+  RETURN 0;
+END
+
+// 0 no touch, 1 stomped from above, 2 touched; the thing is centred on
+// (ex, ey) and reaches ew / eh to each side
+FUNCTION ptouch(ex, ey, ew, eh);
+BEGIN
+  IF (pdead OR won) RETURN 0; END
+  IF (iabs(pfx - ex) >= PHW + ew) RETURN 0; END
+  IF (pfy <= ey - eh OR pfy - PH >= ey + eh) RETURN 0; END
+  IF (pvy > 0 AND pfy - pvy <= ey - eh + 7) RETURN 1; END
+  IF (stomp_fc == fc AND pfy <= ey - eh + 9) RETURN 1; END
+  // a touch has to overlap a little: near misses are forgiven
+  IF (iabs(pfx - ex) >= PHW + ew - 3 OR pfy <= ey - eh + 3 OR pfy - PH >= ey + eh - 3) RETURN 0; END
+  RETURN 2;
+END
+
+// 1 when the player's box overlaps an item's box centred on (ex, ey)
+FUNCTION pgrab(ex, ey, ew, eh);
+BEGIN
+  IF (pdead OR won) RETURN 0; END
+  RETURN iabs(pfx - ex) < PHW + ew AND pfy > ey - eh AND pfy - PH < ey + eh;
+END
+
+FUNCTION stomp_bounce();
+BEGIN
+  stomp_fc = fc;
+  IF (k_jump()) pvy = -7.0; pjump = 1; ELSE pvy = -4.6; pjump = 0; END
+  pground = 0; pclimb = 0; pspring = 0; pon_k = 0;
+  play_sound(s_stomp, 70, 100, 0);
+  RETURN 0;
+END
+
+// Horizontal part of the player's move
+FUNCTION player_across(carry);
+PRIVATE nx, ex, top, mid, bot, i, need, moved, dir;
+BEGIN
+  nx = pfx + pvx + carry;
+  top = pfy - PH + 1; bot = pfy - 1; mid = pfy - PH / 2;
+  IF (nx > pfx)
+    ex = nx + PHW;
+    IF (solid_px(ex, top) OR solid_px(ex, mid) OR solid_px(ex, bot))
+      nx = tcell(ex) * 18 - PHW - 0.01;
+      IF (pvx > 0) pvx = 0; END
+    END
+  END
+  IF (nx < pfx)
+    ex = nx - PHW;
+    IF (solid_px(ex, top) OR solid_px(ex, mid) OR solid_px(ex, bot))
+      nx = (tcell(ex) + 1) * 18 + PHW + 0.01;
+      IF (pvx < 0) pvx = 0; END
+    END
+  END
+  // boxes: push crates, stop at everything else
+  ppush = 0;
+  FOR i = 0 TO NB - 1
+    IF (bx_live[i])
+      IF (pfy - PH < bx_y[i] + 18 - 0.5 AND pfy > bx_y[i] + 0.5 AND nx + PHW > bx_x[i] AND nx - PHW < bx_x[i] + 18)
+        IF (pfx <= bx_x[i] + 9)
+          dir = 1;
+        ELSE
+          dir = -1;
+        END
+        IF (dir > 0 AND pvx > 0 AND pground AND NOT pclimb)
+          need = ceil(nx + PHW - bx_x[i]);
+          moved = push_box(i, need, 1);
+          IF (moved > 0 OR bx_vx[i] != 0) ppush = 1; END
+        END
+        IF (dir < 0 AND pvx < 0 AND pground AND NOT pclimb)
+          need = ceil(bx_x[i] + 18 - (nx - PHW));
+          moved = push_box(i, need, -1);
+          IF (moved > 0 OR bx_vx[i] != 0) ppush = 1; END
+        END
+        IF (dir > 0)
+          nx = bx_x[i] - PHW - 0.01;
+          IF (pvx > 0) pvx = 0; END
+        ELSE
+          nx = bx_x[i] + 18 + PHW + 0.01;
+          IF (pvx < 0) pvx = 0; END
+        END
+      END
+    END
+  END
+  pfx = nx;
+  RETURN 0;
+END
+
+// Vertical part: land on the room, platforms, boxes; bump the head
+FUNCTION player_updown();
+PRIVATE ny, xl, xr, best, bk, bi, i, t, r, sl, sr, ov, top, was;
+BEGIN
+  ny = pfy + pvy;
+  xl = pfx - PHW + 1; xr = pfx + PHW - 1;
+  was = pground;
+  pground = 0; pon_k = 0;
+  IF (pvy >= 0)
+    best = 99999; bk = 0; bi = 0;
+    // the room: solid cells, bridges and ladder tops, from above only
+    r = tcell(ny);
+    IF (ny >= r * 18 AND pfy <= r * 18 + 0.5)
+      IF (land_cell(tcell(xl), r) OR land_cell(tcell(xr), r))
+        best = r * 18; bk = 0;
+      END
+    END
+    // platforms
+    FOR i = 0 TO NMP - 1
+      IF (pfx + PHW > mp_x[i] AND pfx - PHW < mp_x[i] + 54 AND pfy <= mp_y[i] + 2 AND ny >= mp_y[i] AND mp_y[i] < best)
+        best = mp_y[i]; bk = 1; bi = i;
+      END
+    END
+    // boxes
+    FOR i = 0 TO NB - 1
+      IF (bx_live[i] AND pfx + PHW > bx_x[i] + 0.5 AND pfx - PHW < bx_x[i] + 17.5 AND pfy <= bx_y[i] + 2 AND ny >= bx_y[i] AND bx_y[i] < best)
+        best = bx_y[i]; bk = 2; bi = i;
+      END
+    END
+    IF (best < 99999)
+      ny = best; pvy = 0; pground = 1; pon_k = bk; pon_i = bi; pspring = 0;
+      IF (NOT was) pland = 1; END
+    END
+  ELSE
+    top = ny - PH;
+    sl = solid_px(xl, top); sr = solid_px(xr, top);
+    // just a corner: slide past it
+    IF (sl AND NOT sr)
+      ov = (tcell(xl) + 1) * 18 - xl;
+      IF (ov <= 5 AND NOT solid_px(xr + ov, top) AND NOT solid_px(xr + ov, pfy - 1))
+        pfx += ov; sl = 0;
+      END
+    END
+    IF (sr AND NOT sl)
+      ov = xr - tcell(xr) * 18 + 1;
+      IF (ov <= 5 AND NOT solid_px(xl - ov, top) AND NOT solid_px(xl - ov, pfy - 1))
+        pfx -= ov; sr = 0;
+      END
+    END
+    IF (sl OR sr)
+      ny = (tcell(top) + 1) * 18 + PH;
+      pvy = 0.5; pjump = 0; pspring = 0;
+    END
+    FOR i = 0 TO NB - 1
+      IF (bx_live[i] AND pfx + PHW > bx_x[i] + 0.5 AND pfx - PHW < bx_x[i] + 17.5 AND pfy - PH >= bx_y[i] + 18 - 1 AND ny - PH < bx_y[i] + 18)
+        ny = bx_y[i] + 18 + PH;
+        pvy = 0.5; pjump = 0; pspring = 0;
+      END
+    END
+  END
+  pfy = ny;
+  RETURN 0;
+END
+
+// 1 when the player may land on cell (tx, ty)
+FUNCTION land_cell(tx, ty);
+PRIVATE t;
+BEGIN
+  t = cell(tx, ty);
+  IF (kind_solid(t) OR t == C_BRIDGE) RETURN 1; END
+  IF (t == C_LADDER AND cell(tx, ty - 1) != C_LADDER AND NOT (k_down() AND tx == tcell(pfx))) RETURN 1; END
+  RETURN 0;
+END
+
+FUNCTION player_update();
+PRIVATE dir, maxs, acc, dec, g, carry, lr, i, tx, ty, t, cx, j;
+BEGIN
+  // carried by a platform or a box
+  carry = 0;
+  IF (pground AND pon_k == 1)
+    carry = mp_dx[pon_i];
+    pfy = mp_y[pon_i];
+  END
+  IF (pground AND pon_k == 2)
+    IF (bx_live[pon_i])
+      carry = bx_dx[pon_i];
+      pfy = bx_y[pon_i];
+    END
+  END
+
+  dir = 0;
+  IF (k_left()) dir -= 1; END
+  IF (k_right()) dir += 1; END
+  IF (dir != 0) pface = dir; END
+
+  // ladders
+  lr = p_ladder();
+  IF (NOT pclimb AND lr >= 0)
+    IF (k_up() AND NOT ladder_top_stand()) pclimb = 1; END
+    IF (k_down() AND NOT (pground AND pon_k == 0 AND NOT ladder_top_stand())) pclimb = 1; END
+    IF (pclimb) pfx = tcell(pfx) * 18 + 9; pvx = 0; pvy = 0; pspring = 0; END
+  END
+  IF (pclimb)
+    IF (lr < 0) pclimb = 0; END
+  END
+  IF (pclimb)
+    pvx = dir * 0.8;
+    pvy = 0;
+    IF (k_up()) pvy = -1.3; END
+    IF (k_down()) pvy = 1.5; END
+    IF (pvy != 0 AND fc % 14 == 0) play_sound(s_climb, 40, 100, 0); END
+    IF (k_jump_p())
+      pclimb = 0; pvy = -4.2; pjump = 1;
+      play_sound(s_jump, 60, 100, 0);
+    END
+    // climbing up past the top: stand on it
+    IF (pclimb AND pvy < 0)
+      tx = tcell(pfx); ty = tcell(pfy - 1);
+      IF (ladder_top(tx, ty) AND pfy + pvy <= ty * 18)
+        pfy = ty * 18; pvy = 0; pclimb = 0; pground = 1;
+      END
+    END
+    IF (pclimb)
+      player_across(0);
+      // down onto the floor
+      IF (pvy > 0 AND land_floor_below()) pclimb = 0; END
+      IF (pclimb) pfy += pvy; END
+      pground = 0;
+      RETURN 0;
+    END
+  END
+
+  // across: speed builds up, ice keeps it
+  pice = 0;
+  IF (pground AND world == 1 AND pon_k == 0)
+    IF (cell(tcell(pfx), tcell(pfy + 1)) == C_GROUND) pice = 1; END
+  END
+  maxs = 1.8;
+  IF (ppush) maxs = 1.0; END
+  IF (pground)
+    IF (pice) acc = 0.05; dec = 0.025; ELSE acc = 0.16; dec = 0.24; END
+  ELSE
+    acc = 0.12; dec = 0.05;
+  END
+  IF (dir != 0)
+    IF (pvx * dir < 0)
+      IF (pice) pvx += dir * 0.09; ELSE pvx += dir * 0.3; END
+    ELSE
+      IF (pvx * dir < maxs)
+        pvx += dir * acc;
+        IF (pvx * dir > maxs) pvx = dir * maxs; END
+      ELSE
+        pvx -= dir * 0.06;
+      END
+    END
+  ELSE
+    IF (pvx > 0) pvx = max(0, pvx - dec); ELSE pvx = min(0, pvx + dec); END
+  END
+
+  // jump: buffered press, coyote time, variable height
+  IF (k_jump_p()) pbuf = 7; END
+  IF (pground) pcoy = 6; END
+  IF (pbuf > 0 AND pcoy > 0)
+    pvy = -5.4;
+    pground = 0; pcoy = 0; pbuf = 0; pjump = 1; pon_k = 0;
+    play_sound(s_jump, 60, 100, 0);
+    dust(round(pfx), round(pfy) + OY, 2);
+  END
+  IF (pbuf > 0) pbuf--; END
+  IF (pcoy > 0 AND NOT pground) pcoy--; END
+  IF (NOT k_jump()) pjump = 0; END
+  g = 0.4;
+  IF (pvy < 0)
+    g = 0.62;
+    IF (pjump) g = 0.23; END
+    IF (pspring) g = 0.3; END
+  END
+  pvy += g;
+  IF (pvy > 6) pvy = 6; END
+
+  player_across(carry);
+  player_updown();
+
+  // springs
+  FOR i = 0 TO NSP - 1
+    cx = sp_x[i] * 18 + 9;
+    IF (pvy >= 0 AND iabs(pfx - cx) < 8 + PHW AND pfy >= sp_y[i] * 18 + 8 AND pfy - PH < sp_y[i] * 18 + 18)
+      pvy = -8.4; pspring = 1; pjump = 0; pground = 0; pon_k = 0; pcoy = 0;
+      sp_t[i] = 12;
+      play_sound(s_spring, 70, 100, 0);
+      sparks(cx, sp_y[i] * 18 + 8 + OY, 5, 1);
+    END
+  END
+
+  IF (pland)
+    pland = 0;
+    play_sound(s_land, 40, 100, 0);
+    dust(round(pfx), round(pfy) + OY, 3);
+  END
+
+  // spikes sting in the lower half of their cell
+  FOR ty = tcell(pfy - PH + 1) TO tcell(pfy - 1)
+    FOR tx = tcell(pfx - PHW + 2) TO tcell(pfx + PHW - 2)
+      IF (cell(tx, ty) == C_SPIKE AND pfy > ty * 18 + 10) kill_player(); END
+    END
+  END
+  // squeezed into a wall
+  IF (solid_px(pfx, pfy - PH / 2)) kill_player(); END
+  // fell out
+  IF (pfy > GH * 18 + 30) kill_player(); END
+  RETURN 0;
+END
+
+// 1 while the player stands on a ladder top
+FUNCTION ladder_top_stand();
+BEGIN
+  RETURN pground AND pon_k == 0 AND ladder_top(tcell(pfx), tcell(pfy + 1));
+END
+
+// 1 when a climbing player's feet reach solid floor
+FUNCTION land_floor_below();
+PRIVATE r;
+BEGIN
+  r = tcell(pfy + pvy);
+  IF (pfy + pvy >= r * 18 AND pfy <= r * 18 + 0.5 AND kind_solid(cell(tcell(pfx), r)))
+    pfy = r * 18; pground = 1;
+    RETURN 1;
+  END
+  RETURN 0;
+END
+
+// Actions: levers, locks, the door
+FUNCTION player_actions();
+PRIVATE tx, ty, i, k, x0, x1, y0, y1;
+BEGIN
+  // locks next to the player open with a key
+  IF (nkeys > 0)
+    x0 = tcell(pfx - PHW - 1); x1 = tcell(pfx + PHW + 1);
+    y0 = tcell(pfy - PH - 1); y1 = tcell(pfy + 1);
+    FOR ty = y0 TO y1
+      FOR tx = x0 TO x1
+        IF (nkeys > 0 AND cell(tx, ty) == C_LOCK)
+          nkeys--;
+          open_lock(tx, ty);
+        END
+      END
+    END
+  END
+  // the door
+  IF (pground AND iabs(pfx - (door_x * 18 + 9)) < 8 AND pfy > door_y * 18 AND pfy <= door_y * 18 + 18)
+    IF (up_id == 0)
+      up_id = shadow_text(f_small, door_x * 18 + 9, door_y * 18 + OY - 26, 4, "^", '#fee481');
+      up_sh = txt_sh;
+    END
+    IF (k_up_p() OR key_pressed(_x) OR key_pressed(_j))
+      won = 1; frz = 1; exit_t = 0;
+      play_sound(s_door, 80, 100, 0);
+      sparks(door_x * 18 + 9, door_y * 18 + OY, 14, 1);
+    END
+  ELSE
+    IF (up_id != 0) delete_text(up_id); delete_text(up_sh); up_id = 0; END
+  END
+  RETURN 0;
+END
+
+// =====================================================================
+// The room controller: moves everything in a fixed order
+// =====================================================================
+
+PROCESS room_ctl();
+BEGIN
+  priority = 100;
+  LOOP
+    IF (NOT frz)
+      fc++;
+      lt++;
+      tsec = lt / 60;
+      platforms_update();
+      boxes_update();
+      IF (NOT pdead)
+        player_update();
+        IF (NOT pdead) player_actions(); END
+      END
+      plates_update();
+      IF (hint_t > 0)
+        hint_t--;
+        IF (hint_t == 0) delete_text(hint_id); delete_text(hint_sh); END
+      END
+    END
+    IF (pdead) dead_t++; END
+    IF (won) exit_t++; END
+    FRAME;
+  END
+END
+
+// =====================================================================
+// Sprites
+// =====================================================================
+
+PROCESS pip();
+PRIVATE anim = 0.0; fr = 0; lastx = 0.0;
+BEGIN
+  z = 0; graph = cg[0];
+  LOOP
+    IF (pdead)
+      graph = 0;
+    ELSE
+      x = round(pfx); y = round(pfy) - 12 + OY;
+      IF (pface < 0) flags = 1; ELSE flags = 0; END
+      IF (pclimb)
+        IF (pvy != 0 OR pvx != 0) anim += 0.12; END
+        fr = int(anim) % 2;
+        IF (fr == 1) flags = 1; ELSE flags = 0; END
+        graph = cg[0];
+      ELSE
+        IF (pground)
+          IF (iabs(pvx) > 0.2)
+            anim += 0.08 + iabs(pvx) * 0.06;
+            fr = int(anim) % 2;
+            IF (fr == 1 AND int(anim - 0.1) % 2 == 0) play_sound(s_step, 30, 100, 0); END
+          ELSE
+            fr = 0; anim = 0;
+          END
+          graph = cg[fr];
+        ELSE
+          graph = cg[1];
+        END
+      END
+      IF (won)
+        alpha = max(0, 100 - exit_t * 4);
+        x = door_x * 18 + 9;
+      END
+    END
+    FRAME;
+  END
+END
+
+// Keys hang in the air; picked up they fly to the HUD
+PROCESS key_item(tx, ty);
+PRIVATE t = 0; got = 0;
+BEGIN
+  graph = tg[27]; z = 5;
+  x = tx * 18 + 9; y = ty * 18 + 9 + OY;
+  fx = x; fy = y;
+  LOOP
+    t++;
+    IF (NOT got)
+      y = round(fy + sin(t * 5000) * 2);
+      IF (pgrab(x, y - OY, 7, 7))
+        got = 1; nkeys++;
+        play_sound(s_key, 80, 100, 0);
+        sparks(x, y, 8, 1);
+        z = -20;
+      END
+    ELSE
+      fx += (196 - fx) * 0.18; fy += (9 - fy) * 0.18;
+      x = round(fx); y = round(fy);
+      IF (iabs(fx - 196) < 2 AND iabs(fy - 9) < 2) BREAK; END
+    END
+    FRAME;
+  END
+END
+
+PROCESS gem(tx, ty);
+PRIVATE t = 0;
+BEGIN
+  graph = tg[67]; z = 5;
+  x = tx * 18 + 9; fy = ty * 18 + 9 + OY;
+  t = tx * 13 + ty * 7;
+  LOOP
+    t++;
+    y = round(fy + sin(t * 4000) * 2);
+    IF (t % 70 == 0) sparks(x + rand(-5, 5), y + rand(-5, 3), 1, 0); END
+    IF (pgrab(x, y - OY, 6, 6))
+      gems_got++;
+      play_sound(s_gem, 70, 100 + gems_got * 8, 0);
+      sparks(x, y, 10, 0);
+      BREAK;
+    END
+    FRAME;
+  END
+END
+
+// Yellow (a) and brown (b) blocks: solid or a ghost, by the lever
+PROCESS tblock(tx, ty);
+PRIVATE k, on, a = 0;
+BEGIN
+  z = 10;
+  x = tx * 18 + 9; y = ty * 18 + 9 + OY;
+  k = lv[ty * GW + tx];
+  IF (k == C_YEL) graph = tg[9]; ELSE graph = tg[29]; END
+  LOOP
+    IF (k == C_YEL) on = sw_state == 0; ELSE on = sw_state == 1; END
+    IF (on) a = min(100, a + 20); ELSE a = max(28, a - 12); END
+    alpha = a;
+    FRAME;
+  END
+END
+
+PROCESS lock_block(tx, ty);
+BEGIN
+  z = 10;
+  graph = tg[28];
+  x = tx * 18 + 9; y = ty * 18 + 9 + OY;
+  WHILE (lv[ty * GW + tx] == C_LOCK)
+    FRAME;
+  END
+  poof(x, y);
+END
+
+PROCESS gate_block(tx, ty);
+PRIVATE a = 100;
+BEGIN
+  z = 10;
+  x = tx * 18 + 9; y = ty * 18 + 9 + OY;
+  graph = tg[115];
+  IF (cell(tx, ty - 1) != C_GATE) graph = tg[95]; END
+  IF (cell(tx, ty + 1) != C_GATE) graph = tg[135]; END
+  LOOP
+    IF (gate_open) a = max(18, a - 10); ELSE a = min(100, a + 14); END
+    alpha = a;
+    FRAME;
+  END
+END
+
+PROCESS lever(tx, ty);
+BEGIN
+  z = 8;
+  x = tx * 18 + 9; y = ty * 18 + 9 + OY;
+  LOOP
+    IF (sw_state == 0) graph = tg[64]; ELSE graph = tg[66]; END
+    IF (NOT frz AND NOT pdead AND k_act_p() AND NOT pclimb)
+      IF (iabs(pfx - x) < 12 AND pfy - PH < y - OY + 9 AND pfy > y - OY - 9)
+        pull_lever(tx, ty);
+      END
+    END
+    FRAME;
+  END
+END
+
+PROCESS plate(i);
+BEGIN
+  z = 8;
+  x = pl_x[i] * 18 + 9; y = pl_y[i] * 18 + 9 + OY;
+  LOOP
+    IF (pl_down[i]) graph = tg[149]; ELSE graph = tg[148]; END
+    FRAME;
+  END
+END
+
+PROCESS spring(i);
+BEGIN
+  z = 8;
+  x = sp_x[i] * 18 + 9; y = sp_y[i] * 18 + 9 + OY;
+  LOOP
+    IF (sp_t[i] > 0)
+      sp_t[i]--;
+      graph = tg[108];
+    ELSE
+      graph = tg[107];
+    END
+    FRAME;
+  END
+END
+
+// A crate or an angry block, drawn where the controller put it
+PROCESS box_spr(i);
+PRIVATE sh = 0;
+BEGIN
+  z = 6;
+  IF (bx_k[i] == BK_CRATE) graph = tg[26]; ELSE graph = cg[11]; END
+  LOOP
+    IF (NOT bx_live[i]) BREAK; END
+    x = bx_x[i] + 9; y = bx_y[i] + 9 + OY;
+    IF (bx_k[i] == BK_THWOMP)
+      IF (bx_st[i] == 1 OR bx_st[i] == 2) graph = cg[12]; ELSE graph = cg[11]; END
+      IF (bx_st[i] == 1) x += (fc % 4 / 2) * 2 - 1; END
+      // falling onto the player hurts
+      IF (bx_st[i] == 2 AND NOT pdead)
+        IF (iabs(pfx - (bx_x[i] + 9)) < 9 + PHW - 2 AND pfy - PH < bx_y[i] + 18 AND pfy > bx_y[i] + 4) kill_player(); END
+      END
+    END
+    FRAME;
+  END
+END
+
+PROCESS platform(i);
+PRIVATE k;
+BEGIN
+  z = 7;
+  graph = tg[49];
+  x = mp_x[i] + 27; y = mp_y[i] + 9 + OY;
+  plat_end(i, -18, 48);
+  plat_end(i, 18, 50);
+  LOOP
+    x = mp_x[i] + 27; y = mp_y[i] + 9 + OY;
+    FRAME;
+  END
+END
+
+PROCESS plat_end(i, dx, t);
+BEGIN
+  z = 7;
+  graph = tg[t];
+  LOOP
+    x = mp_x[i] + 27 + dx; y = mp_y[i] + 9 + OY;
+    FRAME;
+  END
+END
+
+// =====================================================================
+// Enemies
+// =====================================================================
+
+// Walks along a floor, turns at walls, edges, spikes and crates
+PROCESS walker(x0, y0);
+PRIVATE dir = 1; t = 0; tch = 0; ahead, fl, j, dead = 0;
+BEGIN
+  z = 3;
+  fx = x0; fy = y0;
+  graph = cg[18];
+  LOOP
+    IF (NOT frz)
+      t++;
+      IF (dead)
+        dead++;
+        graph = cg[20];
+        IF (dead > 30) poof(x, y); BREAK; END
+      ELSE
+        ahead = fx + dir * 8;
+        fl = floor_c(tcell(ahead), tcell(fy + 1));
+        IF (solid_px(ahead, fy - 4) OR NOT fl OR cell(tcell(ahead), tcell(fy - 4)) == C_SPIKE)
+          dir = -dir;
+        ELSE
+          FOR j = 0 TO NB - 1
+            IF (bx_live[j] AND ahead > bx_x[j] AND ahead < bx_x[j] + 18 AND fy - 4 > bx_y[j] AND fy - 4 < bx_y[j] + 18) dir = -dir; BREAK; END
+          END
+          fx += dir * 0.5;
+        END
+        IF ((t / 12) % 2 == 0) graph = cg[18]; ELSE graph = cg[19]; END
+        tch = ptouch(fx, fy - 6, 7, 6);
+        IF (tch == 1) stomp_bounce(); dead = 1; END
+        IF (tch == 2) kill_player(); END
+      END
+    END
+    x = round(fx); y = round(fy) - 12 + OY;
+    IF (dir < 0) flags = 1; ELSE flags = 0; END
+    FRAME;
+  END
+END
+
+// Flies across, bobbing, turns at walls
+PROCESS bat(x0, y0);
+PRIVATE dir = 1; t = 0; tch = 0; dead = 0; vy = 0.0;
+BEGIN
+  z = 3;
+  fx = x0; fy = y0;
+  LOOP
+    IF (NOT frz)
+      t++;
+      IF (dead)
+        vy += 0.3; fy += vy;
+        graph = cg[24];
+        flags = 2;
+        IF (fy > SH + 20) BREAK; END
+      ELSE
+        IF (solid_px(fx + dir * 10, fy)) dir = -dir; END
+        fx += dir * 0.9;
+        graph = cg[24 + (t / 6) % 3];
+        tch = ptouch(fx, fy + sin(t * 6000) * 5, 7, 5);
+        IF (tch == 1) stomp_bounce(); dead = 1; vy = -2; sparks(round(fx), round(fy) + OY, 6, 2); END
+        IF (tch == 2) kill_player(); END
+      END
+    END
+    x = round(fx);
+    IF (dead) y = round(fy) + OY; ELSE y = round(fy + sin(t * 6000) * 5) + OY; END
+    IF (NOT dead) IF (dir < 0) flags = 1; ELSE flags = 0; END END
+    FRAME;
+  END
+END
+
+// =====================================================================
+// Particles and weather
+// =====================================================================
+
+PROCESS pt(x, y, vx, vy, graph, life, gv);
+PRIVATE t = 0;
+BEGIN
+  z = -3;
+  fx = x; fy = y;
+  REPEAT
+    fx += vx; fy += vy; vy += gv; vx *= 0.97;
+    x = round(fx); y = round(fy);
+    t++;
+    IF (t > life - 10) alpha = (life - t) * 10; END
+    FRAME;
+  UNTIL (t >= life)
+END
+
+FUNCTION sparks(x, y, n, kind);
+PRIVATE i, gr;
+BEGIN
+  FOR i = 1 TO n
+    gr = g_px[0];
+    IF (kind == 0) IF (i % 2 == 0) gr = g_px[7]; END END
+    IF (kind == 1) IF (i % 2 == 0) gr = g_px[1]; END END
+    IF (kind == 2) gr = g_px[8]; END
+    pt(x, y, rand(-20, 20) / 10.0, rand(-28, 4) / 10.0, gr, rand(18, 32), 0.08);
+  END
+  RETURN 0;
+END
+
+FUNCTION dust(x, y, n);
+PRIVATE i, gr;
+BEGIN
+  gr = g_px[8];
+  IF (world == 2) gr = g_px[6]; END
+  FOR i = 1 TO n
+    pt(x + rand(-4, 4), y - 1, rand(-10, 10) / 10.0, rand(-8, -2) / 10.0, gr, rand(12, 20), 0.02);
+  END
+  RETURN 0;
+END
+
+FUNCTION poof(x, y);
+PRIVATE i;
+BEGIN
+  FOR i = 1 TO 8
+    pt(x + rand(-7, 7), y + rand(-7, 7), rand(-15, 15) / 10.0, rand(-20, 5) / 10.0, g_px[2 + (i % 2) * 7], rand(16, 28), 0.1);
+  END
+  RETURN 0;
+END
+
+FUNCTION burst(x, y);
+PRIVATE i;
+BEGIN
+  FOR i = 1 TO 18
+    pt(x, y, rand(-30, 30) / 10.0, rand(-40, 5) / 10.0, g_px[3 + (i % 3)], rand(30, 50), 0.12);
+  END
+  RETURN 0;
+END
+
+PROCESS snowfall();
+PRIVATE i;
+BEGIN
+  FOR i = 1 TO 24
+    flake(rand(0, SW), rand(OY, SH));
+  END
+  LOOP
+    FRAME;
+  END
+END
+
+PROCESS flake(x, y);
+PRIVATE dr = 0.0; sp = 0.0;
+BEGIN
+  z = 20;
+  graph = g_px[0];
+  IF (rand(0, 2) == 0) graph = g_px[8]; END
+  fx = x; fy = y;
+  sp = rand(3, 8) / 10.0; dr = rand(0, 360000);
+  LOOP
+    dr += 3000;
+    fy += sp; fx += sin(dr) * 0.3;
+    IF (fy > SH) fy = OY; fx = rand(0, SW); END
+    x = round(fx); y = round(fy);
+    FRAME;
+  END
+END
+
+PROCESS sand_drift();
+PRIVATE i;
+BEGIN
+  FOR i = 1 TO 12
+    grain(rand(0, SW), rand(OY + 20, SH - 30));
+  END
+  LOOP
+    FRAME;
+  END
+END
+
+PROCESS grain(x, y);
+PRIVATE sp = 0.0; t = 0;
+BEGIN
+  z = 20;
+  graph = g_px[6];
+  alpha = 60;
+  fx = x; fy = y;
+  sp = rand(4, 10) / 10.0;
+  t = rand(0, 1000);
+  LOOP
+    t++;
+    fx += sp; fy += sin(t * 3000) * 0.2;
+    IF (fx > SW + 4) fx = -4; fy = rand(OY + 20, SH - 30); END
+    x = round(fx); y = round(fy);
+    FRAME;
+  END
+END
+
+// =====================================================================
+// Screen wipe: squares grow over the screen, then shrink away
+// =====================================================================
+
+PROCESS wiper();
+PRIVATE cx, cy, s, d;
+BEGIN
+  priority = -100;
+  LOOP
+    IF (wipe_mode != 0)
+      IF (wipe_mode == 1 OR wipe_mode == 3)
+        wipe_t++;
+      END
+      FOR cy = 0 TO 13
+        FOR cx = 0 TO 23
+          d = (cx + cy) * 0.6;
+          s = clamp((wipe_t - d) * 3, 0, 18);
+          IF (wipe_mode == 2) s = 18; END
+          IF (wipe_mode == 3) s = 18 - s; END
+          s = int(s / 2) * 2;
+          IF (s > 0) draw_rect(cx * 18 + 9 - s / 2, cy * 18 + 9 - s / 2, s, s, '#1d2030'); END
+        END
+      END
+      IF (wipe_mode == 1 AND wipe_t >= WIPE_N) wipe_mode = 2; END
+      IF (wipe_mode == 3 AND wipe_t >= WIPE_N) wipe_mode = 0; END
+    END
+    FRAME;
+  END
+END
+
+// Title and map sprites
+PROCESS show(x, y, graph, z);
+BEGIN
+  LOOP
+    FRAME;
+  END
+END
+
+// The panel behind the room clear texts
+PROCESS panel_spr(x, y, graph);
+BEGIN
+  z = -30;
+  LOOP
+    FRAME;
+  END
+END
+
+// A star that pops in
+PROCESS star_pop(x, y, graph, delay);
+PRIVATE t = 0; g0;
+BEGIN
+  z = -40;
+  g0 = graph; graph = 0;
+  LOOP
+    t++;
+    IF (t == delay)
+      graph = g0;
+      IF (g0 == g_star)
+        play_sound(s_star, 70, 90 + delay / 2, 0);
+        sparks(x, y, 10, 1);
+      ELSE
+        play_sound(s_nostar, 50, 100, 0);
+      END
+    END
+    FRAME;
+  END
+END
+
+// Pip on the title screen: strolls to and fro
+PROCESS title_pip();
+PRIVATE dir = 1; t = 0;
+BEGIN
+  z = 0;
+  fx = 60; y = 216 - 12;
+  LOOP
+    t++;
+    fx += dir * 0.8;
+    IF (fx > 380) dir = -1; END
+    IF (fx < 50) dir = 1; END
+    x = round(fx);
+    graph = cg[(t / 10) % 2];
+    IF (dir < 0) flags = 1; ELSE flags = 0; END
+    FRAME;
+  END
+END
+
+// Floating things on the title
+PROCESS bobber(x, y, graph, ph);
+PRIVATE t = 0; y0;
+BEGIN
+  z = 2;
+  y0 = y;
+  LOOP
+    t++;
+    y = y0 + round(sin(t * 4000 + ph) * 3);
+    IF (t % 50 == 0) sparks(x + rand(-6, 6), y + rand(-6, 4), 1, 1); END
+    FRAME;
+  END
+END
+
+// Pip on the map, hopping from node to node
+PROCESS map_pip();
+PRIVATE t = 0; hop = 0; sx = 0.0; sy = 0.0; tx = 0.0; ty = 0.0; last = -1; k = 0.0;
+BEGIN
+  z = -5;
+  fx = node_x[map_sel]; fy = node_y[map_sel];
+  last = map_sel;
+  LOOP
+    t++;
+    IF (map_sel != last)
+      sx = fx; sy = fy; tx = node_x[map_sel]; ty = node_y[map_sel];
+      hop = 1; last = map_sel;
+      IF (tx < sx) flags = 1; ELSE flags = 0; END
+    END
+    IF (hop > 0)
+      hop++;
+      k = (hop - 1) / 14.0;
+      IF (k >= 1) k = 1; hop = 0; END
+      fx = sx + (tx - sx) * k;
+      fy = sy + (ty - sy) * k - sin(k * 180000) * 14;
+      graph = cg[1];
+    ELSE
+      graph = cg[(t / 24) % 2];
+    END
+    x = round(fx); y = round(fy) - 21;
+    FRAME;
+  END
+END
+
+// =====================================================================
+// World map
+// =====================================================================
+
+// Dots from node a to node b
+FUNCTION map_path(a, b, lit);
+PRIVATE n, i, d, gr;
+BEGIN
+  d = fget_distance(node_x[a], node_y[a], node_x[b], node_y[b]);
+  n = int(d / 9);
+  IF (lit) gr = g_dot; ELSE gr = g_dot_off; END
+  FOR i = 1 TO n - 1
+    xput(0, gr, node_x[a] + (node_x[b] - node_x[a]) * i / n, node_y[a] + (node_y[b] - node_y[a]) * i / n, 0, 100, 0, 0);
+  END
+  RETURN 0;
+END
+
+FUNCTION paint_map();
+PRIVATE w, i, tx, c, t, s;
+BEGIN
+  put_screen(0, g_screen);
+  FOR w = 0 TO 2
+    sky_tiles(w, w * 144, w * 144 + 144, 18);
+    // a strip of ground
+    FOR tx = 0 TO 7
+      c = 21;
+      IF (tx == 0 AND w == 0) c = 21; END
+      t = top_open(w) + 2;
+      xput(0, tg[t], w * 144 + tx * 18 + 9, 243, 0, 100, 0, 0);
+    END
+  END
+  xput(0, g_hud, SW / 2, 9, 0, 100, 0, 0);
+  // a few plants and signs
+  xput(0, tg[125], 90, 225, 0, 100, 0, 0);
+  xput(0, tg[124], 128, 225, 0, 100, 0, 0);
+  xput(0, tg[145], 176, 225, 0, 100, 0, 0);
+  xput(0, tg[126], 270, 225, 0, 100, 0, 0);
+  xput(0, tg[127], 310, 225, 0, 100, 0, 0);
+  xput(0, tg[129], 424, 225, 0, 100, 0, 0);
+  FOR i = 0 TO NLEV - 2
+    map_path(i, i + 1, hasb(lstars[i], 1) != 0);
+  END
+  FOR i = 0 TO NLEV - 1
+    // the node: a lock, a "!" block, or a coin block once cleared
+    c = 28;
+    IF (unlocked(i)) c = 10; END
+    IF (hasb(lstars[i], 1)) c = 11; END
+    xput(0, tg[c], node_x[i], node_y[i], 0, 100, 0, 0);
+    s = lstars[i];
+    IF (unlocked(i))
+      IF (hasb(s, 1)) xput(0, g_sstar, node_x[i] - 8, node_y[i] + 21, 0, 100, 0, 0); ELSE xput(0, g_sstar_off, node_x[i] - 8, node_y[i] + 21, 0, 100, 0, 0); END
+      IF (hasb(s, 2)) xput(0, g_sstar, node_x[i], node_y[i] + 21, 0, 100, 0, 0); ELSE xput(0, g_sstar_off, node_x[i], node_y[i] + 21, 0, 100, 0, 0); END
+      IF (hasb(s, 4)) xput(0, g_sstar, node_x[i] + 8, node_y[i] + 21, 0, 100, 0, 0); ELSE xput(0, g_sstar_off, node_x[i] + 8, node_y[i] + 21, 0, 100, 0, 0); END
+    END
+  END
+  RETURN 0;
+END
+
+FUNCTION map_texts();
+PRIVATE i, w;
+BEGIN
+  delete_text(all_text);
+  FOR w = 0 TO 2
+    shadow_text(f_small, w * 144 + 72, 30, 4, wname[w], '#434a5f');
+    delete_text(txt_sh);
+  END
+  FOR i = 0 TO NLEV - 1
+    IF (unlocked(i))
+      shadow_text(f_small, node_x[i], node_y[i] + 13, 4, "" + ((i / 5) + 1) + "-" + ((i % 5) + 1), '#ffffff');
+    END
+  END
+  shadow_text(f_small, 424, 9, 5, "STARS " + total_stars() + "/" + (NLEV * 3), '#fee481');
+  map_info();
+  RETURN 0;
+END
+
+// The top bar: the chosen room's name, best time and par
+FUNCTION map_info();
+PRIVATE s;
+BEGIN
+  IF (txt_a != 0) delete_text(txt_a); delete_text(map_t); END
+  s = "" + ((map_sel / 5) + 1) + "-" + ((map_sel % 5) + 1) + " " + lname[map_sel];
+  IF (lbest[map_sel] > 0)
+    s = s + "   BEST " + clock_txt(lbest[map_sel] / 60) + "  PAR " + clock_txt(lpar[map_sel]);
+  ELSE
+    s = s + "   PAR " + clock_txt(lpar[map_sel]);
+  END
+  txt_a = shadow_text(f_small, 6, 9, 3, s, '#dff6f5');
+  map_t = txt_sh;
+  RETURN 0;
+END
+
+// =====================================================================
+// HUD
+// =====================================================================
+
+FUNCTION hud_texts();
+BEGIN
+  shadow_text(f_small, 6, 9, 3, "" + ((cur / 5) + 1) + "-" + ((cur % 5) + 1) + " " + lname[cur], '#dff6f5');
+  IF (has_keys)
+    show(196, 9, tg[27], -10);
+    set_color('#fee481');
+    write_int(f_small, 208, 9, 3, OFFSET nkeys);
+  END
+  IF (gems_total > 0)
+    show(244, 9, tg[67], -10);
+    set_color('#fee481');
+    write_int(f_small, 256, 9, 3, OFFSET gems_got);
+    shadow_text(f_small, 262, 9, 3, "/" + gems_total, '#dff6f5');
+  END
+  shadow_text(f_small, 300, 9, 3, "TIME", '#dff6f5');
+  set_color('#fee481');
+  write_int(f_small, 330, 9, 3, OFFSET tsec);
+  shadow_text(f_small, 426, 9, 5, "PAR " + lpar[cur], '#aab0c8');
+  RETURN 0;
+END
+
+// =====================================================================
+// MAIN: start-up, title, map and rooms
+// =====================================================================
+
+PRIVATE i = 0; k = 0; t = 0; pid = 0; res = 0; bits = 0; old = 0; secs = 0; nx = 0;
+BEGIN
+  set_mode(432, 252);
+  set_fps(60, 0);
+  screen_color('#1d2030');
+  set_color('#fee481');
+  write(0, 216, 118, 4, "KEYHOLE HOP");
+  set_color('#dff6f5');
+  write(0, 216, 134, 4, "loading...");
+  FOR k = 1 TO 3
+    font_start(k);
+    FOR i = 0 TO NGLYPH - 1 STEP 10
+      font_part(k, i, i + 9);
+      FRAME;
+    END
+    IF (k == 1) f_small = font_finish(); END
+    IF (k == 2) f_big = font_finish(); END
+    IF (k == 3) f_huge = font_finish(); END
+  END
+  make_graphics();
+  FRAME;
+  make_sounds();
+  make_songs();
+  load_progress();
+  FRAME(300);
+  delete_text(all_text);
+  wiper();
+  scr = 0;
+
+  LOOP
+    // ---------------------------------------------------------------
+    // title
+    IF (scr == 0)
+      let_me_alone();
+      wiper();
+      delete_text(all_text);
+      world = 0;
+      put_screen(0, g_screen);
+      sky_tiles(0, 0, SW, -6);
+      FOR i = 0 TO 23
+        xput(0, tg[22], i * 18 + 9, 225, 0, 100, 0, 0);
+        xput(0, tg[122], i * 18 + 9, 243, 0, 100, 0, 0);
+      END
+      xput(0, tg[125], 30, 207, 0, 100, 0, 0);
+      xput(0, tg[128], 150, 207, 0, 100, 0, 0);
+      xput(0, tg[124], 300, 207, 0, 100, 0, 0);
+      xput(0, tg[150], 400, 207, 0, 100, 0, 0);
+      xput(0, tg[130], 400, 189, 0, 100, 0, 0);
+      bobber(92, 64, tg[27], 0);
+      bobber(340, 64, tg[67], 90000);
+      bobber(64, 132, tg[28], 45000);
+      bobber(368, 132, tg[67], 135000);
+      title_pip();
+      shadow_text(f_huge, 216, 62, 4, "KEYHOLE HOP", '#f4b41b');
+      shadow_text(f_small, 216, 90, 4, "A PUZZLE PLATFORMER IN FIFTEEN ROOMS", '#434a5f');
+      delete_text(txt_sh);
+      shadow_text(f_small, 216, 150, 4, "ARROWS MOVE   Z JUMP   X ACT   UP: DOOR", '#434a5f');
+      delete_text(txt_sh);
+      shadow_text(f_small, 216, 162, 4, "R RETRY   ESC MAP", '#434a5f');
+      delete_text(txt_sh);
+      shadow_text(f_small, 216, 246, 4, "ART: KENNEY (KENNEY.NL), CC0", '#dff6f5');
+      IF (total_stars() > 0) shadow_text(f_small, 216, 104, 4, "STARS " + total_stars() + "/" + (NLEV * 3), '#434a5f'); delete_text(txt_sh); END
+      song_play(m_title);
+      wipe_mode = 3; wipe_t = 0;
+      t = 0; pid = 0;
+      LOOP
+        t++;
+        IF (t % 60 == 1) pid = shadow_text(f_big, 216, 126, 4, "PRESS JUMP", '#ffffff'); k = txt_sh; END
+        IF (t % 60 == 41) delete_text(pid); delete_text(k); END
+        IF (t > 20 AND k_ok_p()) BREAK; END
+        FRAME;
+      END
+      play_sound(s_select, 80, 100, 0);
+      wipe_mode = 1; wipe_t = 0;
+      WHILE (wipe_mode != 2) FRAME; END
+      scr = 1;
+      // start on the first room not yet cleared
+      map_sel = 0;
+      WHILE (map_sel < NLEV - 1 AND hasb(lstars[map_sel], 1)) map_sel++; END
+    END
+
+    // ---------------------------------------------------------------
+    // world map
+    IF (scr == 1)
+      let_me_alone();
+      wiper();
+      delete_text(all_text);
+      txt_a = 0;
+      paint_map();
+      map_texts();
+      map_pip();
+      shadow_text(f_small, 216, 246, 4, "ARROWS CHOOSE   JUMP PLAYS   ESC TITLE", '#ffffff');
+      song_play(m_map);
+      wipe_mode = 3; wipe_t = 0;
+      t = 0;
+      LOOP
+        t++;
+        IF (t > 10)
+          nx = map_sel;
+          IF (key_pressed(_right) OR key_pressed(_d) OR key_pressed(_up) OR key_pressed(_w)) nx = map_sel + 1; END
+          IF (key_pressed(_left) OR key_pressed(_a) OR key_pressed(_down) OR key_pressed(_s)) nx = map_sel - 1; END
+          IF (nx != map_sel)
+            IF (nx >= 0 AND nx < NLEV)
+              IF (unlocked(nx))
+                map_sel = nx;
+                play_sound(s_move, 60, 100, 0);
+                map_info();
+              ELSE
+                play_sound(s_deny, 50, 100, 0);
+              END
+            END
+          END
+          IF (k_ok_p()) scr = 2; BREAK; END
+          IF (key_pressed(_esc)) scr = 0; BREAK; END
+        END
+        FRAME;
+      END
+      play_sound(s_select, 80, 100, 0);
+      wipe_mode = 1; wipe_t = 0;
+      WHILE (wipe_mode != 2) FRAME; END
+      cur = map_sel;
+    END
+
+    // ---------------------------------------------------------------
+    // a room: played until the door, or back to the map
+    IF (scr == 2)
+      world = cur / 5;
+      res = 0;
+      old = -1;
+      WHILE (res == 0)
+        let_me_alone();
+        wiper();
+        delete_text(all_text);
+        up_id = 0;
+        read_room();
+        IF (old != cur)
+          paint_room();
+          FRAME;
+        END
+        spawn_room();
+        hud_texts();
+        hint_id = shadow_text(f_small, 216, 30, 4, lhint[cur], '#ffffff');
+        hint_sh = txt_sh;
+        hint_t = 360;
+        IF (old != cur) song_play(m_world[world]); END
+        old = cur;
+        IF (wipe_mode == 2) wipe_mode = 3; wipe_t = 0; END
+        LOOP
+          IF (NOT won AND NOT pdead)
+            IF (key_pressed(_r)) res = 0; BREAK; END
+            IF (key_pressed(_esc)) res = 2; BREAK; END
+          END
+          IF (pdead AND dead_t > 50) res = 0; BREAK; END
+          IF (won AND exit_t > 40) res = 1; BREAK; END
+          FRAME;
+        END
+        IF (res == 0 AND NOT pdead)
+          // a retry by hand: a quick wipe
+          wipe_mode = 1; wipe_t = 0;
+          WHILE (wipe_mode != 2) FRAME; END
+        END
+        IF (res == 0 AND pdead)
+          wipe_mode = 1; wipe_t = 0;
+          WHILE (wipe_mode != 2) FRAME; END
+        END
+      END
+
+      IF (res == 1)
+        // ---- the room is cleared: stars
+        secs = lt / 60;
+        bits = 1;
+        IF (gems_got >= gems_total) bits = orb(bits, 2); END
+        IF (lt <= lpar[cur] * 60) bits = orb(bits, 4); END
+        first_clear = hasb(lstars[cur], 1) == 0;
+        IF (hasb(bits, 1)) lstars[cur] = orb(lstars[cur], 1); END
+        IF (hasb(bits, 2)) lstars[cur] = orb(lstars[cur], 2); END
+        IF (hasb(bits, 4)) lstars[cur] = orb(lstars[cur], 4); END
+        IF (lbest[cur] == 0 OR lt < lbest[cur]) lbest[cur] = lt; END
+        save_progress(cur);
+        song_play(m_clear, 0);
+        IF (hint_t > 0) delete_text(hint_id); delete_text(hint_sh); hint_t = 0; END
+        IF (up_id != 0) delete_text(up_id); delete_text(up_sh); up_id = 0; END
+        panel_spr(216, 132, g_panel);
+        shadow_text(f_big, 216, 88, 4, "ROOM CLEAR!", '#f4b41b');
+        shadow_text(f_small, 216, 110, 4, "TIME " + clock_txt(secs) + "   PAR " + clock_txt(lpar[cur]), '#434a5f');
+        delete_text(txt_sh);
+        shadow_text(f_small, 216, 122, 4, "GEMS " + gems_got + "/" + gems_total, '#434a5f');
+        delete_text(txt_sh);
+        star_pop(176, 148, g_star, 20);
+        IF (hasb(bits, 2)) star_pop(216, 148, g_star, 40); ELSE star_pop(216, 148, g_star_off, 40); END
+        IF (hasb(bits, 4)) star_pop(256, 148, g_star, 60); ELSE star_pop(256, 148, g_star_off, 60); END
+        set_color('#747a90');
+        write(f_small, 176, 164, 4, "DOOR");
+        write(f_small, 216, 164, 4, "GEMS");
+        write(f_small, 256, 164, 4, "PAR");
+        t = 0;
+        LOOP
+          t++;
+          IF (t == 80) shadow_text(f_small, 216, 184, 4, "PRESS JUMP", '#2eb082'); delete_text(txt_sh); END
+          IF (t > 80 AND (k_ok_p() OR key_pressed(_esc))) BREAK; END
+          FRAME;
+        END
+        IF (cur == NLEV - 1 AND first_clear)
+          // ---- the last door: the ending
+          wipe_mode = 1; wipe_t = 0;
+          WHILE (wipe_mode != 2) FRAME; END
+          let_me_alone();
+          wiper();
+          delete_text(all_text);
+          world = 2;
+          put_screen(0, g_screen);
+          sky_tiles(2, 0, SW, -6);
+          FOR i = 0 TO 23
+            xput(0, tg[62], i * 18 + 9, 225, 0, 100, 0, 0);
+            xput(0, tg[122], i * 18 + 9, 243, 0, 100, 0, 0);
+          END
+          title_pip();
+          FOR i = 0 TO 7
+            bobber(40 + i * 50, 130 + (i % 2) * 20, tg[67 - 40 * (i % 2)], i * 30000);
+          END
+          shadow_text(f_big, 216, 60, 4, "EVERY DOOR IS OPEN!", '#f4b41b');
+          shadow_text(f_small, 216, 84, 4, "PIP FOUND THE WAY HOME. THANK YOU FOR PLAYING!", '#434a5f');
+          delete_text(txt_sh);
+          shadow_text(f_small, 216, 98, 4, "STARS " + total_stars() + "/" + (NLEV * 3), '#434a5f');
+          delete_text(txt_sh);
+          shadow_text(f_small, 216, 246, 4, "ART: KENNEY (KENNEY.NL), CC0", '#dff6f5');
+          song_play(m_title);
+          wipe_mode = 3; wipe_t = 0;
+          t = 0;
+          LOOP
+            t++;
+            IF (t % 40 == 0) sparks(rand(40, 390), rand(40, 120), 8, 1); END
+            IF (t > 90 AND k_ok_p()) BREAK; END
+            FRAME;
+          END
+        END
+        // next time the map points at the next room
+        IF (cur < NLEV - 1 AND first_clear) map_sel = cur + 1; ELSE map_sel = cur; END
+      END
+      wipe_mode = 1; wipe_t = 0;
+      WHILE (wipe_mode != 2) FRAME; END
+      scr = 1;
+    END
+  END
+END

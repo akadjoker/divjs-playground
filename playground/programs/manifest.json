@@ -264,6 +264,18 @@
       "touch": { "pad": "dpad", "buttons": "", "menu": "tab:Debug" }
     },
     {
+      "id": "keyhole-hop",
+      "title": "Keyhole Hop",
+      "category": "demos",
+      "file": "keyhole-hop.div",
+      "width": 432,
+      "height": 252,
+      "clearColor": "#1d2030",
+      "description": "A puzzle platformer in fifteen one-screen rooms across three worlds (Clover Isle, Frostbite Peaks, Sunbaked Dunes). Help Pip reach each exit door: keys open locks, levers swap the yellow and brown blocks, crates can be pushed (and slide on ice), blue buttons hold gates open, springs, moving platforms, ladders, bats, walkers and angry blocks. A world map, three stars a room (door, every gem, par time) and saved progress. Real pixel-art sprites cut out of Kenney's Pixel Platformer pack (kenney.nl, CC0) with load_tile; sound and music are made by the engine.",
+      "controls": "Arrows/WASD move, Z/Space jump (hold for higher), X or Down pulls a lever, Up at the door goes in, Up/Down climb ladders; R retries the room, Esc goes back to the map",
+      "touch": { "pad": "dpad", "buttons": "z:Jump,x:Act", "menu": "r:Retry,esc:Map" }
+    },
+    {
       "id": "maze",
       "title": "Maze Runner",
       "category": "procedural",
