@@ -570,6 +570,48 @@ function onWorkspaceChange(event)
   scheduleSave();
 }
 
+// Blockly shows a tooltip below the pointer and means to move it above
+// when it would leave the window, but it compares the workspace's own
+// coordinates with the window's: on a page scrolled down (the phone
+// layout) a tooltip of a block near the bottom hung off the window. Each
+// time it is placed, it is moved back inside the window if it is not.
+function keepTooltipsInWindow()
+{
+  const tip = Blockly.Tooltip.getDiv();
+  if (!tip)
+  {
+    return;
+  }
+  const margin = 5;
+  const pointerGap = 20;
+  new MutationObserver(() =>
+  {
+    if (tip.style.display === 'none')
+    {
+      return;
+    }
+    const r = tip.getBoundingClientRect();
+    let dx = 0;
+    let dy = 0;
+    if (r.bottom > window.innerHeight - margin)
+    {
+      // Above the pointer instead of below it.
+      dy = -(r.height + pointerGap);
+    }
+    dy = Math.max(dy, margin - r.top);
+    if (r.right > window.innerWidth - margin)
+    {
+      dx = window.innerWidth - margin - r.right;
+    }
+    dx = Math.max(dx, margin - r.left);
+    if (dx !== 0 || dy !== 0)
+    {
+      tip.style.left = `${parseFloat(tip.style.left || '0') + dx}px`;
+      tip.style.top = `${parseFloat(tip.style.top || '0') + dy}px`;
+    }
+  }).observe(tip, { attributes: true, attributeFilter: ['style'] });
+}
+
 function createWorkspace()
 {
   registerBlocks();
@@ -585,6 +627,7 @@ function createWorkspace()
     grid: { spacing: 24, length: 2, colour: '#223242', snap: false }
   });
   registerFlyouts(workspace);
+  keepTooltipsInWindow();
   workspace.addChangeListener(onWorkspaceChange);
   new ResizeObserver(() => Blockly.svgResize(workspace)).observe(el.workspace);
 }

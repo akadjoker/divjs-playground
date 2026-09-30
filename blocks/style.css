@@ -118,7 +118,23 @@
   min-height: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  overflow: hidden;
+}
+
+/* Blockly puts its floating widgets (dropdown menus, the colour picker,
+   the context menu, tooltips) inside its injection div, which it clips by
+   default: a menu that opens upwards from a block near the bottom edge
+   lost its first options. They may overflow the workspace; the drawing
+   surface and the toolbox keep the rounded corners instead. */
+.workspace .injectionDiv {
+  overflow: visible;
+}
+
+.workspace .blocklySvg {
+  border-radius: var(--radius);
+}
+
+.workspace .blocklyToolbox {
+  border-radius: var(--radius) 0 0 var(--radius);
 }
 
 /* Blockly's toolbox: the category list on the left. */

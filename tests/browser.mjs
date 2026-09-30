@@ -1477,6 +1477,189 @@ try
     assert(backCode === before.code, 'the code changed after switching back');
   });
 
+  // Blockly's floating widgets must never be cut off by the page layout: a
+  // dropdown that opens upwards from a block in the lower part of the
+  // workspace, the context menu and a tooltip of a block at its bottom
+  // edge. Each is opened with a real click (or hover) and every option
+  // must be inside the window, not clipped by any box around it, and
+  // reachable by a click at its centre.
+  await check('blocks: dropdowns, context menu and tooltips are not cut off', async () =>
+  {
+    // How much of an element can be seen: its box, cut by every ancestor
+    // that clips and by the window.
+    const visibleBox = () =>
+    {
+      window.visibleBox = (element) =>
+      {
+        const r = element.getBoundingClientRect();
+        let box = { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
+        const cut = (c) =>
+        {
+          box = {
+            left: Math.max(box.left, c.left),
+            top: Math.max(box.top, c.top),
+            right: Math.min(box.right, c.right),
+            bottom: Math.min(box.bottom, c.bottom)
+          };
+        };
+        for (let p = element.parentElement; p && p !== document.documentElement; p = p.parentElement)
+        {
+          if (getComputedStyle(p).overflow !== 'visible')
+          {
+            cut(p.getBoundingClientRect());
+          }
+        }
+        cut({ left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight });
+        const whole = box.left <= r.left + 0.5 && box.top <= r.top + 0.5 && box.right >= r.right - 0.5 && box.bottom >= r.bottom - 0.5;
+        return { top: Math.round(r.top), bottom: Math.round(r.bottom), whole };
+      };
+    };
+    // Options of the menu shown in `root`: each one scrolled into the
+    // menu's own view if the menu scrolls, then checked.
+    const menuOptions = (page, root) => page.evaluate((selector) =>
+    {
+      const items = [...document.querySelectorAll(`${selector} .blocklyMenuItem`)];
+      return items.map((item, i) =>
+      {
+        const menu = item.closest('.blocklyMenu');
+        const r = item.getBoundingClientRect();
+        const m = menu.getBoundingClientRect();
+        if (r.top < m.top)
+        {
+          menu.scrollTop -= m.top - r.top;
+        }
+        else if (r.bottom > m.bottom)
+        {
+          menu.scrollTop += r.bottom - m.bottom;
+        }
+        const box = window.visibleBox(item);
+        const now = item.getBoundingClientRect();
+        const hit = document.elementFromPoint(now.left + now.width / 2, now.top + now.height / 2);
+        return { text: item.textContent.trim() || `#${i + 1}`, ...box, clickable: Boolean(hit && item.contains(hit)) };
+      });
+    }, root);
+    // Lesson 1's solution, its "look like" block moved so that the colour
+    // field sits `fromBottom` px above the bottom edge of the workspace,
+    // and the page scrolled so that edge is in the window.
+    const placeLook = async (page, fromBottom) =>
+    {
+      await page.evaluate(() =>
+      {
+        window.divBlocks.openLesson(0);
+        window.divBlocks.showSolution();
+      });
+      await page.evaluate(() =>
+      {
+        const r = document.getElementById('workspace').getBoundingClientRect();
+        window.scrollBy(0, Math.max(0, r.bottom - window.innerHeight + 8));
+      });
+      await page.waitForTimeout(200);
+      return page.evaluate((offset) =>
+      {
+        const ws = window.divBlocks.workspace();
+        const look = ws.getBlocksByType('div_look', false)[0];
+        const field = look.getField('COLOUR').getSvgRoot();
+        const area = document.getElementById('workspace').getBoundingClientRect();
+        let r = field.getBoundingClientRect();
+        look.getRootBlock().moveBy(0, (area.bottom - offset - (r.top + r.height / 2)) / ws.scale);
+        r = field.getBoundingClientRect();
+        const block = look.getSvgRoot().querySelector('.blocklyPath').getBoundingClientRect();
+        return {
+          field: { x: r.left + r.width / 2, y: r.top + r.height / 2 },
+          // A spot on the block itself, left of its first field.
+          block: { x: block.left + 12, y: block.top + block.height / 2 },
+          area: { top: area.top, bottom: area.bottom }
+        };
+      }, fromBottom);
+    };
+    const failures = [];
+    const cases = [
+      ['desktop', { width: 1280, height: 800 }, [30, 260]],
+      ['short desktop', { width: 1280, height: 560 }, [30]],
+      ['phone', { width: 390, height: 844 }, [30, 300]]
+    ];
+    for (const [name, viewport, offsets] of cases)
+    {
+      const { page, problems } = await openBlocks(null, viewport);
+      await page.evaluate(visibleBox);
+      for (const offset of offsets)
+      {
+        const where = `${name}, ${offset} px from the bottom`;
+        const spot = await placeLook(page, offset);
+        await page.mouse.click(spot.field.x, spot.field.y);
+        await page.waitForTimeout(400);
+        const options = await menuOptions(page, '.blocklyDropDownDiv');
+        if (options.length !== 10)
+        {
+          failures.push(`${where}: the colour dropdown shows ${options.length} options`);
+        }
+        const bad = options.filter((o) => !o.whole || !o.clickable);
+        if (bad.length > 0)
+        {
+          failures.push(`${where}: options cut off or not clickable: ${bad.map((o) => `${o.text} ${o.top}-${o.bottom}${o.whole ? '' : ' cut'}${o.clickable ? '' : ' covered'}`).join(', ')}`);
+        }
+        // Choosing the first option (red) with a real click works.
+        const first = await page.evaluate(() =>
+        {
+          const item = document.querySelector('.blocklyDropDownDiv .blocklyMenuItem');
+          if (!item)
+          {
+            return null;
+          }
+          item.closest('.blocklyMenu').scrollTop = 0;
+          const r = item.getBoundingClientRect();
+          return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+        });
+        if (first)
+        {
+          await page.mouse.click(first.x, first.y);
+          await page.waitForTimeout(300);
+        }
+        const colour = await page.evaluate(() => window.divBlocks.workspace().getBlocksByType('div_look', false)[0].getFieldValue('COLOUR'));
+        if (colour !== 'red')
+        {
+          failures.push(`${where}: clicking the first colour chose "${colour}", not red`);
+        }
+        await page.keyboard.press('Escape');
+      }
+      // The context menu and the tooltip of a block at the bottom edge.
+      const spot = await placeLook(page, 40);
+      await page.mouse.click(spot.block.x, spot.block.y, { button: 'right' });
+      await page.waitForTimeout(400);
+      const items = await menuOptions(page, '.blocklyWidgetDiv');
+      if (items.length < 3)
+      {
+        failures.push(`${name}: the context menu shows ${items.length} items`);
+      }
+      const badItems = items.filter((o) => !o.whole || !o.clickable);
+      if (badItems.length > 0)
+      {
+        failures.push(`${name}: context menu items cut off or not clickable: ${badItems.map((o) => `${o.text} ${o.top}-${o.bottom}`).join(', ')}`);
+      }
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(200);
+      await page.mouse.move(spot.block.x, spot.block.y);
+      await page.mouse.move(spot.block.x + 2, spot.block.y);
+      await page.waitForTimeout(1500);
+      const tooltip = await page.evaluate(() =>
+      {
+        const tip = document.querySelector('.blocklyTooltipDiv');
+        return tip && getComputedStyle(tip).display !== 'none' ? { text: tip.textContent, ...window.visibleBox(tip) } : null;
+      });
+      if (!tooltip)
+      {
+        failures.push(`${name}: no tooltip over the block`);
+      }
+      else if (!tooltip.whole)
+      {
+        failures.push(`${name}: the tooltip is cut off (${tooltip.top}-${tooltip.bottom})`);
+      }
+      await page.close();
+      failures.push(...problems);
+    }
+    assert(failures.length === 0, failures.join('\n'));
+  });
+
   await check('blocks: phone width stacks the page without sideways scrolling', async () =>
   {
     const { page, problems } = await openBlocks(null, { width: 390, height: 844 });
