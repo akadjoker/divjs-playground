@@ -2180,7 +2180,7 @@ BEGIN
     say(f2, 337, 196, 1, "NEW BEST!", '#ffd84a');
   END
   IF (roll == 59 AND new_best) play_sound(s_best, 60, 100, 0); END
-  say(f1, 240, 236, 1, "ENTER  SONG LIST        R  PLAY AGAIN", '#b8b0d8');
+  say(f1, 240, 212, 1, "ENTER  SONG LIST        R  PLAY AGAIN", '#b8b0d8');
   IF (st > 30 AND k_ok())
     play_sound(s_ok, 70, 100, 0);
     kill_play(); enter_select();

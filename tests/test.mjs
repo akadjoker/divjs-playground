@@ -268,6 +268,44 @@ for (const name of readdirSync(programsDir)) {
 	}
 }
 
+// Beat Bash: the rhythm game compiles with the processes and functions its
+// songs, charts and judging are built from.
+{
+	const problems = [];
+	try
+	{
+		const { bytecode } = compileSource(readFileSync(join(programsDir, 'beat-bash.div'), 'utf-8'));
+		for (const name of ['note', 'beatline', 'receptor', 'glowp', 'highway', 'popup', 'countin', 'spark', 'grade_show'])
+		{
+			if (!bytecode.processTable.has(name))
+			{
+				problems.push(`no PROCESS ${name}`);
+			}
+		}
+		for (const name of ['song1', 'song2', 'song3', 'make_song', 'build_chart', 'judge', 'miss', 'play_update', 'resume_play', 'calib_update'])
+		{
+			if (!bytecode.functionTable.has(name))
+			{
+				problems.push(`no FUNCTION ${name}`);
+			}
+		}
+	}
+	catch (err)
+	{
+		problems.push(err?.message || String(err));
+	}
+	if (problems.length > 0)
+	{
+		console.log(`FAIL  ${'beat-bash (compile)'.padEnd(35)} ${problems.join(', ')}`);
+		fail += 1;
+	}
+	else
+	{
+		console.log(`OK    ${'beat-bash (compile)'.padEnd(35)} processes and rhythm functions present`);
+		ok += 1;
+	}
+}
+
 // Export packs the engine bundle as a single module (the packer's own
 // tests live with the library).
 {

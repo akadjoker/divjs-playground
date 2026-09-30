@@ -101,6 +101,13 @@ const SHOTS = {
       ['wait', 250], hold('z', 300), ['wait', 600], ['down', 'x'], ['wait', 400], hold('z', 330), ['wait', 500], hold('z', 330),
       ['wait', 500], hold('z', 300), ['up', 'x'], ['up', 'ArrowRight']]
   },
+  'beat-bash': {
+    seconds: 9,
+    setup: [['wait', 2500]],
+    play: [['wait', 1600], ['press', 'Enter'], ['wait', 900], ['press', 'ArrowDown'], ['wait', 700], ['press', 'ArrowDown'], ['wait', 700],
+      ['press', 'ArrowUp'], ['wait', 500], ['press', 'ArrowUp'], ['wait', 500], ['press', 'Enter'], ['wait', 2700], ['press', 'f'], ['wait', 600],
+      ['press', 'j'], ['wait', 300], ['press', 'k']]
+  },
   'vector-asteroids': {
     seconds: 6,
     setup: [['wait', 1200], ['press', 'Enter'], ['wait', 800]],
