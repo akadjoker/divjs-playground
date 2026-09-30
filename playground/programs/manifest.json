@@ -684,6 +684,18 @@
       "touch": { "pad": "dpad", "buttons": "z:Jump,x:Run", "menu": "enter:Start" }
     },
     {
+      "id": "sky-shield",
+      "title": "Sky Shield",
+      "category": "procedural",
+      "file": "sky-shield.div",
+      "width": 640,
+      "height": 480,
+      "clearColor": "#000000",
+      "description": "Missile defence over Harbour City: click or tap the sky and the nearest of three batteries fires an interceptor that bursts into a blast - anything caught in it explodes too, so blasts chain. Missiles that split, bombers, weaving zippers and the Hive Carrier every fifth wave; the day turns to dusk and night as the waves go on, and the city's windows go dark when it is hit. Graphics, sound and music are all made in code.",
+      "controls": "Click or tap to fire the nearest battery at that point; or arrows/WASD move the crosshair, 1/2/3 fire the left/centre/right battery, Space the nearest; P pause, M music, Enter start",
+      "touch": { "pad": "none", "buttons": "", "menu": "p:Pause,m:Music" }
+    },
+    {
       "id": "balloon-pop",
       "title": "Balloon Pop",
       "category": "kids",
