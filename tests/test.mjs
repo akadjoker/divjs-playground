@@ -268,6 +268,44 @@ for (const name of readdirSync(programsDir)) {
 	}
 }
 
+// Balloon Pop: the children's game compiles with the processes and
+// functions its balloons, target card, stars and stroke font are made of.
+{
+	const problems = [];
+	try
+	{
+		const { bytecode } = compileSource(readFileSync(join(programsDir, 'balloon-pop.div'), 'utf-8'));
+		for (const name of ['balloon', 'bpart', 'card', 'star_slot', 'flystar', 'confetti', 'firework', 'mascot', 'big_bun', 'tile'])
+		{
+			if (!bytecode.processTable.has(name))
+			{
+				problems.push(`no PROCESS ${name}`);
+			}
+		}
+		for (const name of ['glyph', 'put_glyph', 'shape_pass', 'spawn', 'balloon_at', 'right_tap', 'wrong_tap', 'new_target', 'pick_distractors', 'set_level'])
+		{
+			if (!bytecode.functionTable.has(name))
+			{
+				problems.push(`no FUNCTION ${name}`);
+			}
+		}
+	}
+	catch (err)
+	{
+		problems.push(err?.message || String(err));
+	}
+	if (problems.length > 0)
+	{
+		console.log(`FAIL  ${'balloon-pop (compile)'.padEnd(35)} ${problems.join(', ')}`);
+		fail += 1;
+	}
+	else
+	{
+		console.log(`OK    ${'balloon-pop (compile)'.padEnd(35)} processes and functions present`);
+		ok += 1;
+	}
+}
+
 // Export packs the engine bundle as a single module (the packer's own
 // tests live with the library).
 {

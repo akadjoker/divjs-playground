@@ -567,12 +567,14 @@ BEGIN
       gfx_circle(g, 109.5, 92, 2.8, 255, 255, 255);
     END
   END
-  // nose and mouth
-  ell(g, 90, 110, 6, 4, 240, 120, 150);
+  // mouth and nose; cheering, a big open smile
   IF (fr == 3)
-    ell(g, 90, 124, 9, 8, 150, 50, 70);
-    ell(g, 90, 128, 5, 3, 255, 150, 170);
-  ELSE
+    ell(g, 90, 116, 13, 12, 150, 50, 70);
+    gfx_rect(g, 74, 102, 32, 14, fr_r, fr_g, fr_b);
+    ell(g, 90, 124, 7, 3, 255, 150, 170);
+  END
+  ell(g, 90, 110, 6, 4, 240, 120, 150);
+  IF (fr != 3)
     thick(g, 90, 113, 90, 118, 1.6, o_r, o_g, o_b);
     FOR i = 0 TO 6
       gfx_circle(g, 90 - 7 * cos(i * 15000), 118 + 3 * sin(i * 15000), 1.6, o_r, o_g, o_b);
@@ -737,9 +739,10 @@ BEGIN
     gfx_rect(g, 0, 0, 12, 8, pal_r[i], pal_g[i], pal_b[i]);
     gfx_rect(g, 0, 0, 12, 2, pc(i, 0, 50), pc(i, 1, 50), pc(i, 2, 50));
     g_conf[i] = g;
-    g = new_graphic(14, 14);
-    gfx_circle(g, 7, 7, 6.5, pal_r[i], pal_g[i], pal_b[i]);
-    gfx_circle(g, 7, 7, 3.5, pc(i, 0, 70), pc(i, 1, 70), pc(i, 2, 70));
+    g = new_graphic(22, 22);
+    gfx_circle(g, 11, 11, 10.5, pc(i, 0, 40), pc(i, 1, 40), pc(i, 2, 40));
+    gfx_circle(g, 11, 11, 8, pal_r[i], pal_g[i], pal_b[i]);
+    gfx_circle(g, 11, 11, 4, 255, 255, 255);
     g_spark[i] = g;
   END
   g = new_graphic(30, 30);
@@ -1380,7 +1383,7 @@ BEGIN
   IF (lane_free(l, sy) == 0) RETURN 0; END
   // the right one comes often, and always when none is on the way
   v = target;
-  IF (target_alive() > 0 AND rand(0, 99) >= 46 - lvl * 4 AND ndis > 0)
+  IF (target_alive() > 0 AND rand(0, 99) >= 55 - lvl * 4 AND ndis > 0)
     v = dis[rand(0, ndis - 1)];
   END
   col = rand(0, NCOL - 1); sg = 0;
@@ -1686,8 +1689,10 @@ BEGIN
       IF (state == ST_CELEB)
         celeb_t++;
         IF (celeb_t % 26 == 1 AND celeb_t < 230)
-          firework(rand(90, SW - 90), rand(160, 320));
+          IF ((celeb_t / 26) % 2 == 0) k = rand(80, 210); ELSE k = rand(430, 560); END
+          firework(k, rand(160, 290));
         END
+        IF (celeb_t % 3 == 0 AND celeb_t < 240) confetti(rand(20, SW - 20), 110, rand(0, NCOL - 1)); END
         IF (celeb_t > 300) end_celebration(); END
       END
     END
