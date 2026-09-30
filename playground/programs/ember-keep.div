@@ -113,7 +113,7 @@ GLOBAL
   want_room = -1; want_dir = 0; slide_t = 0;
   sx0 = 0.0; sy0 = 0.0; sx1 = 0.0; sy1 = 0.0; hx0 = 0.0; hy0 = 0.0; hx1 = 0.0; hy1 = 0.0;
   camx = 0.0; camy = 0.0; shake = 0.0;
-  boss_on = 0; boss_hp = 0; boss_max = 24; boss_dead = 0;
+  boss_on = 0; boss_hp = 0; boss_max = 36; boss_dead = 0;
 
   // ---- the hero
   px = 0.0; py = 0.0; hero_id = 0;
@@ -124,7 +124,7 @@ GLOBAL
   best_time = 0; best_score = 0; new_best_t = 0; new_best_s = 0;
 
   // ---- messages
-  msg_a = 0; msg_b = 0; msg_t = 0;
+  msg_a = 0; msg_b = 0; msg_t = 0; last_sh = 0;
   pause_a = 0; pause_b = 0; pause_dim = 0;
   nparts = 0;
 
@@ -258,12 +258,12 @@ BEGIN
 END
 
 // Text with a drop shadow (kept until delete_text); returns the text's
-// id, the shadow's id goes to msg_b
+// id, the shadow's id goes to last_sh
 FUNCTION stext(f, x, y, al, s, col);
 PRIVATE a;
 BEGIN
   set_color('#2a1620');
-  msg_b = write(f, x + 1, y + 1, al, s);
+  last_sh = write(f, x + 1, y + 1, al, s);
   set_color(col);
   a = write(f, x, y, al, s);
   RETURN a;
@@ -274,6 +274,7 @@ FUNCTION show_msg(s, frames, col);
 BEGIN
   IF (msg_a) delete_text(msg_a); delete_text(msg_b); END
   msg_a = stext(f_small, 160, 182, 4, s, col);
+  msg_b = last_sh;
   msg_t = frames;
   RETURN 0;
 END
@@ -817,9 +818,9 @@ BEGIN
     RETURN 50;
   END
   IF (row == 3 AND col == 1) RETURN 53; END
-  h = (r * 31 + row * 7 + col * 13 + row * col * 5) % 23;
+  h = (row * row * 7 + col * col * 11 + row * col * 3 + r * 5 + col * row * row) % 19;
   IF (h == 0) RETURN 49; END
-  IF (h == 7) RETURN 51; END
+  IF (h == 9) RETURN 51; END
   RETURN 48;
 END
 
@@ -1933,9 +1934,12 @@ BEGIN
         IF (fits(fx + vx + kvx, fy, 12, 1)) fx += vx + kvx; END
         IF (fits(fx, fy + vy + kvy, 12, 1)) fy += vy + kvy; END
         kvx = kvx * 0.7; kvy = kvy * 0.7;
-        IF (sw_hits(fx, fy, 14, my_sw))
-          my_sw = sw_no; boss_hp -= sw_dmg; fl = 8;
+        IF (fl == 0 AND sw_hits(fx, fy, 14, my_sw))
+          // a blow: Scorchclaw flinches (no second blow while it flashes)
+          // and Wren is thrown back off the shell
+          my_sw = sw_no; boss_hp -= sw_dmg; fl = 14;
           a = kb_angle(fx, fy); kvx = get_distx(a, 1.2); kvy = get_disty(a, 1.2);
+          kbx = get_distx(a, -2.4); kby = get_disty(a, -2.4);
           hit_fx(fx, fy);
           IF (boss_hp <= 0)
             boss_hp = 0; boss_on = 0; boss_dead = 1;
@@ -2258,8 +2262,8 @@ BEGIN
     t = 0; blink_id = 0; k = 0;
     LOOP
       t++;
-      IF (t % 50 == 1) blink_id = stext(f_big, 160, 146, 4, "PRESS ENTER", '#ffe761'); k = msg_b; END
-      IF (t % 50 == 34) delete_text(blink_id); delete_text(k); END
+      IF (t % 50 == 1) blink_id = stext(f_big, 160, 146, 4, "PRESS ENTER", '#ffe761'); k = last_sh; END
+      IF (t % 50 == 34 AND blink_id) delete_text(blink_id); delete_text(k); blink_id = 0; END
       IF (t > 20 AND k_start_p()) BREAK; END
       FRAME;
     END
@@ -2293,9 +2297,9 @@ BEGIN
         IF (paused)
           pause_dim = veil();
           pause_a = stext(f_big, 160, 96, 4, "PAUSED", '#ffffff');
-          pause_b = msg_b;
+          pause_b = last_sh;
           k = stext(f_small, 160, 116, 4, "ENTER / P TO GO ON", '#c0cbdc');
-          txt[0] = k; txt[1] = msg_b;
+          txt[0] = k; txt[1] = last_sh;
         ELSE
           signal(pause_dim, s_kill);
           delete_text(pause_a); delete_text(pause_b); delete_text(txt[0]); delete_text(txt[1]);
@@ -2375,7 +2379,7 @@ BEGIN
       song_play(m_win, 0);
       IF (best_time == 0 OR secs < best_time) best_time = secs; new_best_t = 1; save_data("best_time", best_time); END
       stext(f_huge, 160, 34, 4, "THE HEARTH BURNS", '#ffe761');
-      stext(f_small, 160, 58, 4, "WREN BROUGHT THE EMBER HEART HOME. THE KEEP IS WARM AGAIN.", '#f7c282');
+      stext(f_small, 160, 58, 4, "THE EMBER HEART IS HOME. THE KEEP IS WARM AGAIN.", '#f7c282');
     ELSE
       song_play(m_over, 0);
       stext(f_huge, 160, 40, 4, "WREN HAS FALLEN", '#ff706d');
@@ -2387,7 +2391,7 @@ BEGIN
     IF (new_best_s)
       stext(f_small, 160, 120, 4, "A NEW BEST SCORE!", '#7dffc8');
     ELSE
-      stext(f_small, 160, 120, 4, "BEST SCORE " + best_score, '#8b9bb4');
+      IF (best_score > 0) stext(f_small, 160, 120, 4, "BEST SCORE " + best_score, '#8b9bb4'); END
     END
     IF (gs == GS_WIN)
       IF (new_best_t)
@@ -2399,8 +2403,8 @@ BEGIN
     over_t = 0; blink_id = 0; k = 0;
     LOOP
       over_t++;
-      IF (over_t > 60 AND over_t % 50 == 1) blink_id = stext(f_small, 160, 160, 4, "PRESS ENTER", '#ffe761'); k = msg_b; END
-      IF (over_t > 60 AND over_t % 50 == 34) delete_text(blink_id); delete_text(k); END
+      IF (over_t > 60 AND over_t % 50 == 1) blink_id = stext(f_small, 160, 160, 4, "PRESS ENTER", '#ffe761'); k = last_sh; END
+      IF (over_t > 60 AND over_t % 50 == 34 AND blink_id) delete_text(blink_id); delete_text(k); blink_id = 0; END
       IF (over_t > 70 AND k_start_p()) BREAK; END
       FRAME;
     END
