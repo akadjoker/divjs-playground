@@ -98,7 +98,7 @@ GLOBAL
   g_ring = 0; g_cross = 0; g_spark[2]; g_chunk = 0; g_smoke[1]; g_bomber[1];
   g_boss[1]; g_boss_hit = 0; g_base = 0; g_base_dead = 0; g_barrel = 0;
   g_hud = 0; g_title = 0; g_sub = 0; g_help = 0; g_banner = 0; g_panel = 0;
-  g_pause = 0; g_over = 0;
+  g_pause = 0; g_over = 0; g_dim = 0;
   hud_score = -1; hud_wave = -1; hud_best = -1; hud_mult = -1;
 
   // ---- sound
@@ -571,6 +571,8 @@ BEGIN
   ctext(g_title, 308, 4, "SKY SHIELD", 10, 76, 250, 252, 255);
   g_sub = new_graphic(620, 26);
   ctext(g_sub, 310, 2, "HOLD THE LINE OVER HARBOUR CITY", 31, 18, 255, 210, 120);
+  g_dim = new_graphic(640, 480);
+  gfx_fill_rgba(g_dim, 4, 6, 18, 55);
   g_pause = new_graphic(400, 90);
   ctext(g_pause, 200, 6, "PAUSED", 6, 44, 255, 255, 255);
   ctext(g_pause, 200, 60, "P, tap or click to go on", 24, 14, 200, 220, 255);
@@ -1183,7 +1185,7 @@ BEGIN
   slot = e_alloc(4, fx, fy);
   IF (slot >= 0)
     boss_max = 8 + wave; boss_hp = boss_max; boss_state = 1; boss_seen++;
-    z = 14; graph = g_boss[0];
+    z = -1; graph = g_boss[0];            // in front of the blasts that hit it
     play_sound(s_warn, 70, 100, 0);
     music(mus_boss, 1);
     vt = 140;
@@ -1525,12 +1527,13 @@ BEGIN
   b_left = 0; IF (wave >= 2) b_left = min(1 + wave / 2, 5); END
   z_left = 0; IF (wave >= 4) z_left = min(wave - 3, 8); END
   IF (boss_wave) m_left = 6 + wave; b_left = 1; z_left = wave / 4; END
-  m_spd = min(0.7 + wave * 0.12, 2.2);
+  m_spd = min(0.7 + wave * 0.1, 2.0);
   split_p = 0; IF (wave >= 3) split_p = min(8 + wave * 4, 40); END
   salvo_t = 40; bomb_t = 260; zip_t = 380;
   boss_state = 0;
-  FROM k = 0 TO 2; bat_alive[k] = 1; bat_ammo[k] = AMMO; bat_cool[k] = 0; END
-  IF (boss_wave) FROM k = 0 TO 2; bat_ammo[k] = AMMO + 4; END END
+  n = AMMO + min(wave / 3, 4);
+  IF (boss_wave) n += 4; END
+  FROM k = 0 TO 2; bat_alive[k] = 1; bat_ammo[k] = n; bat_cool[k] = 0; END
   set_palette((wave - 1) % 6);
   redraw_world();
   // the banner
@@ -1792,23 +1795,23 @@ BEGIN
 END
 
 FUNCTION pause_game();
-PRIVATE t, spr, pl;
+PRIVATE t, spr, dim, pl;
 BEGIN
   all_types(s_freeze);
   paused = 1;
   music_volume(16);
   shx = 0; shy = 0;
+  dim = sprite(320, 240, g_dim, -65);
   spr = sprite(320, 220, g_pause, -70);
   t = 0; pl = 1;
   LOOP
     t++;
-    draw_rect(0, 0, 640, 480, 'rgba(4,6,18,0.55)');
     IF (t > 10 AND (key_pressed(_p) OR key_pressed(_esc) OR (mouse.left AND NOT pl))) BREAK; END
     pl = mouse.left;
     IF (key_pressed(_m)) music_on = 1 - music_on; mus_now = -1; END
     FRAME;
   END
-  signal(spr, s_kill);
+  signal(spr, s_kill); signal(dim, s_kill);
   prev_left = 1;
   music_volume(42);
   all_types(s_wakeup);
@@ -1841,9 +1844,12 @@ BEGIN
     END
   END
   IF (boss_state == 1)
-    draw_rect(220, 30, 200, 8, 'rgba(0,0,0,0.6)');
-    draw_rect(221, 31, boss_hp * 198 / boss_max, 6, '#ff5a6a');
-    set_color('#ffd0d0'); text(254, 40, "HIVE CARRIER");
+    draw_rect(198, 30, 244, 12, '#ffd0d0');
+    draw_rect(200, 32, 240, 8, '#300810');
+    draw_rect(200, 32, boss_hp * 240 / boss_max, 8, '#ff4a5a');
+    draw_rect(200, 32, boss_hp * 240 / boss_max, 2, '#ffb0b8');
+    set_color('#000000'); text(285, 45, "HIVE CARRIER");
+    set_color('#ffd0d0'); text(284, 44, "HIVE CARRIER");
   END
   IF (flash > 0)
     draw_rect(0, 0, 640, 480, 'rgba(' + flash_r + ',' + flash_g + ',' + flash_b + ',' + (flash * 0.006) + ')');
