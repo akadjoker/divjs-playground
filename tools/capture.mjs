@@ -101,6 +101,14 @@ const SHOTS = {
       ['wait', 250], hold('z', 300), ['wait', 600], ['down', 'x'], ['wait', 400], hold('z', 330), ['wait', 500], hold('z', 330),
       ['wait', 500], hold('z', 300), ['up', 'x'], ['up', 'ArrowRight']]
   },
+  'keyhole-hop': {
+    seconds: 8,
+    setup: [['wait', 2200], ['press', 'z'], ['wait', 1400], ['press', 'z'], ['wait', 1600]],
+    play: [['wait', 300], ['down', 'ArrowRight'], ['wait', 450], hold('z', 150), ['wait', 250], hold('z', 250), ['wait', 350],
+      hold('z', 250), ['wait', 250], hold('z', 250), ['wait', 250], ['up', 'ArrowRight'], ['wait', 150], ['down', 'ArrowRight'],
+      hold('z', 450), ['wait', 400], ['up', 'ArrowRight'], ['wait', 250], ['down', 'ArrowRight'], hold('z', 450), ['wait', 1100],
+      ['up', 'ArrowRight'], ['press', 'ArrowUp']]
+  },
   'sky-shield': {
     seconds: 8,
     setup: [['wait', 1500], ['press', 'Enter'], ['wait', 5200]],

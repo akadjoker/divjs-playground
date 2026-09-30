@@ -306,6 +306,72 @@ for (const name of readdirSync(programsDir)) {
 	}
 }
 
+// Keyhole Hop: the puzzle platformer compiles with the processes and
+// functions its rooms, boxes, platforms and sprite sheets are made of, and
+// every room is 13 rows of 24 cells with one start and one exit door.
+{
+	const problems = [];
+	try
+	{
+		const source = readFileSync(join(programsDir, 'keyhole-hop.div'), 'utf-8');
+		const { bytecode } = compileSource(source);
+		for (const name of ['room_ctl', 'pip', 'key_item', 'gem', 'tblock', 'lock_block', 'gate_block', 'lever', 'plate', 'spring', 'box_spr', 'platform', 'walker', 'bat', 'wiper', 'map_pip'])
+		{
+			if (!bytecode.processTable.has(name))
+			{
+				problems.push(`no PROCESS ${name}`);
+			}
+		}
+		for (const name of ['read_room', 'paint_room', 'spawn_room', 'ground_tile', 'player_update', 'player_across', 'player_updown', 'crate_update', 'thwomp_update', 'push_box', 'open_lock', 'pull_lever', 'plates_update', 'platforms_update', 'paint_map', 'cut_tile'])
+		{
+			if (!bytecode.functionTable.has(name))
+			{
+				problems.push(`no FUNCTION ${name}`);
+			}
+		}
+		const block = source.match(/lrow\[(\d+)\] =([\s\S]*?);\n/);
+		const rows = [...block[2].matchAll(/"([^"]*)"/g)].map((m) => m[1]);
+		if (rows.length !== Number(block[1]) + 1 || rows.length % 13 !== 0)
+		{
+			problems.push(`${rows.length} room rows`);
+		}
+		for (let r = 0; r * 13 < rows.length; r++)
+		{
+			const room = rows.slice(r * 13, r * 13 + 13);
+			if (room.some((row) => row.length !== 24))
+			{
+				problems.push(`room ${r + 1}: a row is not 24 cells`);
+			}
+			const cells = room.join('');
+			for (const c of ['P', 'D'])
+			{
+				if (cells.split(c).length !== 2)
+				{
+					problems.push(`room ${r + 1}: needs one ${c}`);
+				}
+			}
+		}
+		for (const file of ['tilemap_packed.png', 'tilemap-characters_packed.png', 'tilemap-backgrounds_packed.png', 'License.txt'])
+		{
+			statSync(join(rootDir, 'assets', 'kenney', 'pixel-platformer', file));
+		}
+	}
+	catch (err)
+	{
+		problems.push(err?.message || String(err));
+	}
+	if (problems.length > 0)
+	{
+		console.log(`FAIL  ${'keyhole-hop (compile)'.padEnd(35)} ${problems.join(', ')}`);
+		fail += 1;
+	}
+	else
+	{
+		console.log(`OK    ${'keyhole-hop (compile)'.padEnd(35)} processes, functions, rooms and sprite sheets present`);
+		ok += 1;
+	}
+}
+
 // Balloon Pop: the children's game compiles with the processes and
 // functions its balloons, target card, stars and stroke font are made of.
 {
