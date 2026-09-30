@@ -1,0 +1,2409 @@
+PROGRAM ember_keep;
+
+// ---------------------------------------------------------------------
+// KEEP OF EMBERS - a top-down action adventure in a small keep.
+//
+// Scorchclaw, a cinder crab the size of a cart, has crawled up from the
+// kilns and put out the hearth of the keep. Wren, the youngest of the
+// wardens, goes in with a short sword to light it again.
+//
+// * Nine rooms, seen one screen at a time; the view slides from one to
+//   the next. Two small keys open the iron doors, the Ember Key opens the
+//   throne room. Chests hold keys, a war axe (double damage, a wider
+//   swing), an oak shield (one more heart) and coins; red potions are
+//   carried (up to three) and drunk with X.
+// * Enemies each do their own thing: the SLIME hops about, the RAT darts
+//   at you in bursts, the BRUTE lines up and charges (and is dazed when it
+//   hits a wall), the BANDIT keeps its distance and throws spinning
+//   daggers (swing to knock them away), the GHOST drifts through walls
+//   and fades out of reach, the BAT flutters, the SPIDER waits and
+//   pounces and one chest bites. Spike plates go up and down.
+// * Scorchclaw charges across the throne room, sprays rings of embers and
+//   calls bats when it is hurt.
+// * Hearts, knockback, a moment of invulnerability after a hit, hit
+//   flashes, a short freeze on every blow, screen shake, dust and sparks.
+//   The best time and the best score are kept (save_data).
+//
+// How it is made
+// * Art: Kenney's "Tiny Dungeon" pack (kenney.nl, CC0). The whole pack
+//   is ONE packed sheet of 16x16 tiles; load_tile() cuts each tile out of
+//   it as its own graphic. Hearts, keys, coins, the retracted spike plate
+//   and the particles are drawn in code in the pack's own colours.
+// * The room on screen is made of tile processes (drawn, then frozen with
+//   s_freeze so they cost nothing to run) living in a scroll window, so
+//   the screen can shake and slide between rooms: every room has its own
+//   place in one big world (3 x 3 rooms) and the camera moves to it.
+// * The screen is 320x192: a 16-pixel status bar and a 320x176 room of
+//   20 x 11 tiles. Collisions are tested against the room's grid sol[].
+// * The pixel font is a 5x7 font turned into BDF fonts at start-up; music
+//   and sounds are made by the engine's synth (song_*, sfx_tone).
+// ---------------------------------------------------------------------
+
+GLOBAL
+  // ---- screen, rooms
+  SW = 320; SH = 192; RW = 20; RH = 11;
+  sheet = "../assets/kenney/tiny-dungeon/tilemap_packed.png";
+  gt[131];                        // the 132 tiles of the sheet
+
+  // ---- game states
+  GS_TITLE = 0; GS_PLAY = 1; GS_DYING = 2; GS_OVER = 3; GS_WIN = 4;
+  gs = 0; paused = 0; sliding = 0; hitstop = 0;
+
+  // ---- the keep: 3 x 3 rooms, room r at column r % 3, row r / 3
+  rname[8] = "THE ARMORY", "THRONE OF CINDERS", "THE CRYPT", "THE LIBRARY", "GREAT HALL",
+             "SPIKE GALLERY", "THE CELLAR", "GATEHOUSE", "BARRACKS";
+  // exits: north, east, south, west
+  exn[8] = 0, 0, 0, 1, 1, 1, 0, 1, 0;
+  exe[8] = 0, 0, 0, 1, 1, 0, 1, 1, 0;
+  exs[8] = 1, 1, 1, 0, 1, 0, 0, 0, 0;
+  exw[8] = 0, 0, 0, 0, 1, 1, 0, 1, 1;
+  // north door lock: 0 open arch, 1 needs a small key, 2 needs the Ember Key
+  rlock[8] = 0, 0, 0, 1, 2, 0, 0, 1, 0;
+  // wall decoration of each room: 0 none, 1 banners, 2 lamps, 3 skulls, 4 grates
+  rdeco[8] = 1, 1, 3, 2, 1, 4, 4, 2, 4;
+  dopen[8];                       // north door opened
+  visited[8];
+  tk[1295];                       // taken / killed / opened, per room cell (r * 144 + row * 18 + col)
+
+  // Room interiors: 8 rows of 18 cells (the walls around are made by
+  // build_room). '.' floor  ',' stones  props: O barrel  B b shelves
+  // T table  s stool  G grave  A anvil  X Y stone boxes  < = > fence
+  // + stand  W w well  V v fountain.  Things: 1 slime  2 rat  3 brute
+  // 4 bandit  5 ghost  6 bat  7 spider  8 biting chest  Z Scorchclaw
+  // o crate  ^ spikes  h potion  @ start  c k K x d chests (coins, key,
+  // Ember Key, war axe, oak shield)
+  rrow[71] =
+    // 0 armory
+    "AX..............XA", "..................", "...8.........x....", "....==......==....",
+    "..4............4..", "..................", "Y................Y", "YY..h........o..YY",
+    // 1 throne of cinders
+    "V................V", "v................v", "..................", "........Z.........",
+    "..................", "...G..........G...", "..................", "+................+",
+    // 2 crypt
+    "G.G.G........G.G.G", "..................", "...5....K.....5...", "..................",
+    "G..G..7...7...G..G", "........5.........", "G.G............G.G", "..................",
+    // 3 library
+    "BbBbBb........BbBb", "..................", "..T.s.....s.T.....", "..........4.......",
+    "...2..............", "BbBb....4.....2...", "..................", "BbBbBb..o....o.hBb",
+    // 4 great hall
+    "O.......,,.......O", "..W............W..", "..w....6..6....w..", "..................",
+    ".......3..........", "..2...........2...", "O...T........T...O", "OO..............OO",
+    // 5 spike gallery
+    "X.......,,......kX", "...^^..^^..^^..^^.", "......6.....6.....", "...^^..^^..^^..^^.",
+    ".......o.......6..", "...^^..^^..^^..^^.", ".h......2.........", "XX.....,,.......XX",
+    // 6 cellar
+    "OOO.....OO.....OOO", "O..1..........1..O", "..................", "..o.....1.........",
+    "..................", "O...2.......o....O", "Ok...........h..OO", "OOO....OO....OOOOO",
+    // 7 gatehouse
+    "X.......,,.......X", "..................", "...o..........o...", "......1....1......",
+    "........@.........", "..................", "O..T..........T..O", "OO..............OO",
+    // 8 barracks
+    "A.T.s...........OO", "......2.......d..O", "..T.s.......2.....", ".........3........",
+    "..................", "..T.s........4....", "..............o..O", "OO..h.........XXOO";
+
+  PROPCH = "OBbTsGAXY<=>+WwVv";
+  proptile[16] = 82, 63, 75, 72, 73, 65, 74, 54, 55, 76, 77, 78, 64, 31, 43, 32, 44;
+  ENTCH = "12345678Zo^h@ckKxd";
+
+  // ---- the room on screen
+  cur_room = 7; rox = 0; roy = 0;
+  sol[219];                       // 0 free, 1 wall/prop, 2 closed door, 3 crate, 4 chest, 6 doorway
+  tb = 0; ntile[1]; tbuf[599];    // tile process ids, two buffers (old room, new room)
+  door_l = 0; door_r = 0; seal_l = 0; seal_r = 0;
+  want_room = -1; want_dir = 0; slide_t = 0;
+  sx0 = 0.0; sy0 = 0.0; sx1 = 0.0; sy1 = 0.0; hx0 = 0.0; hy0 = 0.0; hx1 = 0.0; hy1 = 0.0;
+  camx = 0.0; camy = 0.0; shake = 0.0;
+  boss_on = 0; boss_hp = 0; boss_max = 24; boss_dead = 0;
+
+  // ---- the hero
+  px = 0.0; py = 0.0; hero_id = 0;
+  hp = 8; hp_max = 8; inv = 0; potions = 0; keys = 0; bkey = 0; weapon = 0; shield = 0;
+  coins = 0; kills = 0; score = 0; play_frames = 0; fc = 0;
+  kbx = 0.0; kby = 0.0; hflash = 0;
+  sw_on = 0; sw_no = 0; sw_x = 0.0; sw_y = 0.0; sw_r = 11; sw_dmg = 1;
+  best_time = 0; best_score = 0; new_best_t = 0; new_best_s = 0;
+
+  // ---- messages
+  msg_a = 0; msg_b = 0; msg_t = 0;
+  pause_a = 0; pause_b = 0; pause_dim = 0;
+  nparts = 0;
+
+  // ---- graphics made in code
+  g_heart[2]; g_key = 0; g_bkey = 0; g_coin = 0; g_orb = 0; g_plate = 0; g_arc = 0;
+  g_ember = 0; g_shadow = 0; g_hud = 0; g_dim = 0; g_px[9]; g_star = 0; g_bar = 0; g_strip = 0;
+
+  // ---- palette of the pack (and of the art strings below)
+  PALS = ".orpwygdslnmbefhvk";
+  pr[17] = 0, 63, 232, 255, 255, 254, 254, 189, 139, 192, 38, 67, 0, 82, 234, 247, 155, 118;
+  pg[17] = 0, 38, 69, 112, 255, 231, 174, 108, 155, 203, 43, 225, 153, 96, 165, 194, 76, 59;
+  pbl[17] = 0, 49, 55, 109, 255, 97, 52, 74, 180, 220, 68, 179, 219, 124, 108, 130, 163, 54;
+
+  // ---- sounds and songs
+  sn_swing = 0; sn_hit = 0; sn_kill = 0; sn_hurt = 0; sn_coin = 0; sn_key = 0; sn_door = 0; sn_chest = 0;
+  sn_potion = 0; sn_step = 0; sn_crate = 0; sn_spike = 0; sn_throw = 0; sn_fire = 0; sn_bump = 0;
+  sn_locked = 0; sn_roar = 0; sn_boom = 0; sn_select = 0; sn_heart = 0; sn_charge = 0; sn_ghost = 0;
+  sn_bat = 0; sn_clink = 0; sn_fanfare = 0; sn_deny = 0;
+  m_title = 0; m_keep = 0; m_boss = 0; m_win = 0; m_over = 0;
+
+  // ---- 5x7 pixel font (rows of 5 bits written as 0/1 digits)
+  f_small = 0; f_big = 0; f_huge = 0; fbuf = ""; load_n = 0;
+  NGLYPH = 49;
+  fcode[48] = 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 33, 45, 58, 46, 39, 44, 47, 63, 42, 32, 40, 41, 43;
+  fglyph[342] =
+    01110, 10011, 10101, 10101, 10101, 11001, 01110,   // 0
+    00100, 01100, 00100, 00100, 00100, 00100, 01110,   // 1
+    01110, 10001, 00001, 00010, 00100, 01000, 11111,   // 2
+    11110, 00001, 00001, 01110, 00001, 00001, 11110,   // 3
+    00010, 00110, 01010, 10010, 11111, 00010, 00010,   // 4
+    11111, 10000, 11110, 00001, 00001, 10001, 01110,   // 5
+    00110, 01000, 10000, 11110, 10001, 10001, 01110,   // 6
+    11111, 00001, 00010, 00100, 01000, 01000, 01000,   // 7
+    01110, 10001, 10001, 01110, 10001, 10001, 01110,   // 8
+    01110, 10001, 10001, 01111, 00001, 00010, 01100,   // 9
+    01110, 10001, 10001, 11111, 10001, 10001, 10001,   // A
+    11110, 10001, 10001, 11110, 10001, 10001, 11110,   // B
+    01110, 10001, 10000, 10000, 10000, 10001, 01110,   // C
+    11110, 10001, 10001, 10001, 10001, 10001, 11110,   // D
+    11111, 10000, 10000, 11110, 10000, 10000, 11111,   // E
+    11111, 10000, 10000, 11110, 10000, 10000, 10000,   // F
+    01110, 10001, 10000, 10111, 10001, 10001, 01111,   // G
+    10001, 10001, 10001, 11111, 10001, 10001, 10001,   // H
+    01110, 00100, 00100, 00100, 00100, 00100, 01110,   // I
+    00111, 00010, 00010, 00010, 00010, 10010, 01100,   // J
+    10001, 10010, 10100, 11000, 10100, 10010, 10001,   // K
+    10000, 10000, 10000, 10000, 10000, 10000, 11111,   // L
+    10001, 11011, 10101, 10101, 10001, 10001, 10001,   // M
+    10001, 11001, 10101, 10011, 10001, 10001, 10001,   // N
+    01110, 10001, 10001, 10001, 10001, 10001, 01110,   // O
+    11110, 10001, 10001, 11110, 10000, 10000, 10000,   // P
+    01110, 10001, 10001, 10001, 10101, 10010, 01101,   // Q
+    11110, 10001, 10001, 11110, 10100, 10010, 10001,   // R
+    01111, 10000, 10000, 01110, 00001, 00001, 11110,   // S
+    11111, 00100, 00100, 00100, 00100, 00100, 00100,   // T
+    10001, 10001, 10001, 10001, 10001, 10001, 01110,   // U
+    10001, 10001, 10001, 10001, 10001, 01010, 00100,   // V
+    10001, 10001, 10001, 10101, 10101, 10101, 01010,   // W
+    10001, 10001, 01010, 00100, 01010, 10001, 10001,   // X
+    10001, 10001, 01010, 00100, 00100, 00100, 00100,   // Y
+    11111, 00001, 00010, 00100, 01000, 10000, 11111,   // Z
+    00100, 00100, 00100, 00100, 00100, 00000, 00100,   // !
+    00000, 00000, 00000, 01110, 00000, 00000, 00000,   // -
+    00000, 00100, 00100, 00000, 00100, 00100, 00000,   // :
+    00000, 00000, 00000, 00000, 00000, 01100, 01100,   // .
+    00100, 00100, 01000, 00000, 00000, 00000, 00000,   // '
+    00000, 00000, 00000, 00000, 00100, 00100, 01000,   // ,
+    00001, 00010, 00010, 00100, 01000, 01000, 10000,   // /
+    01110, 10001, 00001, 00010, 00100, 00000, 00100,   // ?
+    00000, 10101, 01110, 11111, 01110, 10101, 00000,   // *
+    00000, 00000, 00000, 00000, 00000, 00000, 00000,   // space
+    00010, 00100, 01000, 01000, 01000, 00100, 00010,   // (
+    01000, 00100, 00010, 00010, 00010, 00100, 01000,   // )
+    00000, 00100, 00100, 11111, 00100, 00100, 00000;   // +
+  hexd[15] = '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F';
+
+LOCAL
+  scale_x = 100;             // squash and stretch
+  scale_y = 100;
+  foot_x = 0;                // where a body's shadow goes
+  foot_y = 0;
+
+// =====================================================================
+// Small helpers
+// =====================================================================
+
+FUNCTION k_left();  BEGIN RETURN key(_left) OR key(_a); END
+FUNCTION k_right(); BEGIN RETURN key(_right) OR key(_d); END
+FUNCTION k_up();    BEGIN RETURN key(_up) OR key(_w); END
+FUNCTION k_down();  BEGIN RETURN key(_down) OR key(_s); END
+FUNCTION k_attack_p();
+BEGIN
+  RETURN key_pressed(_z) OR key_pressed(_space) OR key_pressed(_j);
+END
+FUNCTION k_use_p();  BEGIN RETURN key_pressed(_x) OR key_pressed(_k); END
+FUNCTION k_start_p();
+BEGIN
+  RETURN key_pressed(_enter) OR key_pressed(_space) OR key_pressed(_z);
+END
+FUNCTION k_pause_p();
+BEGIN
+  RETURN key_pressed(_enter) OR key_pressed(_p) OR key_pressed(_esc);
+END
+
+// 1 while the actors may act (not paused, sliding or in a hit freeze)
+FUNCTION live();
+BEGIN
+  RETURN gs == GS_PLAY AND paused == 0 AND sliding == 0 AND hitstop == 0;
+END
+
+// Paints an art string: w pixels a row, one palette letter (PALS) a pixel
+FUNCTION art(g, ox, oy, w, s);
+PRIVATE i, n, k;
+BEGIN
+  n = strlen(s);
+  FOR i = 0 TO n - 1
+    k = strstr(PALS, substr(s, i, 1));
+    IF (k > 0)
+      gfx_pixel(g, ox + i % w, oy + i / w, pr[k], pg[k], pbl[k]);
+    END
+  END
+  RETURN 0;
+END
+
+FUNCTION art_graphic(w, h, s);
+PRIVATE g;
+BEGIN
+  g = new_graphic(w, h);
+  art(g, 0, 0, w, s);
+  RETURN g;
+END
+
+// Text with a drop shadow (kept until delete_text); returns the text's
+// id, the shadow's id goes to msg_b
+FUNCTION stext(f, x, y, al, s, col);
+PRIVATE a;
+BEGIN
+  set_color('#2a1620');
+  msg_b = write(f, x + 1, y + 1, al, s);
+  set_color(col);
+  a = write(f, x, y, al, s);
+  RETURN a;
+END
+
+// A message at the bottom of the room for `frames` frames
+FUNCTION show_msg(s, frames, col);
+BEGIN
+  IF (msg_a) delete_text(msg_a); delete_text(msg_b); END
+  msg_a = stext(f_small, 160, 182, 4, s, col);
+  msg_t = frames;
+  RETURN 0;
+END
+
+FUNCTION add_shake(v);
+BEGIN
+  IF (shake < v) shake = v; END
+  RETURN 0;
+END
+
+// =====================================================================
+// Pixel font: a BDF font text made from the 5x7 glyphs, every pixel
+// drawn as sc x sc (spread over frames: it is a lot of string work)
+// =====================================================================
+
+FUNCTION hex4(v);
+BEGIN
+  RETURN hexd[(v / 4096) % 16] + hexd[(v / 256) % 16] + hexd[(v / 16) % 16] + hexd[v % 16];
+END
+
+FUNCTION font_start(sc);
+BEGIN
+  fbuf = "STARTFONT 2.1\nFONT ember" + sc + "\nSIZE " + (7 * sc) + " 75 75\nFONTBOUNDINGBOX " + (5 * sc) + " " + (7 * sc) + " 0 0\n";
+  fbuf = fbuf + "CHARS " + (NGLYPH + 26) + "\n";
+  RETURN 0;
+END
+
+FUNCTION font_part(sc, i0, i1);
+PRIVATE s, i, r, k, c, n, bits, v, w, code, pass, row_s;
+BEGIN
+  w = 5 * sc;
+  s = "";
+  FOR i = i0 TO min(i1, NGLYPH - 1)
+    FOR pass = 0 TO 1
+      code = fcode[i];
+      IF (pass == 1)
+        // lower case letters use the capitals
+        IF (code < 65 OR code > 90) CONTINUE; END
+        code = code + 32;
+      END
+      s = s + "STARTCHAR g" + code + "\nENCODING " + code + "\nSWIDTH 500 0\nDWIDTH " + (6 * sc) + " 0\nBBX " + w + " " + (7 * sc) + " 0 0\nBITMAP\n";
+      FOR r = 0 TO 6
+        n = fglyph[i * 7 + r];
+        bits = 0;
+        FOR c = 0 TO 4
+          v = (n / pow(10, 4 - c)) % 10;
+          FOR k = 0 TO sc - 1
+            bits = bits * 2 + v;
+          END
+        END
+        bits = bits * pow(2, 16 - w);
+        row_s = hex4(bits) + "\n";
+        FOR k = 1 TO sc
+          s = s + row_s;
+        END
+      END
+      s = s + "ENDCHAR\n";
+    END
+  END
+  fbuf = fbuf + s;
+  RETURN 0;
+END
+
+FUNCTION font_finish();
+BEGIN
+  fbuf = fbuf + "ENDFONT\n";
+  RETURN load_bdf_font_text(fbuf);
+END
+
+// =====================================================================
+// Graphics: the pack's tiles, and the few pictures drawn in code
+// =====================================================================
+
+FUNCTION load_tiles();
+PRIVATE i;
+BEGIN
+  FOR i = 0 TO 131
+    gt[i] = load_tile(sheet, (i % 12) * 16, (i / 12) * 16, 16, 16);
+  END
+  RETURN 0;
+END
+
+FUNCTION make_art();
+PRIVATE i, xx, yy, d, a, g;
+BEGIN
+  g_heart[0] = art_graphic(9, 8,
+    ".ooo.ooo.oeeeoeeeooeeeeeeeooeeeeeeeo.oeeeeeo...oeeeo.....oeo.......o....");
+  g_heart[1] = art_graphic(9, 8,
+    ".ooo.ooo.oyproeeeooprrreeeoorrrreeeo.orrreeo...orreo.....oro.......o....");
+  g_heart[2] = art_graphic(9, 8,
+    ".ooo.ooo.oyprorrrooprrrrrrroorrrrrrro.orrrrro...orrro.....oro.......o....");
+  g_key = art_graphic(16, 16,
+    "......oooo...........oyyggo.........oyoooogo........ogo..ogo........ogo..ogo...." +
+    "....oggoogdo.........oggggo...........oggo............ogdo............ogdooo...." +
+    "......ogdggo..........ogdooo..........ogdo............ogdggo..........oooooo...." +
+    "................");
+  g_bkey = art_graphic(16, 16,
+    "......oooo...........ollsso.........olooooso........osorroso........osorroso...." +
+    "....ossooseo.........osssso...........osso............oseo............oseooo...." +
+    "......osrrro..........oseooo..........oseo............osrrro..........oooooo...." +
+    "................");
+  g_coin = art_graphic(8, 8,
+    "..oooo...oyggdo.oyggggdooygyygdooygyygdooyggggdo.oddddo...oooo..");
+  g_orb = art_graphic(8, 8,
+    "..oooo...orrrro.orpyyrroorywyyrooryyyyroorpyyrro.orrrro...oooo..");
+  g_plate = art_graphic(16, 16,
+    "ffffnnnffnnnffffffnnnnnnnnnnnnfffnnnnnnnnnnnnnnffnneeeeeeeeeennffnnesssssssssnnf" +
+    "fnnesossssossnnffnnesssssssssnnffnnesssssssssnnffnnesossssossnnffnnesssssssssnnf" +
+    "fnnesssssssssnnffnnesssssssssnnffnnllllllllllnnffnnnnnnnnnnnnnnfffnnnnnnnnnnnnff" +
+    "ffffffffffffffff");
+  g_ember = art_graphic(16, 16,
+    "..................oooo....oooo...oyyppo..opprro.oyywpppoopprrrrooywpppppprrrrrro" +
+    "oyppppprrrrrrrrooppprrrrrrrrrrro.opprrrrrrrrrro...oprrrrrrrrro.....orrrrrrrro..." +
+    "....orrrrrro.........orrrro...........orro.............oo.......................");
+  g_shadow = art_graphic(10, 3, ".oooooooo.oooooooooo.oooooooo.");
+  g_star = art_graphic(5, 5, "..y...yyy.yywyy.yyy...y..");
+  // the sword's swing: a pale crescent pointing right
+  g_arc = new_graphic(28, 28);
+  FOR yy = 0 TO 27
+    FOR xx = 0 TO 27
+      d = sqrt((xx - 13.5) * (xx - 13.5) + (yy - 13.5) * (yy - 13.5));
+      a = abs(atan2(13.5 - yy, xx - 13.5));
+      IF (a <= 65000 AND d >= 9 AND d < 13)
+        IF (d >= 10 AND d < 12)
+          gfx_pixel(g_arc, xx, yy, 255, 255, 255);
+        ELSE
+          gfx_pixel(g_arc, xx, yy, 192, 203, 220);
+        END
+      END
+    END
+  END
+  // particles, 2x2: dust, stone, red, yellow, white, mint, wood, purple, orange, dark
+  FOR i = 0 TO 9
+    g = new_graphic(2, 2);
+    SWITCH (i)
+      CASE 0: gfx_fill(g, 247, 194, 130); END
+      CASE 1: gfx_fill(g, 192, 203, 220); END
+      CASE 2: gfx_fill(g, 232, 69, 55); END
+      CASE 3: gfx_fill(g, 254, 231, 97); END
+      CASE 4: gfx_fill(g, 255, 255, 255); END
+      CASE 5: gfx_fill(g, 67, 225, 179); END
+      CASE 6: gfx_fill(g, 189, 108, 74); END
+      CASE 7: gfx_fill(g, 155, 76, 163); END
+      CASE 8: gfx_fill(g, 254, 174, 52); END
+      DEFAULT: gfx_fill(g, 63, 38, 49); END
+    END
+    g_px[i] = g;
+  END
+  // the status bar
+  g_hud = new_graphic(320, 16);
+  gfx_fill(g_hud, 38, 24, 32);
+  gfx_rect(g_hud, 0, 15, 320, 1, 118, 59, 54);
+  gfx_rect(g_hud, 0, 14, 320, 1, 63, 38, 49);
+  // dark veil for pause / title / endings
+  g_dim = new_graphic(320, 176);
+  gfx_fill_rgba(g_dim, 20, 10, 16, 62);
+  // the band under messages
+  g_strip = new_graphic(320, 11);
+  gfx_fill_rgba(g_strip, 28, 16, 24, 72);
+  // boss bar frame
+  g_bar = new_graphic(164, 8);
+  gfx_fill(g_bar, 63, 38, 49);
+  gfx_rect(g_bar, 1, 1, 162, 6, 38, 24, 32);
+  RETURN 0;
+END
+
+// =====================================================================
+// Sound and music (all made by the engine's synth)
+// =====================================================================
+
+FUNCTION make_sounds();
+BEGIN
+  sn_swing = sfx_tone(wave_noise, 2600, 700, 90, 26);
+  sn_hit = sfx_tone(wave_square, 520, 130, 90, 34);
+  sn_kill = sfx_tone(wave_noise, 1400, 160, 260, 40);
+  sn_hurt = sfx_tone(wave_saw, 560, 140, 280, 36);
+  sn_coin = sfx_tone(wave_square, 1318, 1976, 90, 20);
+  sn_key = sfx_tone(wave_triangle, 660, 1320, 220, 44);
+  sn_door = sfx_tone(wave_noise, 420, 70, 420, 48);
+  sn_chest = sfx_tone(wave_triangle, 330, 990, 260, 42);
+  sn_potion = sfx_tone(wave_sine, 400, 1300, 420, 42);
+  sn_step = sfx_tone(wave_noise, 500, 200, 30, 7);
+  sn_crate = sfx_tone(wave_noise, 2200, 500, 170, 40);
+  sn_spike = sfx_tone(wave_square, 1300, 800, 45, 16);
+  sn_throw = sfx_tone(wave_triangle, 900, 1600, 80, 24);
+  sn_fire = sfx_tone(wave_noise, 900, 200, 280, 34);
+  sn_bump = sfx_tone(wave_triangle, 150, 70, 90, 55);
+  sn_locked = sfx_tone(wave_square, 190, 170, 140, 28);
+  sn_roar = sfx_tone(wave_saw, 190, 55, 900, 50);
+  sn_boom = sfx_tone(wave_noise, 700, 40, 600, 60);
+  sn_select = sfx_tone(wave_square, 660, 990, 70, 24);
+  sn_heart = sfx_tone(wave_sine, 880, 1760, 160, 34);
+  sn_charge = sfx_tone(wave_saw, 110, 260, 380, 30);
+  sn_ghost = sfx_tone(wave_sine, 700, 300, 450, 22);
+  sn_bat = sfx_tone(wave_square, 1900, 1500, 35, 10);
+  sn_clink = sfx_tone(wave_square, 2400, 1800, 60, 22);
+  sn_fanfare = sfx_tone(wave_square, 523, 523, 90, 26);
+  sn_deny = sfx_tone(wave_square, 220, 200, 90, 22);
+  RETURN 0;
+END
+
+FUNCTION make_songs();
+BEGIN
+  // Title: a slow march in A minor, the melody climbs to the keep
+  m_title = song_new(96);
+  song_track(m_title, inst_square,
+    "A4 - - - C5 - E5 - D5 - - - C5 - B4 - | A4 - - - E4 - - - G4 - A4 - B4 - - - |" +
+    "C5 - - - E5 - A5 - G5 - - - E5 - D5 - | E5 - - - - - - - . . . . . . . . |" +
+    "F5 - - - E5 - D5 - C5 - - - B4 - A4 - | G4 - - - B4 - D5 - C5 - B4 - A4 - - - |" +
+    "A4 - C5 - B4 - G4 - A4 - - - E4 - - - | A4 - - - - - - - . . . . . . . . ", 22);
+  song_track(m_title, inst_bass,
+    "A2 . . . A2 . E3 . F2 . . . F2 . C3 . | G2 . . . G2 . D3 . E2 . . . E2 . B2 . |" +
+    "A2 . . . A2 . E3 . F2 . . . F2 . C3 . | E2 . . . E2 . B2 . E2 . . . E2 . G#2 . |" +
+    "D2 . . . D2 . A2 . A2 . . . A2 . E3 . | G2 . . . G2 . D3 . A2 . . . A2 . E3 . |" +
+    "F2 . . . F2 . C3 . E2 . . . E2 . B2 . | A2 . . . A2 . E3 . A2 . . . . . . . ", 46);
+  song_track(m_title, inst_pad,
+    "A3 - - - - - - - F3 - - - - - - - | G3 - - - - - - - E3 - - - - - - - |", 16);
+  song_track(m_title, inst_drums, "k . . . h . . . s . . . h . h . ", 20);
+
+  // The keep: D minor, plucked arpeggios under a sparse triangle tune
+  m_keep = song_new(92);
+  song_track(m_keep, inst_pluck,
+    "D4 . F4 . A4 . D5 . A4 . F4 . D4 . F4 . | C4 . E4 . G4 . C5 . G4 . E4 . C4 . E4 . |" +
+    "Bb3 . D4 . F4 . Bb4 . F4 . D4 . Bb3 . D4 . | A3 . C#4 . E4 . A4 . E4 . C#4 . A3 . C#4 . ", 26);
+  song_track(m_keep, inst_triangle,
+    "D5 - - - - - - - E5 - F5 - E5 - D5 - | C5 - - - - - - - D5 - E5 - C5 - A4 - |" +
+    "Bb4 - - - - - D5 - F5 - - - E5 - D5 - | C#5 - - - - - - - - - - - . . . . |" +
+    "F5 - - - - - E5 - D5 - - - C5 - D5 - | E5 - - - - - C5 - G4 - - - . . . . |" +
+    "D5 - - - F5 - - - Bb4 - - - A4 - G4 - | A4 - - - - - - - - - - - . . . . ", 24);
+  song_track(m_keep, inst_bass,
+    "D2 - - - - - - - D2 - - - A1 - - - | C2 - - - - - - - C2 - - - G1 - - - |" +
+    "Bb1 - - - - - - - Bb1 - - - F2 - - - | A1 - - - - - - - A1 - - - E2 - - - ", 44);
+  song_track(m_keep, inst_drums, "k . . . . . h . s . . . . . h . k . . . . . h . s . . . h . h . ", 16);
+
+  // Scorchclaw: E minor, fast and driving
+  m_boss = song_new(150);
+  song_track(m_boss, inst_square,
+    "E5 . E5 . G5 . E5 . A5 . G5 . F#5 . D5 . | E5 . E5 . G5 . B5 . A5 - G5 - F#5 - E5 - |" +
+    "C6 . B5 . A5 . G5 . F#5 . G5 . A5 . B5 . | E5 - - - - - . . E4 . E4 . F#4 . G4 . ", 22);
+  song_track(m_boss, inst_bass,
+    "E2 E2 E3 E2 E2 E2 E3 E2 D2 D2 D3 D2 D2 D2 D3 D2 | C2 C2 C3 C2 C2 C2 C3 C2 B1 B1 B2 B1 B1 B1 B2 B1 |" +
+    "A1 A1 A2 A1 A1 A1 A2 A1 C2 C2 C3 C2 C2 C2 C3 C2 | B1 B1 B2 B1 B1 B1 B2 B1 B1 B1 B2 B1 D#2 D#2 D#3 D#2 ", 44);
+  song_track(m_boss, inst_drums, "k . h . s . h . k k h . s . h h ", 28);
+
+  // The hearth burns again
+  m_win = song_new(120);
+  song_track(m_win, inst_square,
+    "C5 . E5 . G5 . C6 - - - G5 . C6 - - - | E6 - - - D6 - C6 - D6 - - - - - - - |" +
+    "F5 . A5 . C6 . F6 - - - E6 . D6 - - - | C6 - - - - - - - - - - - . . . . ", 24);
+  song_track(m_win, inst_bass,
+    "C3 . . . G3 . . . C3 . . . G3 . . . | A2 . . . E3 . . . G2 . . . D3 . . . |" +
+    "F2 . . . C3 . . . F2 . . . G2 . . . | C3 . . . G2 . . . C3 - - - . . . . ", 44);
+  song_track(m_win, inst_pad,
+    "E4 - - - - - - - - - - - - - - - | C4 - - - - - - - B3 - - - - - - - |" +
+    "A3 - - - - - - - B3 - - - - - - - | C4 - - - - - - - - - - - . . . . ", 16);
+  song_track(m_win, inst_drums, "k . h . s . h . k . h . s . h h ", 22);
+
+  // Game over: a slow fall
+  m_over = song_new(80);
+  song_track(m_over, inst_triangle, "A4 - - - G4 - - - F4 - - - E4 - - - | D4 - - - C#4 - - - D4 - - - - - - - ", 36);
+  song_track(m_over, inst_pad, "D4 - - - - - - - A3 - - - - - - - | Bb3 - - - A3 - - - D3 - - - - - - - ", 18);
+  RETURN 0;
+END
+
+// A short tune of notes played one after another
+PROCESS jingle(kind);
+PRIVATE i, n, p[7];
+BEGIN
+  IF (kind == 0) n = 4; p[0] = 100; p[1] = 126; p[2] = 150; p[3] = 200; END   // item
+  IF (kind == 1) n = 6; p[0] = 100; p[1] = 150; p[2] = 126; p[3] = 168; p[4] = 150; p[5] = 200; END   // key / treasure
+  IF (kind == 2) n = 3; p[0] = 150; p[1] = 126; p[2] = 100; END   // denied
+  FOR i = 0 TO n - 1
+    play_sound(sn_fanfare, 70, p[i], 0);
+    FRAME(420);
+  END
+END
+
+// =====================================================================
+// Particles
+// =====================================================================
+
+PROCESS part(x0, y0, vx, vy, g, life, grav);
+PRIVATE fx = 0.0, fy = 0.0, t = 0;
+BEGIN
+  ctype = c_scroll; graph = g; z = -9000;
+  fx = x0; fy = y0;
+  x = int(fx); y = int(fy);
+  nparts++;
+  WHILE (t < life)
+    IF (paused == 0 AND hitstop == 0)
+      t++;
+      fx += vx; fy += vy;
+      vy += grav * 0.06;
+      vx = vx * 0.94; vy = vy * 0.94;
+      x = int(fx); y = int(fy);
+      IF (t > life - 6) alpha = (life - t) * 16; END
+    END
+    FRAME;
+  END
+  nparts--;
+END
+
+// n particles of colour c around (x, y), speed sp (in tenths)
+FUNCTION burst(bx, by, n, c, sp, grav);
+PRIVATE i;
+BEGIN
+  FOR i = 1 TO n
+    IF (nparts < 170)
+      part(bx + rand(-3, 3), by + rand(-3, 3), rand(-sp, sp) / 10.0, rand(-sp, sp / 3) / 10.0, g_px[c], rand(14, 30), grav);
+    END
+  END
+  RETURN 0;
+END
+
+// Floor dust puff at the feet
+FUNCTION dust(bx, by, n);
+PRIVATE i;
+BEGIN
+  FOR i = 1 TO n
+    IF (nparts < 170)
+      part(bx + rand(-4, 4), by + rand(-1, 1), rand(-6, 6) / 10.0, rand(-6, -1) / 10.0, g_px[0], rand(10, 18), 0);
+    END
+  END
+  RETURN 0;
+END
+
+// =====================================================================
+// The room grid
+// =====================================================================
+
+FUNCTION solid_at(wx, wy, who);
+PRIVATE lx, ly, c, r, s;
+BEGIN
+  lx = wx - rox; ly = wy - roy;
+  IF (lx < 0 OR ly < 0 OR lx >= 320 OR ly >= 176)
+    IF (who == 0) RETURN 0; END
+    RETURN 1;
+  END
+  c = floor(lx * 0.0625); r = floor(ly * 0.0625);
+  s = sol[r * 20 + c];
+  IF (s == 0) RETURN 0; END
+  IF (s == 6) RETURN who != 0; END
+  IF (who == 2)
+    // flyers only stop at the walls
+    RETURN r < 2 OR r > 9 OR c < 1 OR c > 18;
+  END
+  RETURN 1;
+END
+
+// 1 when a body whose sprite centre is (cx, cy) fits: its feet box is
+// hw pixels either side and from cy to cy + 7
+FUNCTION fits(cx, cy, hw, who);
+BEGIN
+  IF (solid_at(cx - hw, cy, who)) RETURN 0; END
+  IF (solid_at(cx + hw - 0.01, cy, who)) RETURN 0; END
+  IF (solid_at(cx - hw, cy + 7.99, who)) RETURN 0; END
+  IF (solid_at(cx + hw - 0.01, cy + 7.99, who)) RETURN 0; END
+  RETURN 1;
+END
+
+// Keeps a flyer or a ghost inside the room's floor
+FUNCTION in_x(v); BEGIN RETURN clamp(v, rox + 24, rox + 296); END
+FUNCTION in_y(v); BEGIN RETURN clamp(v, roy + 36, roy + 150); END
+
+// 1 when the swing that is on hits a body at (ex, ey) of radius er that
+// last_sw (the last swing that hit it) is not
+FUNCTION sw_hits(ex, ey, er, last_sw);
+BEGIN
+  IF (sw_on == 0 OR last_sw == sw_no) RETURN 0; END
+  RETURN distance(ex, ey, sw_x, sw_y) < sw_r + er;
+END
+
+// 1 when a body at (ex, ey) of radius er touches Wren
+FUNCTION hits_hero(ex, ey, er);
+BEGIN
+  IF (gs != GS_PLAY) RETURN 0; END
+  RETURN distance(ex, ey, px, py + 2) < er + 6;
+END
+
+FUNCTION hurt_hero(dmg, fx, fy);
+PRIVATE a;
+BEGIN
+  IF (inv > 0 OR gs != GS_PLAY OR sliding) RETURN 0; END
+  hp = hp - dmg;
+  inv = 72; hflash = 10;
+  a = fget_angle(fx, fy, px, py);
+  kbx = get_distx(a, 3.4); kby = get_disty(a, 3.4);
+  add_shake(5); hitstop = 5;
+  burst(px, py, 8, 2, 22, 1);
+  play_sound(sn_hurt, 80, 100, 0);
+  IF (hp <= 0)
+    hp = 0;
+    gs = GS_DYING;
+    song_stop();
+  END
+  RETURN 1;
+END
+
+// The hit effects of a blow that lands on (ex, ey)
+FUNCTION hit_fx(ex, ey);
+BEGIN
+  hitstop = 3;
+  add_shake(2.5);
+  burst((ex + sw_x) / 2, (ey + sw_y) / 2, 6, 4, 20, 0);
+  burst((ex + sw_x) / 2, (ey + sw_y) / 2, 3, 3, 14, 0);
+  play_sound(sn_hit, 70, rand(90, 115), 0);
+  RETURN 0;
+END
+
+// A foe is down: remembered, counted, a puff and maybe a drop
+FUNCTION foe_down(r, cell, ex, ey, pts, drops);
+PRIVATE d;
+BEGIN
+  IF (cell >= 0) tk[r * 144 + cell] = 1; END
+  kills++;
+  score += pts;
+  burst(ex, ey, 12, 1, 22, 0);
+  burst(ex, ey, 6, 9, 16, 0);
+  play_sound(sn_kill, 70, rand(90, 110), 0);
+  add_shake(2);
+  IF (drops)
+    d = rand(0, 99);
+    IF (d < 45) pickup(ex, ey, 0); END
+    IF (d >= 45 AND d < 60) pickup(ex, ey, 1); END
+  END
+  RETURN 0;
+END
+
+// Knockback speed away from Wren, for a blow on (ex, ey)
+FUNCTION kb_angle(ex, ey);
+BEGIN
+  RETURN fget_angle(px, py, ex, ey);
+END
+
+// =====================================================================
+// Building a room: tiles, props and what lives in it
+// =====================================================================
+
+PROCESS tl(x, y, graph, zz);
+BEGIN
+  ctype = c_scroll; z = zz;
+  signal(id, s_freeze);
+  LOOP
+    FRAME;
+  END
+END
+
+FUNCTION put_tile(wx, wy, t, zz);
+PRIVATE p;
+BEGIN
+  p = tl(wx, wy, gt[t], zz);
+  IF (ntile[tb] < 299)
+    tbuf[tb * 300 + ntile[tb]] = p;
+    ntile[tb] = ntile[tb] + 1;
+  END
+  RETURN p;
+END
+
+// The wall tile at (row, col) of room r (-1 inside the room); sets sol[]
+FUNCTION wall_tile(r, row, col);
+PRIVATE t, dc;
+BEGIN
+  t = -1;
+  IF (row == 0)
+    t = 2;
+    IF (col == 0) t = 1; END
+    IF (col == 19) t = 3; END
+    sol[row * 20 + col] = 1;
+    RETURN t;
+  END
+  IF (row == 1)
+    t = 40;
+    dc = rdeco[r];
+    IF (col == 5 OR col == 14)
+      IF (dc == 1) t = 29; END
+      IF (dc == 2) t = 8; END
+      IF (dc == 3) t = 19; END
+      IF (dc == 4) t = 28; END
+    END
+    IF (col == 0) t = 13; END
+    IF (col == 19) t = 15; END
+    sol[row * 20 + col] = 1;
+    IF (exn[r] AND (col == 9 OR col == 10))
+      IF (rlock[r] == 0)
+        t = 10 + (col - 9);
+        sol[row * 20 + col] = 6;
+      ELSE
+        IF (dopen[r])
+          t = 34 + (col - 9);
+          sol[row * 20 + col] = 6;
+        ELSE
+          t = 46 + (col - 9);
+          sol[row * 20 + col] = 2;
+        END
+      END
+    END
+    RETURN t;
+  END
+  IF (row == 10)
+    t = 26;
+    IF (col == 0) t = 25; END
+    IF (col == 19) t = 27; END
+    sol[row * 20 + col] = 1;
+    IF (exs[r])
+      IF (col == 8) t = 5; END
+      IF (col == 11) t = 4; END
+      IF (col == 9 OR col == 10) t = 48; sol[row * 20 + col] = 6; END
+    END
+    RETURN t;
+  END
+  IF (col == 0)
+    t = 13;
+    sol[row * 20 + col] = 1;
+    IF (exw[r])
+      IF (row == 4) t = 17; END
+      IF (row == 7) t = 5; END
+      IF (row == 5 OR row == 6) t = 48; sol[row * 20 + col] = 6; END
+    END
+    RETURN t;
+  END
+  IF (col == 19)
+    t = 15;
+    sol[row * 20 + col] = 1;
+    IF (exe[r])
+      IF (row == 4) t = 16; END
+      IF (row == 7) t = 4; END
+      IF (row == 5 OR row == 6) t = 48; sol[row * 20 + col] = 6; END
+    END
+    RETURN t;
+  END
+  RETURN -1;
+END
+
+// The floor tile under (row, col): the shadow of the wall on the top
+// rows, and a few worn or cracked tiles
+FUNCTION floor_tile(r, row, col);
+PRIVATE h;
+BEGIN
+  IF (row == 2)
+    IF (col == 1) RETURN 52; END
+    RETURN 50;
+  END
+  IF (row == 3 AND col == 1) RETURN 53; END
+  h = (r * 31 + row * 7 + col * 13 + row * col * 5) % 23;
+  IF (h == 0) RETURN 49; END
+  IF (h == 7) RETURN 51; END
+  RETURN 48;
+END
+
+// Builds room r into the tile buffer not in use; with things = 1 also
+// makes its foes, chests, crates and items
+FUNCTION build_room(r, things);
+PRIVATE row, col, t, ox, oy, wx, wy, s, ch, k, e, cell;
+BEGIN
+  ox = (r % 3) * 320; oy = (r / 3) * 176;
+  rox = ox; roy = oy;
+  tb = 1 - tb;
+  ntile[tb] = 0;
+  door_l = 0; door_r = 0;
+  FOR row = 0 TO 10
+    FOR col = 0 TO 19
+      wx = ox + col * 16 + 8; wy = oy + row * 16 + 8;
+      t = wall_tile(r, row, col);
+      IF (t >= 0)
+        k = put_tile(wx, wy, t, 500);
+        IF (row == 1 AND col == 9) door_l = k; END
+        IF (row == 1 AND col == 10) door_r = k; END
+        CONTINUE;
+      END
+      sol[row * 20 + col] = 0;
+      s = rrow[r * 8 + row - 2];
+      ch = substr(s, col - 1, 1);
+      IF (ch == ",")
+        put_tile(wx, wy, 42, 500);
+        CONTINUE;
+      END
+      put_tile(wx, wy, floor_tile(r, row, col), 500);
+      IF (ch == ".") CONTINUE; END
+      k = strstr(PROPCH, ch);
+      IF (k >= 0)
+        put_tile(wx, wy, proptile[k], 400);
+        sol[row * 20 + col] = 1;
+        CONTINUE;
+      END
+      IF (things == 0) CONTINUE; END
+      e = strstr(ENTCH, ch);
+      cell = (row - 2) * 18 + col - 1;
+      IF (e < 0 OR tk[r * 144 + cell]) CONTINUE; END
+      SWITCH (e)
+        CASE 0: slime(r, cell, wx, wy); END
+        CASE 1: rat(r, cell, wx, wy); END
+        CASE 2: brute(r, cell, wx, wy); END
+        CASE 3: bandit(r, cell, wx, wy); END
+        CASE 4: ghost(r, cell, wx, wy); END
+        CASE 5: bat(r, cell, wx, wy); END
+        CASE 6: spider(r, cell, wx, wy); END
+        CASE 7: mimic(r, cell, wx, wy); sol[row * 20 + col] = 4; END
+        CASE 8: IF (boss_dead == 0) boss(r, wx, wy); END END
+        CASE 9: crate(r, cell, wx, wy); sol[row * 20 + col] = 3; END
+        CASE 10: spikes(r, wx, wy, col * 23 + row * 41); END
+        CASE 11: potion_item(r, cell, wx, wy); END
+        CASE 13..17: chest(r, cell, wx, wy, e - 13); sol[row * 20 + col] = 4; END
+      END
+    END
+  END
+  RETURN 0;
+END
+
+// Spikes stay where they are even when taken; only these are rebuilt
+// when the room is left: everything else ends on its own
+
+FUNCTION kill_tiles(buf);
+PRIVATE i;
+BEGIN
+  FOR i = 0 TO ntile[buf] - 1
+    signal(tbuf[buf * 300 + i], s_kill);
+  END
+  ntile[buf] = 0;
+  RETURN 0;
+END
+
+// A way into the next room: remember it, the main loop slides there
+FUNCTION leave_room(dir);
+BEGIN
+  IF (want_room >= 0 OR sliding) RETURN 0; END
+  want_dir = dir;
+  SWITCH (dir)
+    CASE 0: want_room = cur_room - 3; END
+    CASE 1: want_room = cur_room + 1; END
+    CASE 2: want_room = cur_room + 3; END
+    CASE 3: want_room = cur_room - 1; END
+  END
+  RETURN 0;
+END
+
+// Opens the north door of the room on screen
+FUNCTION open_door();
+PRIVATE ox, oy;
+BEGIN
+  dopen[cur_room] = 1;
+  sol[29] = 6; sol[30] = 6;
+  IF (door_l) door_l.graph = gt[34]; END
+  IF (door_r) door_r.graph = gt[35]; END
+  ox = rox + 160; oy = roy + 24;
+  burst(ox, oy + 8, 14, 0, 18, 0);
+  burst(ox, oy, 6, 1, 14, 0);
+  add_shake(3);
+  play_sound(sn_door, 80, 100, 0);
+  play_sound(sn_key, 50, 70, 0);
+  RETURN 0;
+END
+
+// =====================================================================
+// Wren
+// =====================================================================
+
+PROCESS hero();
+PRIVATE ix, iy, fdx = 0, fdy = 1, spd = 0.0, dx = 0.0, dy = 0.0, t = 0, atk = 0, cd = 0,
+  moving = 0, stept = 0, bob = 0, die_t = 0, k, lock_t = 0, queued = 0, win_t = 0;
+BEGIN
+  ctype = c_scroll; graph = gt[98]; hero_id = id;
+  x = int(px); y = int(py); z = -y;
+  LOOP
+    t++;
+    IF (paused)
+      FRAME;
+      CONTINUE;
+    END
+    IF (gs == GS_DYING)
+      // down: a spin, red, then gone
+      die_t++;
+      sw_on = 0;
+      red = 255; green = 70; blue = 70;
+      IF (die_t < 60) angle += 30000 - die_t * 400; END
+      IF (die_t == 60) burst(px, py, 20, 2, 26, 1); burst(px, py, 10, 9, 20, 1); play_sound(sn_kill, 90, 70, 0); END
+      IF (die_t > 60) alpha = max(0, 100 - (die_t - 60) * 4); END
+      IF (die_t >= 120) gs = GS_OVER; END
+      FRAME;
+      CONTINUE;
+    END
+    IF (gs != GS_PLAY)
+      sw_on = 0;
+      FRAME;
+      CONTINUE;
+    END
+    IF (sliding)
+      // walking through the doorway while the view slides
+      bob = (t / 6) % 2;
+      x = int(px); y = int(py) - bob; z = -int(py);
+      IF (want_dir == 1) flags = 0; END
+      IF (want_dir == 3) flags = 1; END
+      FRAME;
+      CONTINUE;
+    END
+    IF (hitstop > 0)
+      FRAME;
+      CONTINUE;
+    END
+    play_frames++;
+
+    // ---- input
+    ix = k_right() - k_left();
+    iy = k_down() - k_up();
+    IF (atk == 0)
+      IF (ix != 0 OR iy != 0)
+        IF (iy == 0)
+          fdx = ix; fdy = 0;
+        ELSE
+          IF (ix == 0)
+            fdx = 0; fdy = iy;
+          ELSE
+            IF (NOT ((fdx == ix AND fdx != 0) OR (fdy == iy AND fdy != 0)))
+              fdx = ix; fdy = 0;
+            END
+          END
+        END
+      END
+    END
+    IF (ix < 0) flags = 1; END
+    IF (ix > 0) flags = 0; END
+
+    // ---- the sword
+    IF (cd > 0) cd--; END
+    IF (k_attack_p())
+      IF (atk == 0 AND cd == 0)
+        queued = 1;
+      ELSE
+        IF (atk > 8) queued = 1; END
+      END
+    END
+    IF (queued AND atk == 0 AND cd == 0)
+      queued = 0;
+      atk = 1;
+      sw_no++;
+      blade(fdx, fdy);
+      play_sound(sn_swing, 60, rand(90, 110) + weapon * -12, 0);
+      // a small step into the blow
+      IF (fits(px + fdx, py + fdy, 5, 0)) px += fdx; py += fdy; END
+    END
+    IF (atk > 0)
+      atk++;
+      sw_r = 11 + weapon * 4;
+      sw_dmg = 1 + weapon;
+      sw_x = px + fdx * (12 + weapon * 2);
+      sw_y = py + 3 + fdy * (12 + weapon * 2);
+      IF (atk >= 3 AND atk <= 10) sw_on = 1; ELSE sw_on = 0; END
+      IF (atk > 15) atk = 0; sw_on = 0; cd = 2; END
+    END
+
+    // ---- a potion
+    IF (k_use_p())
+      IF (potions > 0 AND hp < hp_max)
+        potions--;
+        hp = min(hp_max, hp + 6);
+        burst(px, py, 14, 5, 18, -1);
+        burst(px, py, 6, 4, 12, -1);
+        play_sound(sn_potion, 80, 100, 0);
+        show_msg("GLUG GLUG - THREE HEARTS BACK", 90, '#7dffc8');
+      ELSE
+        play_sound(sn_deny, 50, 100, 0);
+        IF (potions == 0) show_msg("NO POTIONS", 60, '#c0cbdc'); ELSE show_msg("HEALTH IS FULL", 60, '#c0cbdc'); END
+      END
+    END
+
+    // ---- moving
+    spd = 1.45;
+    IF (atk > 0) spd = 0.55; END
+    IF (ix != 0 AND iy != 0) spd = spd * 0.7071; END
+    dx = ix * spd + kbx;
+    dy = iy * spd + kby;
+    kbx = kbx * 0.8; kby = kby * 0.8;
+    IF (abs(kbx) < 0.05) kbx = 0; END
+    IF (abs(kby) < 0.05) kby = 0; END
+    moving = 0;
+    IF (dx != 0)
+      IF (fits(px + dx, py, 5, 0))
+        px += dx; moving = 1;
+      ELSE
+        // slide round a corner into a doorway
+        IF (iy == 0 AND ix != 0)
+          FOR k = 1 TO 6
+            IF (fits(px + dx, py - k, 5, 0)) py -= 0.8; moving = 1; BREAK; END
+            IF (fits(px + dx, py + k, 5, 0)) py += 0.8; moving = 1; BREAK; END
+          END
+        END
+      END
+    END
+    IF (dy != 0)
+      IF (fits(px, py + dy, 5, 0))
+        py += dy; moving = 1;
+      ELSE
+        IF (ix == 0 AND iy != 0)
+          FOR k = 1 TO 6
+            IF (fits(px - k, py + dy, 5, 0)) px -= 0.8; moving = 1; BREAK; END
+            IF (fits(px + k, py + dy, 5, 0)) px += 0.8; moving = 1; BREAK; END
+          END
+        END
+      END
+    END
+    IF (ix == 0 AND iy == 0) moving = 0; END
+
+    // ---- the north door
+    IF (lock_t > 0) lock_t--; END
+    IF (iy < 0 AND exn[cur_room] AND rlock[cur_room] > 0 AND dopen[cur_room] == 0)
+      IF (abs(px - (rox + 160)) < 16 AND py < roy + 34)
+        IF (rlock[cur_room] == 1 AND keys > 0)
+          keys--;
+          open_door();
+          show_msg("THE DOOR OPENS", 80, '#ffe761');
+        ELSE
+          IF (rlock[cur_room] == 2 AND bkey)
+            open_door();
+            show_msg("THE EMBER KEY TURNS...", 100, '#ff706d');
+          ELSE
+            IF (lock_t == 0)
+              lock_t = 70;
+              play_sound(sn_locked, 70, 100, 0);
+              IF (rlock[cur_room] == 1)
+                show_msg("LOCKED - IT NEEDS A SMALL KEY", 100, '#c0cbdc');
+              ELSE
+                show_msg("A GREAT LOCK - IT NEEDS THE EMBER KEY", 110, '#ff706d');
+              END
+            END
+          END
+        END
+      END
+    END
+
+    // ---- leaving the room
+    IF (px < rox + 3) leave_room(3); END
+    IF (px > rox + 317) leave_room(1); END
+    IF (py < roy + 22) leave_room(0); END
+    IF (py > roy + 168) leave_room(2); END
+
+    // ---- looks
+    IF (inv > 0) inv--; END
+    IF (moving)
+      stept++;
+      IF (stept % 14 == 1) dust(px - ix * 3, py + 7, 2); END
+      IF (stept % 18 == 1) play_sound(sn_step, 40, rand(80, 120), 0); END
+      bob = (stept / 7) % 2;
+    ELSE
+      stept = 0; bob = 0;
+    END
+    IF (hflash > 0)
+      hflash--;
+      red = 255; green = 80; blue = 80;
+    ELSE
+      red = 255; green = 255; blue = 255;
+    END
+    alpha = 100;
+    IF (inv > 0 AND (inv / 4) % 2 == 0) alpha = 35; END
+    x = int(px + 0.5); y = int(py + 0.5) - bob; z = -int(py);
+    FRAME;
+  END
+END
+
+// The weapon in Wren's hand, swept through the blow, and its trail
+PROCESS blade(fdx, fdy);
+PRIVATE t = 0, a0, a, arc;
+BEGIN
+  ctype = c_scroll;
+  graph = gt[104];
+  IF (weapon) graph = gt[118]; END
+  IF (fdx > 0) a0 = 0; END
+  IF (fdx < 0) a0 = 180000; END
+  IF (fdy < 0) a0 = 90000; END
+  IF (fdy > 0) a0 = -90000; END
+  arc = slash(a0);
+  WHILE (t < 13)
+    IF (gs != GS_PLAY AND gs != GS_DYING) BREAK; END
+    IF (paused == 0 AND hitstop == 0) t++; END
+    // from 70 degrees on one side to 70 on the other, in steps
+    a = a0 + 70000 - min(t, 8) * 17500;
+    angle = a - 90000;
+    x = int(px + get_distx(a, 11 + weapon));
+    y = int(py + 3 + get_disty(a, 11 + weapon));
+    z = hero_id.z - 1;
+    IF (fdy < 0) z = hero_id.z + 1; END
+    FRAME;
+  END
+  signal(arc, s_kill);
+END
+
+PROCESS slash(a0);
+PRIVATE t = 0;
+BEGIN
+  ctype = c_scroll; graph = g_arc; angle = a0; z = -8000;
+  size = 100 + weapon * 25;
+  LOOP
+    IF (paused == 0 AND hitstop == 0) t++; END
+    x = int(px + get_distx(a0, 4));
+    y = int(py + 3 + get_disty(a0, 4));
+    IF (t < 3) alpha = 0; ELSE alpha = max(0, 100 - (t - 3) * 12); END
+    FRAME;
+  END
+END
+
+// =====================================================================
+// Things in the rooms
+// =====================================================================
+
+// Coins (kind 0) and hearts (kind 1) left by foes and crates
+PROCESS pickup(x0, y0, kind);
+PRIVATE fx = 0.0, fy = 0.0, vx = 0.0, vy = 0.0, h = 0.0, vh = 0.0, t = 0, rm;
+BEGIN
+  ctype = c_scroll; rm = cur_room;
+  IF (kind == 0) graph = g_coin; ELSE graph = g_heart[2]; END
+  fx = x0; fy = y0; vh = -2.2;
+  vx = rand(-10, 10) / 10.0; vy = rand(-6, 6) / 10.0;
+  LOOP
+    IF (rm != cur_room AND sliding == 0) BREAK; END
+    IF (live())
+      t++;
+      IF (vh != 0 OR h < 0)
+        h += vh; vh += 0.18;
+        IF (fits(fx + vx, fy - 4, 3, 1)) fx += vx; END
+        IF (fits(fx, fy + vy - 4, 3, 1)) fy += vy; END
+        IF (h >= 0) h = 0; vh = -vh * 0.4; IF (abs(vh) < 0.6) vh = 0; END END
+      END
+      IF (t > 12 AND hits_hero(fx, fy, 5))
+        IF (kind == 0)
+          coins++; score += 10;
+          play_sound(sn_coin, 60, 100, 0);
+          burst(fx, fy, 5, 3, 12, 0);
+        ELSE
+          hp = min(hp_max, hp + 2);
+          play_sound(sn_heart, 60, 100, 0);
+          burst(fx, fy, 6, 2, 12, 0);
+        END
+        BREAK;
+      END
+      IF (t > 540) BREAK; END
+    END
+    alpha = 100;
+    IF (t > 420 AND (t / 5) % 2 == 0) alpha = 20; END
+    x = int(fx); y = int(fy + h) - ((t / 20) % 2) * (h == 0); z = -int(fy) + 4;
+    FRAME;
+  END
+END
+
+// A red potion on the floor
+PROCESS potion_item(rm, cell, x, y);
+PRIVATE t = 0, y0;
+BEGIN
+  ctype = c_scroll; graph = gt[115]; y0 = y; z = -y;
+  LOOP
+    IF (rm != cur_room AND sliding == 0) BREAK; END
+    IF (live())
+      t++;
+      IF (hits_hero(x, y0, 6))
+        tk[rm * 144 + cell] = 1;
+        IF (potions < 3)
+          potions++;
+          show_msg("A RED POTION! PRESS X TO DRINK IT", 130, '#ff706d');
+        ELSE
+          hp = min(hp_max, hp + 6);
+          show_msg("NO ROOM - YOU DRINK IT NOW", 100, '#ff706d');
+        END
+        play_sound(sn_potion, 60, 130, 0);
+        jingle(0);
+        burst(x, y0, 8, 2, 14, -1);
+        BREAK;
+      END
+    END
+    y = y0 - ((t / 24) % 2);
+    FRAME;
+  END
+END
+
+// A crate that breaks with a blow
+PROCESS crate(rm, cell, x, y);
+PRIVATE my_sw = -1, c, r;
+BEGIN
+  ctype = c_scroll; graph = gt[66]; z = -y + 2;
+  c = (x - rox) / 16; r = (y - roy) / 16;
+  LOOP
+    IF (rm != cur_room AND sliding == 0) BREAK; END
+    IF (live() AND sw_hits(x, y, 7, my_sw))
+      tk[rm * 144 + cell] = 1;
+      sol[r * 20 + c] = 0;
+      burst(x, y, 12, 6, 22, 1);
+      burst(x, y, 6, 9, 16, 1);
+      play_sound(sn_crate, 70, rand(90, 110), 0);
+      add_shake(1.5);
+      IF (rand(0, 99) < 55) pickup(x, y, 0); ELSE IF (rand(0, 99) < 40) pickup(x, y, 1); END END
+      BREAK;
+    END
+    FRAME;
+  END
+END
+
+// A chest: 0 coins, 1 small key, 2 Ember Key, 3 war axe, 4 oak shield
+PROCESS chest(rm, cell, x, y, kind);
+PRIVATE my_sw = -1, near;
+BEGIN
+  ctype = c_scroll; graph = gt[89]; z = -y;
+  LOOP
+    IF (rm != cur_room AND sliding == 0) BREAK; END
+    IF (live())
+      near = distance(x, y, px, py + 4) < 17;
+      IF (sw_hits(x, y, 7, my_sw) OR (near AND (k_left() OR k_right() OR k_up() OR k_down())))
+        tk[rm * 144 + cell] = 1;
+        graph = gt[91];
+        play_sound(sn_chest, 80, 100, 0);
+        burst(x, y - 6, 10, 3, 16, -1);
+        treasure(x, y - 10, kind);
+        LOOP
+          IF (rm != cur_room AND sliding == 0) BREAK; END
+          FRAME;
+        END
+        BREAK;
+      END
+    END
+    FRAME;
+  END
+END
+
+// What came out of a chest: held up over it, then taken
+PROCESS treasure(x, y0, kind);
+PRIVATE t = 0, i;
+BEGIN
+  ctype = c_scroll; z = -9500;
+  SWITCH (kind)
+    CASE 0: graph = g_coin; END
+    CASE 1: graph = g_key; END
+    CASE 2: graph = g_bkey; END
+    CASE 3: graph = gt[118]; END
+    CASE 4: graph = gt[101]; END
+  END
+  y = y0;
+  SWITCH (kind)
+    CASE 0:
+      coins += 5; score += 50;
+      show_msg("FIVE GOLD COINS", 90, '#ffe761');
+      FOR i = 0 TO 4 pickup(x, y0 + 8, 0); END
+      coins -= 5; score -= 50;
+    END
+    CASE 1:
+      keys++;
+      show_msg("A SMALL KEY - IT OPENS ONE IRON DOOR", 140, '#ffe761');
+      jingle(1);
+    END
+    CASE 2:
+      bkey = 1;
+      show_msg("THE EMBER KEY! THE THRONE ROOM AWAITS", 170, '#ff706d');
+      jingle(1);
+    END
+    CASE 3:
+      weapon = 1;
+      show_msg("THE WAR AXE - DOUBLE DAMAGE, WIDER SWING", 170, '#ffe761');
+      jingle(1);
+    END
+    CASE 4:
+      shield = 1; hp_max += 2; hp = hp_max;
+      show_msg("THE OAK SHIELD - ONE MORE HEART", 170, '#ffe761');
+      jingle(1);
+    END
+  END
+  WHILE (t < 70)
+    IF (paused == 0) t++; END
+    y = y0 - min(t, 16) / 2;
+    IF (t % 6 == 0 AND nparts < 170) part(x + rand(-7, 7), y + rand(-7, 7), 0, -0.3, g_px[3], 16, 0); END
+    FRAME;
+  END
+END
+
+// Spikes: down, a warning shiver, up
+PROCESS spikes(rm, x, y, ph);
+PRIVATE t, cyc, st = 0, x0;
+BEGIN
+  ctype = c_scroll; z = 450; x0 = x;
+  t = ph;
+  LOOP
+    IF (rm != cur_room AND sliding == 0) BREAK; END
+    IF (live()) t++; END
+    cyc = t % 150;
+    x = x0;
+    IF (cyc < 80)
+      graph = g_plate; st = 0;
+    ELSE
+      IF (cyc < 100)
+        graph = g_plate; st = 1;
+        IF ((t / 2) % 2 == 0) x = x0 + 1; END
+      ELSE
+        IF (st != 2 AND abs(px - x) < 60 AND abs(py - y) < 60) play_sound(sn_spike, 50, rand(90, 110), 0); END
+        graph = gt[41]; st = 2;
+      END
+    END
+    IF (st == 2 AND live() AND abs(px - x) < 8 AND abs(py + 4 - y) < 8)
+      hurt_hero(1, x, y - 6);
+    END
+    FRAME;
+  END
+END
+
+// =====================================================================
+// Foes
+// =====================================================================
+
+// SLIME: rests, then hops somewhere (often towards Wren)
+PROCESS slime(rm, cell, x, y);
+PRIVATE fx = 0.0, fy = 0.0, vx = 0.0, vy = 0.0, kvx = 0.0, kvy = 0.0, hpn = 2, my_sw = -1,
+  fl = 0, t = 0, hop = 0, rest = 30, a, h = 0, sh;
+BEGIN
+  ctype = c_scroll; graph = gt[108];
+  fx = x; fy = y; rest = rand(20, 70);
+  sh = shadow_of(id);
+  LOOP
+    IF (rm != cur_room AND sliding == 0) BREAK; END
+    IF (live())
+      t++;
+      IF (hop == 0)
+        rest--;
+        IF (rest <= 0)
+          hop = 1;
+          IF (distance(fx, fy, px, py) < 110 AND rand(0, 2) > 0)
+            a = fget_angle(fx, fy, px, py) + rand(-20000, 20000);
+          ELSE
+            a = rand(0, 359) * 1000;
+          END
+          vx = get_distx(a, 1.1); vy = get_disty(a, 1.1);
+        END
+      ELSE
+        hop++;
+        h = -sin(hop * 9000) * 5;
+        IF (hop >= 20) hop = 0; h = 0; rest = rand(30, 70); vx = 0; vy = 0; END
+      END
+      IF (fits(fx + vx + kvx, fy, 5, 1)) fx += vx + kvx; ELSE vx = -vx; kvx = 0; END
+      IF (fits(fx, fy + vy + kvy, 5, 1)) fy += vy + kvy; ELSE vy = -vy; kvy = 0; END
+      kvx = kvx * 0.8; kvy = kvy * 0.8;
+      IF (sw_hits(fx, fy, 6, my_sw))
+        my_sw = sw_no; hpn -= sw_dmg; fl = 8;
+        a = kb_angle(fx, fy); kvx = get_distx(a, 3.6); kvy = get_disty(a, 3.6);
+        hit_fx(fx, fy);
+        IF (hpn <= 0) foe_down(rm, cell, fx, fy, 20, 1); BREAK; END
+      END
+      IF (hits_hero(fx, fy + h, 5)) hurt_hero(1, fx, fy); END
+      IF (fl > 0) fl--; END
+    END
+    IF (fl > 0) green = 70; blue = 70; ELSE green = 255; blue = 255; END
+    // squash on landing, stretch in the air
+    scale_y = 100; scale_x = 100;
+    IF (hop > 0 AND hop < 4) scale_y = 80; scale_x = 120; END
+    IF (hop >= 6 AND hop < 16) scale_y = 115; scale_x = 90; END
+    x = int(fx); y = int(fy + h); z = -int(fy);
+    foot_x = x; foot_y = int(fy) + 7;
+    FRAME;
+  END
+  signal(sh, s_kill);
+END
+
+// A soft shadow that follows process p's feet
+PROCESS shadow_of(p);
+BEGIN
+  ctype = c_scroll; graph = g_shadow; alpha = 35; z = 300;
+  LOOP
+    IF (p.graph == 0) BREAK; END
+    x = p.foot_x; y = p.foot_y;
+    FRAME;
+  END
+END
+
+// RAT: sniffs about, then darts at Wren in short bursts
+PROCESS rat(rm, cell, x, y);
+PRIVATE fx = 0.0, fy = 0.0, vx = 0.0, vy = 0.0, kvx = 0.0, kvy = 0.0, hpn = 1, my_sw = -1,
+  fl = 0, t = 0, st = 0, st_t = 40, a;
+BEGIN
+  ctype = c_scroll; graph = gt[123];
+  fx = x; fy = y; st_t = rand(20, 60);
+  LOOP
+    IF (rm != cur_room AND sliding == 0) BREAK; END
+    IF (live())
+      t++;
+      st_t--;
+      IF (st == 0)
+        // sniffing: little random steps
+        IF (t % 20 == 0) a = rand(0, 359) * 1000; vx = get_distx(a, 0.4); vy = get_disty(a, 0.4); END
+        IF (st_t <= 0 AND distance(fx, fy, px, py) < 130)
+          st = 1; st_t = 22;
+          a = fget_angle(fx, fy, px, py);
+          vx = get_distx(a, 2.5); vy = get_disty(a, 2.5);
+        END
+        IF (st_t <= 0) st_t = 30; END
+      ELSE
+        IF (t % 3 == 0) dust(fx, fy + 6, 1); END
+        IF (st_t <= 0) st = 0; st_t = rand(25, 45); vx = 0; vy = 0; END
+      END
+      IF (fits(fx + vx + kvx, fy, 5, 1)) fx += vx + kvx; ELSE vx = -vx * 0.5; END
+      IF (fits(fx, fy + vy + kvy, 5, 1)) fy += vy + kvy; ELSE vy = -vy * 0.5; END
+      kvx = kvx * 0.8; kvy = kvy * 0.8;
+      IF (vx > 0.1) flags = 1; END
+      IF (vx < -0.1) flags = 0; END
+      IF (sw_hits(fx, fy, 6, my_sw))
+        my_sw = sw_no; hpn -= sw_dmg; fl = 8;
+        a = kb_angle(fx, fy); kvx = get_distx(a, 4); kvy = get_disty(a, 4);
+        hit_fx(fx, fy);
+        IF (hpn <= 0) foe_down(rm, cell, fx, fy, 15, 1); BREAK; END
+      END
+      IF (hits_hero(fx, fy, 5)) hurt_hero(1, fx, fy); END
+      IF (fl > 0) fl--; END
+    END
+    IF (fl > 0) green = 70; blue = 70; ELSE green = 255; blue = 255; END
+    x = int(fx); y = int(fy) - (st == 1 AND (t / 3) % 2); z = -int(fy);
+    FRAME;
+  END
+END
+
+// BRUTE: plods after Wren; lined up with him it winds up and charges,
+// and a wall stops it dazed
+PROCESS brute(rm, cell, x, y);
+PRIVATE fx = 0.0, fy = 0.0, vx = 0.0, vy = 0.0, kvx = 0.0, kvy = 0.0, hpn = 6, my_sw = -1,
+  fl = 0, t = 0, st = 0, st_t = 60, a, cdx = 0, cdy = 0, stars = 0;
+BEGIN
+  ctype = c_scroll; graph = gt[109];
+  fx = x; fy = y;
+  LOOP
+    IF (rm != cur_room AND sliding == 0) BREAK; END
+    IF (live())
+      t++;
+      IF (st_t > 0) st_t--; END
+      SWITCH (st)
+        CASE 0:
+          // plod towards Wren
+          a = fget_angle(fx, fy, px, py);
+          vx = get_distx(a, 0.45); vy = get_disty(a, 0.45);
+          IF (st_t == 0 AND distance(fx, fy, px, py) < 150)
+            IF (abs(px - fx) < 10 OR abs(py - fy) < 10)
+              st = 1; st_t = 34; vx = 0; vy = 0;
+              IF (abs(px - fx) < 10) cdx = 0; cdy = sign(py - fy); ELSE cdy = 0; cdx = sign(px - fx); END
+              play_sound(sn_charge, 60, 100, 0);
+            END
+          END
+        END
+        CASE 1:
+          // winding up: a shiver
+          vx = 0; vy = 0;
+          IF (st_t == 0) st = 2; st_t = 90; END
+        END
+        CASE 2:
+          // charging
+          vx = cdx * 3.3; vy = cdy * 3.3;
+          IF (t % 3 == 0) dust(fx, fy + 6, 2); END
+          IF (NOT fits(fx + vx, fy + vy, 5, 1) OR st_t == 0)
+            IF (st_t > 0)
+              add_shake(4); play_sound(sn_bump, 80, 100, 0);
+              burst(fx + cdx * 8, fy + cdy * 8, 10, 1, 20, 0);
+            END
+            st = 3; st_t = 70; vx = 0; vy = 0;
+          END
+        END
+        CASE 3:
+          // dazed
+          vx = 0; vy = 0;
+          IF (t % 8 == 0 AND nparts < 170) part(fx + rand(-6, 6), fy - 10, 0, -0.2, g_star, 14, 0); END
+          IF (st_t == 0) st = 0; st_t = 80; END
+        END
+      END
+      IF (fits(fx + vx + kvx, fy, 5, 1)) fx += vx + kvx; END
+      IF (fits(fx, fy + vy + kvy, 5, 1)) fy += vy + kvy; END
+      kvx = kvx * 0.75; kvy = kvy * 0.75;
+      IF (px < fx) flags = 1; ELSE flags = 0; END
+      IF (sw_hits(fx, fy, 7, my_sw))
+        my_sw = sw_no; hpn -= sw_dmg; fl = 8;
+        a = kb_angle(fx, fy); kvx = get_distx(a, 2.2); kvy = get_disty(a, 2.2);
+        IF (st == 2) kvx = 0; kvy = 0; END
+        hit_fx(fx, fy);
+        IF (hpn <= 0) foe_down(rm, cell, fx, fy, 60, 1); pickup(fx, fy, 0); BREAK; END
+      END
+      IF (st == 2)
+        IF (hits_hero(fx, fy, 7)) hurt_hero(2, fx, fy); END
+      ELSE
+        IF (hits_hero(fx, fy, 6)) hurt_hero(1, fx, fy); END
+      END
+      IF (fl > 0) fl--; END
+    END
+    green = 255; blue = 255;
+    IF (st == 1 AND (t / 3) % 2 == 0) green = 120; blue = 120; END
+    IF (fl > 0) green = 70; blue = 70; END
+    x = int(fx); y = int(fy) - (st == 0 AND (t / 12) % 2);
+    IF (st == 1) x = int(fx) + (t % 2) * 2 - 1; END
+    z = -int(fy);
+    FRAME;
+  END
+END
+
+// BANDIT: keeps some distance and throws spinning daggers
+PROCESS bandit(rm, cell, x, y);
+PRIVATE fx = 0.0, fy = 0.0, vx = 0.0, vy = 0.0, kvx = 0.0, kvy = 0.0, hpn = 3, my_sw = -1,
+  fl = 0, t = 0, d, a, throw_t = 90, aim = 0, side = 1;
+BEGIN
+  ctype = c_scroll; graph = gt[112];
+  fx = x; fy = y; throw_t = rand(60, 120);
+  IF (rand(0, 1)) side = -1; END
+  LOOP
+    IF (rm != cur_room AND sliding == 0) BREAK; END
+    IF (live())
+      t++;
+      d = distance(fx, fy, px, py);
+      a = fget_angle(fx, fy, px, py);
+      IF (aim > 0)
+        // hand up, then the throw
+        aim--;
+        vx = 0; vy = 0;
+        IF (aim == 0)
+          dagger(fx, fy - 2, a);
+          play_sound(sn_throw, 60, 100, 0);
+          throw_t = rand(80, 140);
+        END
+      ELSE
+        IF (d < 64)
+          vx = get_distx(a, -0.9); vy = get_disty(a, -0.9);
+        ELSE
+          IF (d > 110)
+            vx = get_distx(a, 0.7); vy = get_disty(a, 0.7);
+          ELSE
+            // circle round
+            vx = get_distx(a + 90000 * side, 0.6); vy = get_disty(a + 90000 * side, 0.6);
+          END
+        END
+        IF (t % 150 == 0) side = -side; END
+        throw_t--;
+        IF (throw_t <= 0 AND d < 200) aim = 22; END
+      END
+      IF (fits(fx + vx + kvx, fy, 5, 1)) fx += vx + kvx; ELSE side = -side; END
+      IF (fits(fx, fy + vy + kvy, 5, 1)) fy += vy + kvy; ELSE side = -side; END
+      kvx = kvx * 0.8; kvy = kvy * 0.8;
+      IF (px < fx) flags = 1; ELSE flags = 0; END
+      IF (sw_hits(fx, fy, 6, my_sw))
+        my_sw = sw_no; hpn -= sw_dmg; fl = 8; aim = 0; throw_t = 50;
+        a = kb_angle(fx, fy); kvx = get_distx(a, 3.6); kvy = get_disty(a, 3.6);
+        hit_fx(fx, fy);
+        IF (hpn <= 0) foe_down(rm, cell, fx, fy, 40, 1); BREAK; END
+      END
+      IF (hits_hero(fx, fy, 5)) hurt_hero(1, fx, fy); END
+      IF (fl > 0) fl--; END
+    END
+    green = 255; blue = 255;
+    IF (aim > 0 AND (aim / 3) % 2 == 0) green = 200; blue = 120; END
+    IF (fl > 0) green = 70; blue = 70; END
+    x = int(fx); y = int(fy) - (aim > 0) * 2; z = -int(fy);
+    FRAME;
+  END
+END
+
+PROCESS dagger(x0, y0, a);
+PRIVATE fx = 0.0, fy = 0.0, vx = 0.0, vy = 0.0, t = 0, rm;
+BEGIN
+  ctype = c_scroll; graph = gt[103]; z = -9000; rm = cur_room;
+  fx = x0; fy = y0;
+  vx = get_distx(a, 2.4); vy = get_disty(a, 2.4);
+  LOOP
+    IF (rm != cur_room OR gs != GS_PLAY) BREAK; END
+    IF (live())
+      t++;
+      fx += vx; fy += vy;
+      angle += 36000;
+      IF (solid_at(fx, fy + 3, 2) OR t > 200) burst(fx, fy, 4, 1, 10, 0); play_sound(sn_clink, 30, 100, 0); BREAK; END
+      IF (sw_on AND distance(fx, fy, sw_x, sw_y) < sw_r + 4)
+        burst(fx, fy, 6, 4, 18, 0); play_sound(sn_clink, 70, 120, 0); hitstop = 2;
+        BREAK;
+      END
+      IF (hits_hero(fx, fy, 3)) hurt_hero(1, fx, fy); BREAK; END
+    END
+    x = int(fx); y = int(fy);
+    FRAME;
+  END
+END
+
+// GHOST: drifts to Wren through anything; fades out of reach now and then
+PROCESS ghost(rm, cell, x, y);
+PRIVATE fx = 0.0, fy = 0.0, kvx = 0.0, kvy = 0.0, hpn = 3, my_sw = -1, fl = 0, t = 0, a, cyc = 0, solid_now = 1;
+BEGIN
+  ctype = c_scroll; graph = gt[121];
+  fx = x; fy = y; t = rand(0, 200);
+  LOOP
+    IF (rm != cur_room AND sliding == 0) BREAK; END
+    IF (live())
+      t++;
+      cyc = t % 300;
+      // 0-169 seen, 170-199 fading, 200-269 gone, 270-299 coming back
+      IF (cyc < 170) alpha = 85; solid_now = 1; END
+      IF (cyc >= 170 AND cyc < 200) alpha = 85 - (cyc - 170) * 2; solid_now = 1; END
+      IF (cyc == 200) play_sound(sn_ghost, 40, 100, 0); END
+      IF (cyc >= 200 AND cyc < 270) alpha = 22; solid_now = 0; END
+      IF (cyc >= 270) alpha = 25 + (cyc - 270) * 2; solid_now = 0; END
+      a = fget_angle(fx, fy, px, py);
+      fx += get_distx(a, 0.42) + kvx + sin(t * 3000) * 0.3;
+      fy += get_disty(a, 0.42) + kvy + cos(t * 2500) * 0.25;
+      fx = in_x(fx); fy = in_y(fy);
+      kvx = kvx * 0.85; kvy = kvy * 0.85;
+      IF (px < fx) flags = 1; ELSE flags = 0; END
+      IF (solid_now AND sw_hits(fx, fy, 6, my_sw))
+        my_sw = sw_no; hpn -= sw_dmg; fl = 8;
+        a = kb_angle(fx, fy); kvx = get_distx(a, 3.4); kvy = get_disty(a, 3.4);
+        hit_fx(fx, fy);
+        IF (hpn <= 0) foe_down(rm, cell, fx, fy, 40, 1); BREAK; END
+      END
+      IF (solid_now AND hits_hero(fx, fy, 5)) hurt_hero(1, fx, fy); END
+      IF (fl > 0) fl--; END
+    END
+    IF (fl > 0) green = 70; blue = 70; ELSE green = 255; blue = 255; END
+    x = int(fx); y = int(fy) + int(sin(t * 4000) * 2); z = -int(fy) - 200;
+    FRAME;
+  END
+END
+
+// BAT: flutters about, now and then swoops at Wren
+PROCESS bat(rm, cell, x, y);
+PRIVATE fx = 0.0, fy = 0.0, vx = 0.0, vy = 0.0, kvx = 0.0, kvy = 0.0, hpn = 1, my_sw = -1,
+  fl = 0, t = 0, a, turn = 30, sh;
+BEGIN
+  ctype = c_scroll; graph = gt[120];
+  fx = x; fy = y; t = rand(0, 50);
+  sh = shadow_of(id);
+  LOOP
+    IF (rm != cur_room AND sliding == 0) BREAK; END
+    IF (live())
+      t++;
+      turn--;
+      IF (turn <= 0)
+        IF (rand(0, 2) == 0 AND distance(fx, fy, px, py) < 150)
+          a = fget_angle(fx, fy, px, py);
+          vx = get_distx(a, 1.7); vy = get_disty(a, 1.7);
+        ELSE
+          a = rand(0, 359) * 1000;
+          vx = get_distx(a, 1.1); vy = get_disty(a, 1.1);
+        END
+        turn = rand(25, 60);
+        IF (t % 3 == 0) play_sound(sn_bat, 25, rand(90, 110), 0); END
+      END
+      fx += vx + kvx; fy += vy + kvy;
+      IF (fx < rox + 24 OR fx > rox + 296) vx = -vx; fx = in_x(fx); END
+      IF (fy < roy + 36 OR fy > roy + 150) vy = -vy; fy = in_y(fy); END
+      kvx = kvx * 0.8; kvy = kvy * 0.8;
+      IF (sw_hits(fx, fy, 6, my_sw))
+        my_sw = sw_no; hpn -= sw_dmg; fl = 8;
+        hit_fx(fx, fy);
+        IF (hpn <= 0) foe_down(rm, cell, fx, fy, 15, 1); BREAK; END
+      END
+      IF (hits_hero(fx, fy + 6, 4)) hurt_hero(1, fx, fy); END
+      IF (fl > 0) fl--; END
+    END
+    IF (fl > 0) green = 70; blue = 70; ELSE green = 255; blue = 255; END
+    flags = (t / 5) % 2;
+    x = int(fx); y = int(fy) - 4 + int(sin(t * 12000) * 2); z = -int(fy) - 300;
+    foot_x = x; foot_y = int(fy) + 8;
+    FRAME;
+  END
+  signal(sh, s_kill);
+END
+
+// SPIDER: waits; close enough, it shivers and pounces
+PROCESS spider(rm, cell, x, y);
+PRIVATE fx = 0.0, fy = 0.0, vx = 0.0, vy = 0.0, kvx = 0.0, kvy = 0.0, hpn = 2, my_sw = -1,
+  fl = 0, t = 0, st = 0, st_t = 30, a;
+BEGIN
+  ctype = c_scroll; graph = gt[122];
+  fx = x; fy = y;
+  LOOP
+    IF (rm != cur_room AND sliding == 0) BREAK; END
+    IF (live())
+      t++;
+      IF (st_t > 0) st_t--; END
+      SWITCH (st)
+        CASE 0:
+          vx = 0; vy = 0;
+          IF (t % 50 == 0) a = rand(0, 359) * 1000; vx = get_distx(a, 2); vy = get_disty(a, 2); END
+          IF (st_t == 0 AND distance(fx, fy, px, py) < 85) st = 1; st_t = 24; END
+        END
+        CASE 1:
+          vx = 0; vy = 0;
+          IF (st_t == 0)
+            st = 2; st_t = 18;
+            a = fget_angle(fx, fy, px, py);
+            vx = get_distx(a, 3.4); vy = get_disty(a, 3.4);
+            play_sound(sn_throw, 40, 70, 0);
+          END
+        END
+        CASE 2:
+          vx = vx * 0.95; vy = vy * 0.95;
+          IF (st_t == 0) st = 0; st_t = 50; vx = 0; vy = 0; END
+        END
+      END
+      IF (fits(fx + vx + kvx, fy, 5, 1)) fx += vx + kvx; ELSE vx = -vx * 0.3; END
+      IF (fits(fx, fy + vy + kvy, 5, 1)) fy += vy + kvy; ELSE vy = -vy * 0.3; END
+      kvx = kvx * 0.8; kvy = kvy * 0.8;
+      IF (sw_hits(fx, fy, 6, my_sw))
+        my_sw = sw_no; hpn -= sw_dmg; fl = 8; st = 0; st_t = 40;
+        a = kb_angle(fx, fy); kvx = get_distx(a, 3.6); kvy = get_disty(a, 3.6);
+        hit_fx(fx, fy);
+        IF (hpn <= 0) foe_down(rm, cell, fx, fy, 30, 1); BREAK; END
+      END
+      IF (hits_hero(fx, fy, 5)) hurt_hero(1, fx, fy); END
+      IF (fl > 0) fl--; END
+    END
+    green = 255; blue = 255;
+    IF (st == 1 AND (t / 2) % 2 == 0) green = 150; blue = 150; END
+    IF (fl > 0) green = 70; blue = 70; END
+    x = int(fx); y = int(fy) - (st == 2) * 3;
+    IF (st == 1) x = int(fx) + (t % 2) * 2 - 1; END
+    z = -int(fy);
+    FRAME;
+  END
+END
+
+// The chest that bites: still until Wren comes close, then it hops at him
+PROCESS mimic(rm, cell, x, y);
+PRIVATE fx = 0.0, fy = 0.0, vx = 0.0, vy = 0.0, kvx = 0.0, kvy = 0.0, hpn = 5, my_sw = -1,
+  fl = 0, t = 0, awake = 0, hop = 0, rest = 20, a, h = 0, c0, r0;
+BEGIN
+  ctype = c_scroll; graph = gt[89];
+  fx = x; fy = y;
+  c0 = (x - rox) / 16; r0 = (y - roy) / 16;
+  LOOP
+    IF (rm != cur_room AND sliding == 0) BREAK; END
+    IF (live())
+      t++;
+      IF (awake == 0)
+        IF (distance(fx, fy, px, py) < 26 OR sw_hits(fx, fy, 7, my_sw))
+          awake = 1; sol[r0 * 20 + c0] = 0;
+          play_sound(sn_roar, 50, 220, 0);
+          add_shake(3);
+          show_msg("THE CHEST BITES!", 80, '#ff706d');
+        END
+      ELSE
+        IF (hop == 0)
+          rest--;
+          IF (rest <= 0)
+            hop = 1;
+            a = fget_angle(fx, fy, px, py);
+            vx = get_distx(a, 1.6); vy = get_disty(a, 1.6);
+          END
+        ELSE
+          hop++;
+          h = -sin(hop * 10000) * 6;
+          IF (hop >= 18) hop = 0; h = 0; rest = 14; vx = 0; vy = 0; dust(fx, fy + 7, 3); END
+        END
+        IF (fits(fx + vx + kvx, fy, 6, 1)) fx += vx + kvx; END
+        IF (fits(fx, fy + vy + kvy, 6, 1)) fy += vy + kvy; END
+        kvx = kvx * 0.8; kvy = kvy * 0.8;
+        IF (sw_hits(fx, fy, 7, my_sw))
+          my_sw = sw_no; hpn -= sw_dmg; fl = 8;
+          a = kb_angle(fx, fy); kvx = get_distx(a, 2.6); kvy = get_disty(a, 2.6);
+          hit_fx(fx, fy);
+          IF (hpn <= 0)
+            foe_down(rm, cell, fx, fy, 80, 0);
+            pickup(fx, fy, 0); pickup(fx, fy, 0); pickup(fx, fy, 1);
+            BREAK;
+          END
+        END
+        IF (hits_hero(fx, fy + h, 6)) hurt_hero(2, fx, fy); END
+      END
+      IF (fl > 0) fl--; END
+    END
+    IF (awake AND (t / 8) % 2 == 0) graph = gt[92]; ELSE graph = gt[89]; END
+    IF (fl > 0) green = 70; blue = 70; ELSE green = 255; blue = 255; END
+    x = int(fx); y = int(fy + h); z = -int(fy);
+    FRAME;
+  END
+END
+
+// =====================================================================
+// Scorchclaw
+// =====================================================================
+
+PROCESS boss(rm, x, y);
+PRIVATE fx = 0.0, fy = 0.0, vx = 0.0, vy = 0.0, kvx = 0.0, kvy = 0.0, my_sw = -1, fl = 0, t = 0,
+  st = 0, st_t = 90, a, i, n, phase = 1, cdx = 0.0, cdy = 0.0, intro = 0, sh, dead_t = 0, spin = 0;
+BEGIN
+  ctype = c_scroll; graph = gt[110]; size = 200;
+  fx = x; fy = y;
+  boss_hp = boss_max; boss_on = 0; alpha = 0;
+  sh = shadow_of(id);
+  sh.size = 200;
+  LOOP
+    IF (rm != cur_room AND sliding == 0) BREAK; END
+    IF (live())
+      t++;
+      IF (intro < 90)
+        // rising out of the embers
+        intro++;
+        alpha = intro * 100 / 90;
+        IF (intro == 1) play_sound(sn_roar, 90, 100, 0); END
+        IF (intro % 4 == 0) burst(fx, fy + 10, 3, 8, 16, -1); END
+        add_shake(2);
+        IF (intro == 90) boss_on = 1; st = 0; st_t = 60; END
+      ELSE
+        IF (st_t > 0) st_t--; END
+        IF (boss_hp <= boss_max / 2 AND phase == 1)
+          phase = 2;
+          play_sound(sn_roar, 90, 130, 0); add_shake(6);
+          bat(rm, -1, rox + 60, roy + 60); bat(rm, -1, rox + 260, roy + 60);
+          show_msg("SCORCHCLAW CALLS THE BATS!", 100, '#ff706d');
+        END
+        SWITCH (st)
+          CASE 0:
+            // stalk
+            a = fget_angle(fx, fy, px, py);
+            vx = get_distx(a, 0.45 * phase); vy = get_disty(a, 0.45 * phase);
+            IF (st_t == 0)
+              IF (rand(0, 1) == 0) st = 1; st_t = 36; ELSE st = 3; st_t = 40; END
+              vx = 0; vy = 0;
+            END
+          END
+          CASE 1:
+            // about to spray
+            vx = 0; vy = 0;
+            IF (st_t == 0)
+              n = 8 + phase * 4;
+              FOR i = 0 TO n - 1
+                orb(fx, fy, i * 360000 / n + spin, 1.5 + phase * 0.2);
+              END
+              spin += 15000;
+              play_sound(sn_fire, 80, 100, 0);
+              add_shake(3);
+              st = 2; st_t = 30;
+            END
+          END
+          CASE 2:
+            // a second, offset ring in the second phase, then back to stalking
+            vx = 0; vy = 0;
+            IF (st_t == 14 AND phase == 2)
+              FOR i = 0 TO 7
+                orb(fx, fy, i * 45000 + 22500, 1.2);
+              END
+              play_sound(sn_fire, 70, 120, 0);
+            END
+            IF (st_t == 0) st = 0; st_t = rand(70, 110) / phase; END
+          END
+          CASE 3:
+            // winding up the charge
+            vx = 0; vy = 0;
+            IF (st_t == 0)
+              a = fget_angle(fx, fy, px, py);
+              cdx = get_distx(a, 3.2 + phase * 0.5); cdy = get_disty(a, 3.2 + phase * 0.5);
+              st = 4; st_t = 100;
+              play_sound(sn_charge, 80, 80, 0);
+            END
+          END
+          CASE 4:
+            vx = cdx; vy = cdy;
+            IF (t % 2 == 0) dust(fx, fy + 14, 2); END
+            IF (NOT fits(fx + vx, fy + vy, 12, 1) OR st_t == 0)
+              add_shake(7); play_sound(sn_bump, 90, 70, 0);
+              burst(fx, fy + 8, 16, 1, 26, 0);
+              st = 5; st_t = 60; vx = 0; vy = 0;
+            END
+          END
+          CASE 5:
+            // dazed after the wall
+            vx = 0; vy = 0;
+            IF (t % 8 == 0 AND nparts < 170) part(fx + rand(-10, 10), fy - 18, 0, -0.2, g_star, 14, 0); END
+            IF (st_t == 0) st = 0; st_t = 60; END
+          END
+        END
+        IF (fits(fx + vx + kvx, fy, 12, 1)) fx += vx + kvx; END
+        IF (fits(fx, fy + vy + kvy, 12, 1)) fy += vy + kvy; END
+        kvx = kvx * 0.7; kvy = kvy * 0.7;
+        IF (sw_hits(fx, fy, 14, my_sw))
+          my_sw = sw_no; boss_hp -= sw_dmg; fl = 8;
+          a = kb_angle(fx, fy); kvx = get_distx(a, 1.2); kvy = get_disty(a, 1.2);
+          hit_fx(fx, fy);
+          IF (boss_hp <= 0)
+            boss_hp = 0; boss_on = 0; boss_dead = 1;
+            score += 1000; kills++;
+            song_stop();
+            BREAK;
+          END
+        END
+        IF (hits_hero(fx, fy + 4, 13))
+          IF (st == 4) hurt_hero(2, fx, fy); ELSE hurt_hero(1, fx, fy); END
+        END
+      END
+      IF (fl > 0) fl--; END
+    END
+    green = 255; blue = 255;
+    IF ((st == 1 OR st == 3) AND (t / 3) % 2 == 0) green = 150; blue = 110; END
+    IF (fl > 0) green = 60; blue = 60; END
+    x = int(fx); y = int(fy);
+    IF (st == 3 OR st == 1) x = int(fx) + (t % 2) * 2 - 1; END
+    IF (st == 0) y = int(fy) - (t / 10) % 2; END
+    IF (px < fx) flags = 0; ELSE flags = 1; END
+    z = -int(fy);
+    foot_x = int(fx); foot_y = int(fy) + 15;
+    FRAME;
+  END
+  // the end of Scorchclaw: shaking, bursting, gone
+  IF (boss_dead)
+    signal(TYPE orb, s_kill);
+    signal(TYPE bat, s_kill);
+    WHILE (dead_t < 130)
+      IF (paused == 0)
+        dead_t++;
+        x = int(fx) + rand(-2, 2); y = int(fy) + rand(-2, 2);
+        green = 90 + (dead_t % 8) * 20; blue = green;
+        IF (dead_t % 6 == 0)
+          burst(fx + rand(-14, 14), fy + rand(-14, 14), 8, 8, 24, 0);
+          burst(fx + rand(-14, 14), fy + rand(-14, 14), 4, 2, 20, 0);
+          play_sound(sn_boom, 50, rand(80, 130), 0);
+          add_shake(4);
+        END
+        IF (dead_t > 90) alpha = (130 - dead_t) * 2; END
+      END
+      FRAME;
+    END
+    burst(fx, fy, 30, 8, 30, 0);
+    burst(fx, fy, 20, 3, 26, 0);
+    play_sound(sn_boom, 90, 70, 0);
+    add_shake(8);
+    ember(rox + 160, roy + 80);
+  END
+  signal(sh, s_kill);
+END
+
+PROCESS orb(x0, y0, a, spd);
+PRIVATE fx = 0.0, fy = 0.0, vx = 0.0, vy = 0.0, t = 0, rm;
+BEGIN
+  ctype = c_scroll; graph = g_orb; z = -9000; rm = cur_room;
+  fx = x0; fy = y0;
+  vx = get_distx(a, spd); vy = get_disty(a, spd);
+  LOOP
+    IF (rm != cur_room OR gs != GS_PLAY) BREAK; END
+    IF (live())
+      t++;
+      fx += vx; fy += vy;
+      IF (t % 4 == 0 AND nparts < 150) part(fx, fy, 0, 0, g_px[8], 10, -1); END
+      IF (fx < rox + 16 OR fx > rox + 304 OR fy < roy + 28 OR fy > roy + 164) burst(fx, fy, 4, 8, 10, 0); BREAK; END
+      IF (sw_on AND distance(fx, fy, sw_x, sw_y) < sw_r + 3)
+        burst(fx, fy, 6, 3, 16, 0); play_sound(sn_clink, 50, 80, 0);
+        BREAK;
+      END
+      IF (hits_hero(fx, fy, 3)) hurt_hero(1, fx, fy); BREAK; END
+    END
+    x = int(fx); y = int(fy);
+    size = 100 + (t / 4) % 2 * 0;
+    FRAME;
+  END
+END
+
+// The Ember Heart, left where Scorchclaw fell
+PROCESS ember(x, y0);
+PRIVATE t = 0;
+BEGIN
+  ctype = c_scroll; graph = g_ember; z = -9000; y = y0;
+  show_msg("THE EMBER HEART! TAKE IT HOME", 400, '#ffe761');
+  LOOP
+    IF (live())
+      t++;
+      IF (t % 5 == 0 AND nparts < 170) part(x + rand(-6, 6), y + rand(-6, 6), rand(-3, 3) / 10.0, -0.5, g_px[8 - (t / 5) % 2 * 5], 22, -1); END
+      IF (t > 30 AND hits_hero(x, y, 7))
+        burst(x, y, 30, 3, 30, 0);
+        burst(x, y, 20, 8, 26, 0);
+        play_sound(sn_potion, 90, 80, 0);
+        gs = GS_WIN;
+        BREAK;
+      END
+    END
+    y = y0 - (t / 15) % 2;
+    FRAME;
+  END
+END
+
+// The bars closing the throne room's way out while Scorchclaw lives
+PROCESS seal(x, y);
+BEGIN
+  ctype = c_scroll; graph = gt[77]; z = -y;
+  LOOP
+    IF (boss_dead OR cur_room != 1) BREAK; END
+    FRAME;
+  END
+  IF (cur_room == 1)
+    sol[10 * 20 + 9] = 6; sol[10 * 20 + 10] = 6;
+    burst(x, y, 8, 1, 16, 0);
+  END
+END
+
+// =====================================================================
+// The status bar
+// =====================================================================
+
+PROCESS hud();
+PRIVATE i, rx, ry, c, t = 0;
+BEGIN
+  graph = g_hud; x = 160; y = 8; z = -20000;
+  FOR i = 0 TO 6 hud_heart(i); END
+  hud_icon(98, 8, gt[115], 0);
+  hud_icon(134, 8, g_key, 0);
+  hud_icon(166, 8, g_bkey, 1);
+  hud_icon(190, 8, g_coin, 0);
+  hud_icon(238, 8, gt[104], 2);
+  set_color('#f7c282');
+  write_int(f_small, 106, 9, 3, OFFSET potions);
+  write_int(f_small, 142, 9, 3, OFFSET keys);
+  write_int(f_small, 197, 9, 3, OFFSET coins);
+  LOOP
+    t++;
+    // the map of the keep: rooms seen, the room Wren is in, the throne
+    FOR i = 0 TO 8
+      rx = 272 + (i % 3) * 14; ry = 2 + (i / 3) * 4;
+      c = 0;
+      IF (visited[i]) c = 1; END
+      IF (i == cur_room AND (t / 15) % 2 == 0) c = 2; END
+      IF (c == 0 AND i == 1)
+        set_color('#763b36');
+      ELSE
+        IF (c == 0) set_color('#3f2631'); END
+        IF (c == 1) set_color('#8b9bb4'); END
+        IF (c == 2) set_color('#ffe761'); END
+      END
+      draw_rect(rx, ry, 12, 3);
+    END
+    FRAME;
+  END
+END
+
+PROCESS hud_heart(i);
+PRIVATE t = 0;
+BEGIN
+  x = 9 + i * 10; y = 8; z = -20001;
+  LOOP
+    t++;
+    IF (i * 2 >= hp_max)
+      graph = 0;
+    ELSE
+      IF (hp >= i * 2 + 2) graph = g_heart[2]; ELSE IF (hp == i * 2 + 1) graph = g_heart[1]; ELSE graph = g_heart[0]; END END
+    END
+    // the last heart beats when little is left
+    green = 255; blue = 255;
+    IF (hp <= 2 AND hp > 0 AND (t / 10) % 2 == 0) green = 120; blue = 120; END
+    FRAME;
+  END
+END
+
+// kind 1: dim until the Ember Key is found; kind 2: the weapon in hand
+PROCESS hud_icon(x, y, graph, kind);
+BEGIN
+  z = -20001;
+  LOOP
+    IF (kind == 1) IF (bkey) alpha = 100; ELSE alpha = 18; END END
+    IF (kind == 2) IF (weapon) graph = gt[118]; ELSE graph = gt[104]; END END
+    FRAME;
+  END
+END
+
+// A dark band under the message at the bottom of the room
+PROCESS msg_strip();
+BEGIN
+  graph = g_strip; x = 160; y = 182; z = -19000;
+  LOOP
+    IF (msg_a) alpha = 100; ELSE alpha = 0; END
+    FRAME;
+  END
+END
+
+// Scorchclaw's health, over the throne room's wall while the fight is on
+PROCESS boss_bar();
+PRIVATE w;
+BEGIN
+  graph = g_bar; x = 160; y = 26; z = -20000;
+  LOOP
+    IF (cur_room != 1 OR boss_dead) BREAK; END
+    IF (boss_on)
+      alpha = 100;
+      w = boss_hp * 160 / boss_max;
+      set_color('#e84537');
+      draw_rect(80, 24, w, 4);
+      set_color('#ff706d');
+      draw_rect(80, 24, w, 1);
+    ELSE
+      alpha = 0;
+    END
+    FRAME;
+  END
+END
+
+// The dark veil over the room (pause, endings, title)
+PROCESS veil();
+BEGIN
+  graph = g_dim; x = 160; y = 104; z = -15000;
+  LOOP
+    FRAME;
+  END
+END
+
+// =====================================================================
+// Title screen actors
+// =====================================================================
+
+PROCESS title_walker(x, y, graph, kind);
+PRIVATE t = 0, x0, y0;
+BEGIN
+  ctype = c_scroll; x0 = x; y0 = y; z = -y;
+  LOOP
+    t++;
+    IF (kind == 0)
+      // Wren walking up and down the gatehouse
+      x = x0 + int(sin(t * 800) * 90);
+      IF (cos(t * 800) < 0) flags = 1; ELSE flags = 0; END
+      y = y0 - (t / 7) % 2;
+    END
+    IF (kind == 1)
+      // a slime hopping in place
+      y = y0 - int(abs(sin(t * 5000)) * 4);
+    END
+    IF (kind == 2)
+      x = x0 + int(sin(t * 2000) * 30);
+      y = y0 + int(sin(t * 4100) * 6);
+      flags = (t / 5) % 2;
+    END
+    FRAME;
+  END
+END
+
+// =====================================================================
+// Main program
+// =====================================================================
+
+PRIVATE
+  i, k, t, f, secs, over_t, blink_id, txt[15], ntxt, sx, sy, d, ttl;
+
+BEGIN
+  set_fps(60, 0);
+  screen_color('#1c1117');
+  set_color('#f7c282');
+  write(0, 160, 90, 4, "KEEP OF EMBERS");
+  set_color('#8b9bb4');
+  write(0, 160, 104, 4, "lighting the torches...");
+  FRAME;
+
+  // the pack's sheet, cut into its 132 tiles
+  load_tiles();
+  FRAME;
+  // three sizes of the pixel font (built over a few frames)
+  FOR k = 1 TO 3
+    font_start(k);
+    FOR i = 0 TO NGLYPH - 1 STEP 6
+      font_part(k, i, i + 5);
+      FRAME;
+    END
+    IF (k == 1) f_small = font_finish(); END
+    IF (k == 2) f_big = font_finish(); END
+    IF (k == 3) f_huge = font_finish(); END
+  END
+  make_art();
+  FRAME;
+  make_sounds();
+  make_songs();
+  best_time = load_data("best_time", 0);
+  best_score = load_data("best_score", 0);
+  delete_text(all_text);
+
+  // the room on screen lives in scroll window 0, under the status bar
+  define_region(1, 0, 16, 320, 176);
+  start_scroll(0, 0, 0, 0, 1, 0);
+
+  LOOP
+    // ================= title =================
+    let_me_alone();
+    delete_text(all_text);
+    msg_a = 0; ntile[0] = 0; ntile[1] = 0;
+    gs = GS_TITLE; paused = 0; sliding = 0; hitstop = 0; shake = 0;
+    FOR i = 0 TO 8 dopen[i] = 0; END
+    build_room(7, 0);
+    camx = rox; camy = roy;
+    scroll[0].x0 = camx; scroll[0].y0 = camy;
+    title_walker(rox + 160, roy + 128, gt[98], 0);
+    title_walker(rox + 56, roy + 72, gt[108], 1);
+    title_walker(rox + 264, roy + 72, gt[108], 1);
+    title_walker(rox + 160, roy + 50, gt[120], 2);
+    veil();
+    stext(f_huge, 160, 38, 4, "KEEP OF EMBERS", '#ffe761');
+    stext(f_small, 160, 60, 4, "SCORCHCLAW THE CINDER CRAB PUT OUT THE HEARTH.", '#f7c282');
+    stext(f_small, 160, 70, 4, "WREN THE WARDEN GOES IN TO LIGHT IT AGAIN.", '#f7c282');
+    stext(f_small, 160, 92, 4, "ARROWS / WASD  MOVE      Z / SPACE  SWORD", '#ffffff');
+    stext(f_small, 160, 103, 4, "X  DRINK A POTION      ENTER / P  PAUSE", '#ffffff');
+    IF (best_score > 0)
+      stext(f_small, 160, 124, 4, "BEST SCORE " + best_score + "    BEST TIME " + (best_time / 60) + ":" + ((best_time % 60) / 10) + (best_time % 10), '#7dffc8');
+    END
+    stext(f_small, 160, 180, 4, "ART: KENNEY (KENNEY.NL), CC0", '#8b9bb4');
+    song_play(m_title);
+    t = 0; blink_id = 0; k = 0;
+    LOOP
+      t++;
+      IF (t % 50 == 1) blink_id = stext(f_big, 160, 146, 4, "PRESS ENTER", '#ffe761'); k = msg_b; END
+      IF (t % 50 == 34) delete_text(blink_id); delete_text(k); END
+      IF (t > 20 AND k_start_p()) BREAK; END
+      FRAME;
+    END
+    play_sound(sn_select, 80, 100, 0);
+
+    // ================= a new game =================
+    let_me_alone();
+    delete_text(all_text);
+    msg_a = 0; ntile[0] = 0; ntile[1] = 0;
+    FOR i = 0 TO 1295 tk[i] = 0; END
+    FOR i = 0 TO 8 dopen[i] = 0; visited[i] = 0; END
+    hp = 8; hp_max = 8; inv = 0; potions = 0; keys = 0; bkey = 0; weapon = 0; shield = 0;
+    coins = 0; kills = 0; score = 0; play_frames = 0; kbx = 0; kby = 0; hflash = 0;
+    boss_dead = 0; boss_on = 0; sw_on = 0; want_room = -1; nparts = 0;
+    cur_room = 7; visited[7] = 1;
+    build_room(7, 1);
+    px = rox + 152; py = roy + 100;
+    camx = rox; camy = roy;
+    hero();
+    hud();
+    msg_strip();
+    gs = GS_PLAY; paused = 0; sliding = 0; hitstop = 0; shake = 0;
+    song_play(m_keep);
+    show_msg("THE GATEHOUSE - FIND A KEY FOR THE IRON DOOR", 200, '#f7c282');
+    t = 0;
+    LOOP
+      // ---- pause (not in the first frames: Enter started the game)
+      t++; fc++;
+      IF (gs == GS_PLAY AND sliding == 0 AND t > 15 AND k_pause_p())
+        paused = 1 - paused;
+        IF (paused)
+          pause_dim = veil();
+          pause_a = stext(f_big, 160, 96, 4, "PAUSED", '#ffffff');
+          pause_b = msg_b;
+          k = stext(f_small, 160, 116, 4, "ENTER / P TO GO ON", '#c0cbdc');
+          txt[0] = k; txt[1] = msg_b;
+        ELSE
+          signal(pause_dim, s_kill);
+          delete_text(pause_a); delete_text(pause_b); delete_text(txt[0]); delete_text(txt[1]);
+        END
+      END
+      IF (paused == 0)
+        IF (hitstop > 0) hitstop--; END
+        IF (msg_t > 0)
+          msg_t--;
+          IF (msg_t == 0 AND msg_a) delete_text(msg_a); delete_text(msg_b); msg_a = 0; END
+        END
+      END
+
+      // ---- into the next room: build it, slide the view there
+      IF (want_room >= 0 AND sliding == 0)
+        k = cur_room;
+        cur_room = want_room; want_room = -1;
+        sx0 = camx; sy0 = camy;
+        hx0 = px; hy0 = py;
+        IF (want_dir == 2) dopen[cur_room] = 1; END
+        build_room(cur_room, 1);
+        sx1 = rox; sy1 = roy;
+        SWITCH (want_dir)
+          CASE 0: hx1 = px; hy1 = roy + 146; END
+          CASE 1: hx1 = rox + 18; hy1 = py; END
+          CASE 2: hx1 = px; hy1 = roy + 36; END
+          CASE 3: hx1 = rox + 302; hy1 = py; END
+        END
+        sliding = 1; slide_t = 0;
+        sw_on = 0;
+      END
+      IF (sliding AND paused == 0)
+        slide_t++;
+        f = hermite(0, 1, slide_t / 30.0);
+        camx = lerp(sx0, sx1, f); camy = lerp(sy0, sy1, f);
+        px = lerp(hx0, hx1, slide_t / 30.0); py = lerp(hy0, hy1, slide_t / 30.0);
+        IF (slide_t >= 30)
+          sliding = 0;
+          kill_tiles(1 - tb);
+          camx = sx1; camy = sy1;
+          IF (visited[cur_room] == 0) show_msg(rname[cur_room], 110, '#f7c282'); END
+          visited[cur_room] = 1;
+          IF (cur_room == 1 AND boss_dead == 0)
+            // the way out closes behind Wren
+            sol[10 * 20 + 9] = 2; sol[10 * 20 + 10] = 2;
+            seal(rox + 152, roy + 168); seal(rox + 168, roy + 168);
+            play_sound(sn_door, 90, 70, 0); add_shake(4);
+            boss_bar();
+            song_play(m_boss);
+            show_msg("SCORCHCLAW", 150, '#ff706d');
+          ELSE
+            IF (song_playing() != m_keep AND boss_dead == 0) song_play(m_keep); END
+          END
+        END
+      END
+
+      // ---- the camera, with shake
+      sx = 0; sy = 0;
+      IF (shake > 0 AND paused == 0)
+        sx = rand(-10, 10) * shake / 10; sy = rand(-10, 10) * shake / 10;
+        shake = shake * 0.86 - 0.05;
+        IF (shake < 0.3) shake = 0; END
+      END
+      scroll[0].x0 = int(camx + sx); scroll[0].y0 = int(camy + sy);
+
+      IF (gs == GS_OVER OR gs == GS_WIN) BREAK; END
+      FRAME;
+    END
+
+    // ================= the end of a game =================
+    IF (msg_a) delete_text(msg_a); delete_text(msg_b); msg_a = 0; END
+    secs = play_frames / 60;
+    veil();
+    new_best_t = 0; new_best_s = 0;
+    IF (gs == GS_WIN)
+      score += max(0, 3000 - secs * 5);
+      song_play(m_win, 0);
+      IF (best_time == 0 OR secs < best_time) best_time = secs; new_best_t = 1; save_data("best_time", best_time); END
+      stext(f_huge, 160, 34, 4, "THE HEARTH BURNS", '#ffe761');
+      stext(f_small, 160, 58, 4, "WREN BROUGHT THE EMBER HEART HOME. THE KEEP IS WARM AGAIN.", '#f7c282');
+    ELSE
+      song_play(m_over, 0);
+      stext(f_huge, 160, 40, 4, "WREN HAS FALLEN", '#ff706d');
+      stext(f_small, 160, 64, 4, "THE KEEP STAYS COLD... FOR NOW.", '#c0cbdc');
+    END
+    IF (score > best_score) best_score = score; new_best_s = 1; save_data("best_score", best_score); END
+    stext(f_small, 160, 84, 4, "TIME " + (secs / 60) + ":" + ((secs % 60) / 10) + (secs % 10) + "     FOES " + kills + "     COINS " + coins, '#ffffff');
+    stext(f_big, 160, 102, 4, "SCORE " + score, '#ffffff');
+    IF (new_best_s)
+      stext(f_small, 160, 120, 4, "A NEW BEST SCORE!", '#7dffc8');
+    ELSE
+      stext(f_small, 160, 120, 4, "BEST SCORE " + best_score, '#8b9bb4');
+    END
+    IF (gs == GS_WIN)
+      IF (new_best_t)
+        stext(f_small, 160, 131, 4, "A NEW BEST TIME!", '#7dffc8');
+      ELSE
+        stext(f_small, 160, 131, 4, "BEST TIME " + (best_time / 60) + ":" + ((best_time % 60) / 10) + (best_time % 10), '#8b9bb4');
+      END
+    END
+    over_t = 0; blink_id = 0; k = 0;
+    LOOP
+      over_t++;
+      IF (over_t > 60 AND over_t % 50 == 1) blink_id = stext(f_small, 160, 160, 4, "PRESS ENTER", '#ffe761'); k = msg_b; END
+      IF (over_t > 60 AND over_t % 50 == 34) delete_text(blink_id); delete_text(k); END
+      IF (over_t > 70 AND k_start_p()) BREAK; END
+      FRAME;
+    END
+    play_sound(sn_select, 80, 100, 0);
+  END
+END

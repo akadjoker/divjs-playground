@@ -718,6 +718,18 @@
       "description": "A four-lane rhythm game: notes slide down to the hit line in time with three songs played by the engine's own synth (Paper Lanterns at 100 BPM, Night Tram at 128, Comet Chase at 160), each with a hand-written NORMAL and HARD chart. PERFECT/GOOD/MISS timing, combos and a score multiplier, a groove bar that ends the song when it runs dry, grades, best scores, pause, and an audio offset set by tapping along with a click. Every sound, note and picture is made in code.",
       "controls": "D F J K or the arrow keys hit the four lanes; on the song list Up/Down pick a song, Left/Right the level, Enter plays, S scroll speed, C audio offset; Esc or P pauses",
       "touch": { "pad": "none", "buttons": "d:1,f:2,j:3,k:4", "menu": "enter:Start,esc:Pause" }
+    },
+    {
+      "id": "ember-keep",
+      "title": "Keep of Embers",
+      "category": "pixelart",
+      "file": "ember-keep.div",
+      "width": 320,
+      "height": 192,
+      "clearColor": "#1c1117",
+      "description": "A top-down action adventure in a small keep: Wren the warden explores nine rooms, fights slimes, rats, brutes, dagger-throwing bandits, ghosts that drift through walls, bats, spiders and a chest that bites, finds keys for the iron doors, a war axe, an oak shield and red potions, dodges spike plates and faces Scorchclaw, the cinder crab, to bring the hearth's Ember Heart home. Best time and score are saved. Art: Kenney (kenney.nl), CC0 - the Tiny Dungeon pack, one packed sheet cut into tiles with load_tile. Music and sounds are made by the engine's synth.",
+      "controls": "Arrows or WASD move, Z/Space/J swing the sword, X/K drink a potion, Enter/P/Esc pause; Enter on the title and end screens",
+      "touch": { "pad": "dpad", "buttons": "z:Sword,x:Potion", "menu": "enter:Pause" }
     }
   ],
   "categories": [
@@ -752,6 +764,10 @@
     {
       "id": "kids",
       "title": "For small children"
+    },
+    {
+      "id": "pixelart",
+      "title": "Pixel art games"
     }
   ]
 }
