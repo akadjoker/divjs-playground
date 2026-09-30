@@ -17,8 +17,9 @@
 // random = "ao acaso". The blocks speak to the player ("anda", "vira",
 // "repete"), like Scratch's Portuguese.
 //
-// Only what the player reads changes: dropdown values, sprite names and
-// the generated DIV code are the same in every language.
+// Only what the player reads changes: dropdown values and sprite names
+// are the same in every language, and so is the generated DIV code apart
+// from its comments (CODE_*), which are in the page's language.
 
 import * as Blockly from './vendor/blockly.js';
 
@@ -206,6 +207,28 @@ const EN = {
   TIP_VAR_GET: 'The value the variable holds now.',
   TIP_VAR_SHOW: 'Writes the variable\'s name and value on the screen for one frame: put it inside a "forever" loop.',
   TIP_SOUND: 'Plays a sound effect made by the engine (no file needed). Browsers only play sound after a click or a key press.',
+
+  // Comments in the generated DIV code ("// " is added before each line;
+  // the code itself is the same in every language)
+  CODE_HEADER: 'Made with DivJS Blocks',
+  CODE_HEADER_NEXT: 'Open it in the playground to go on in text.',
+  CODE_LOOKS_MADE: 'Shapes made by make_look, to reuse them.',
+  CODE_LOOK_HALF: 'half the size of the sprite\'s shape (for bouncing)',
+  CODE_STARTS_HERE: 'The game starts here.',
+  CODE_NO_START: 'Add a "when the game starts" block to start the game.',
+  CODE_TEXT_COLOUR: 'colour of the texts',
+  CODE_KEEP_RUNNING: 'Keep the game running.',
+  CODE_STAY: 'Stay on the screen.',
+  CODE_NO_SPRITE: 'create sprite: there is no sprite called {name}',
+  CODE_LOOK: 'a {colour} {shape}',
+  CODE_ANGLE: 'DIV angles are in thousandths of a degree',
+  CODE_BOUNCE: 'bounce off the edges',
+  CODE_WAIT: 'wait',
+  CODE_DELETE: 'delete this sprite',
+  CODE_LOOSE_VALUE: '(a loose value: {code})',
+  CODE_MAKE_LOOK: 'Makes a shape as a new graphic, or reuses the one made before with the\n'
+    + 'same shape (0 circle, 1 box, 2 triangle), size and colour.',
+  CODE_TRIANGLE: 'Pointing right (angle 0): one line per column, shorter towards the tip.',
 
   // Lessons (sprite and variable names are the ones in the lesson's blocks)
   LESSON_SHAPE_TITLE: 'Make a shape appear',
@@ -432,6 +455,27 @@ const PT = {
   TIP_VAR_SHOW: 'Escreve o nome e o valor da variável no ecrã durante um fotograma: põe-no dentro de um "para sempre".',
   TIP_SOUND: 'Toca um efeito sonoro feito pelo motor do jogo (não precisa de ficheiro). '
     + 'Os browsers só tocam som depois de um clique ou de uma tecla.',
+
+  // Comments in the generated DIV code
+  CODE_HEADER: 'Feito com o DivJS Blocks',
+  CODE_HEADER_NEXT: 'Abre-o no playground para continuares em texto.',
+  CODE_LOOKS_MADE: 'Formas feitas por make_look, para as voltar a usar.',
+  CODE_LOOK_HALF: 'metade do tamanho da forma da personagem (para ressaltar)',
+  CODE_STARTS_HERE: 'O jogo começa aqui.',
+  CODE_NO_START: 'Junta um bloco "quando o jogo começa" para o jogo começar.',
+  CODE_TEXT_COLOUR: 'cor dos textos',
+  CODE_KEEP_RUNNING: 'O jogo continua a correr.',
+  CODE_STAY: 'Fica no ecrã.',
+  CODE_NO_SPRITE: 'cria a personagem: não há nenhuma personagem chamada {name}',
+  CODE_LOOK: 'um {shape} {colour}',
+  CODE_ANGLE: 'no DIV, os ângulos são em milésimas de grau',
+  CODE_BOUNCE: 'ressalta nas bordas',
+  CODE_WAIT: 'espera',
+  CODE_DELETE: 'apaga esta personagem',
+  CODE_LOOSE_VALUE: '(um valor solto: {code})',
+  CODE_MAKE_LOOK: 'Faz uma forma como um gráfico novo, ou volta a usar a que fez antes com\n'
+    + 'a mesma forma (0 círculo, 1 quadrado, 2 triângulo), tamanho e cor.',
+  CODE_TRIANGLE: 'Aponta para a direita (ângulo 0): uma linha por coluna, mais curta para a ponta.',
 
   // Lessons
   LESSON_SHAPE_TITLE: 'Faz aparecer uma forma',

@@ -1390,12 +1390,16 @@ try
     assert(blocksLink === '../blocks/', `the playground's Blocks link is ${blocksLink}`);
   });
 
-  // EN | PT: the switch translates the page, the toolbox, the blocks and
-  // the lesson, and leaves the blocks, their places, the code and the
-  // running game as they were. The choice is kept; ?lang= overrides it.
+  // EN | PT: the switch translates the page, the toolbox, the blocks, the
+  // lesson and the comments in the code, and leaves the blocks, their
+  // places, the code itself and the running game as they were. The choice
+  // is kept; ?lang= overrides it.
   await check('blocks: the language switch (EN | PT)', async () =>
   {
     const { STRINGS } = await import('../blocks/i18n.js');
+    // The code without its // comments (none of the lesson's texts has
+    // "//" in it).
+    const withoutComments = (code) => code.split('\n').map((line) => line.replace(/\s*\/\/.*$/, '')).join('\n');
     const context = await browser.newContext();
     const { page, problems } = await openBlocks(context);
     const snapshot = () => page.evaluate(() =>
@@ -1465,11 +1469,14 @@ try
     assert(pt.title === `5. ${STRINGS.pt.LESSON_FREE_TITLE}`, `title "${pt.title}"`);
     assert(pt.run === STRINGS.pt.RUN && pt.status === STRINGS.pt.STATUS_RUNNING, `run "${pt.run}", status "${pt.status}"`);
     assert(before.running && after.running && after.processes >= before.processes - 3, 'the game should keep running');
-    assert(after.code === before.code && after.shown === before.shown, 'the code changed with the language');
+    assert(withoutComments(after.code) === withoutComments(before.code), 'the code changed with the language');
+    assert(after.shown === after.code, 'the code shown is not the code made in Portuguese');
+    assert(before.code.startsWith(`// ${STRINGS.en.CODE_HEADER}\n`) && after.code.startsWith(`// ${STRINGS.pt.CODE_HEADER}\n`), `the header comment: ${after.code.split('\n')[0]}`);
+    assert(after.code.includes(`// ${STRINGS.pt.CODE_BOUNCE}\n`) && !after.code.includes(`// ${STRINGS.en.CODE_BOUNCE}\n`), 'the bounce comment is not in Portuguese');
     assert(after.blocks === before.blocks, `the blocks changed:\n${before.blocks}\n---\n${after.blocks}`);
     assert(after.stacks === before.stacks, `the stacks moved:\n${before.stacks}\n---\n${after.stacks}`);
     assert(reloaded.lang === 'pt-PT' && reloaded.title === pt.title, `after a reload: ${reloaded.lang} "${reloaded.title}"`);
-    assert(reloadedCode === before.code, 'the code changed after the reload');
+    assert(reloadedCode === after.code, 'the code changed after the reload');
     assert(forced.lang === 'en' && forced.run === STRINGS.en.RUN && forced.categories[0] === 'Program', `?lang=en: ${JSON.stringify(forced)}`);
     assert(address.endsWith('?lang=pt'), `the address after switching is ${address}`);
     assert(back.lang === 'en' && back.title === `5. ${STRINGS.en.LESSON_FREE_TITLE}` && back.block.startsWith('repeat '), `back to English: ${JSON.stringify(back)}`);

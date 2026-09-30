@@ -9,7 +9,8 @@
 // The page speaks English or Portuguese (i18n.js): ?lang=en or ?lang=pt in
 // the address, else the last choice made with the EN | PT switch, else the
 // browser's language. Switching rebuilds the blocks with their new labels
-// (same blocks, same places) and leaves the game and the code alone.
+// (same blocks, same places), writes the code's comments in the new
+// language (the code itself does not change) and leaves the game alone.
 
 import * as Blockly from './vendor/blockly.js';
 import { runDivDemo } from '../engine/divjs.js';
@@ -679,8 +680,8 @@ function translatePage()
 // Rebuilds the blocks from their saved state so they take the new labels:
 // the same blocks with the same ids, in the same places, the view left
 // where it was. Events are off, so it is not an edit (nothing to undo,
-// nothing to save) and the code, which does not depend on the language,
-// stays as it was.
+// nothing to save). The code is made again for its comments, which are in
+// the page's language; the code itself does not depend on the language.
 function relabelBlocks()
 {
   Blockly.hideChaff();
@@ -701,7 +702,7 @@ function relabelBlocks()
   }
   // The warnings on blocks are in the new language too.
   warnedIds = new Set();
-  showWarnings(generateDiv(workspace).warnings);
+  regenerate();
 }
 
 function switchLanguage(language)

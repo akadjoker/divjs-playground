@@ -153,6 +153,12 @@ export function quote(text)
   return `'${escaped}'`;
 }
 
+// A comment in the page's language, "// " before each of its lines.
+function comment(key, params = {}, indent = '')
+{
+  return t(key, params).split('\n').map((line) => `${indent}// ${line}`.trimEnd()).join('\n');
+}
+
 function isNumberLiteral(code)
 {
   return /^-?\d+(\.\d+)?$/.test(code);
@@ -183,7 +189,7 @@ divGenerator.scrub_ = function (block, code, thisOnly)
 
 divGenerator.scrubNakedValue = function (line)
 {
-  return `// (a loose value: ${line})\n`;
+  return `${comment('CODE_LOOSE_VALUE', { code: line })}\n`;
 };
 
 // Per program state, set up by generateDiv.
@@ -242,7 +248,7 @@ function variableIdentifier(block)
 
 // Code to make a sprite stay alive after its blocks run out, unless its
 // last block already loops or ends it.
-function keepAlive(hat, what)
+function keepAlive(hat, key)
 {
   let last = hat.getInputTargetBlock('DO');
   while (last && last.getNextBlock())
@@ -257,7 +263,7 @@ function keepAlive(hat, what)
   {
     return '';
   }
-  return `${divGenerator.INDENT}// ${what}\n${divGenerator.INDENT}LOOP\n${divGenerator.INDENT}${divGenerator.INDENT}FRAME;\n`
+  return `${comment(key, {}, divGenerator.INDENT)}\n${divGenerator.INDENT}LOOP\n${divGenerator.INDENT}${divGenerator.INDENT}FRAME;\n`
     + `${divGenerator.INDENT}END\n`;
 }
 
@@ -284,9 +290,9 @@ forBlock.div_start = function (block)
   code += 'BEGIN\n';
   code += `${indent}set_mode(${SCREEN_WIDTH}, ${SCREEN_HEIGHT});\n`;
   code += `${indent}set_fps(60, 0);\n`;
-  code += `${indent}set_color('#ffffff');   // colour of the texts\n`;
+  code += `${indent}set_color('#ffffff');   ${comment('CODE_TEXT_COLOUR')}\n`;
   code += body;
-  code += keepAlive(block, 'Keep the game running.');
+  code += keepAlive(block, 'CODE_KEEP_RUNNING');
   code += 'END\n';
   return code;
 };
@@ -301,7 +307,7 @@ forBlock.div_sprite = function (block)
   code += privatesLine(s.proc);
   code += 'BEGIN\n';
   code += body;
-  code += keepAlive(block, 'Stay on the screen.');
+  code += keepAlive(block, 'CODE_STAY');
   code += 'END\n';
   return code;
 };
@@ -313,12 +319,20 @@ forBlock.div_create = function (block)
   const y = value(block, 'Y', Order.NONE);
   if (!name)
   {
-    return `// create sprite: there is no sprite called ${quote(block.getFieldValue('SPRITE'))}\n`;
+    return `${comment('CODE_NO_SPRITE', { name: quote(block.getFieldValue('SPRITE')) })}\n`;
   }
   return `${name}(${x}, ${y});\n`;
 };
 
 // Looks
+
+// A dropdown value's label in the page's language ("teal" -> "azul-esverdeado").
+function optionLabel(kind, value)
+{
+  const key = `${kind}_${String(value).toUpperCase()}`;
+  const label = t(key);
+  return label === key ? String(value) : label;
+}
 
 forBlock.div_look = function (block)
 {
@@ -328,7 +342,8 @@ forBlock.div_look = function (block)
   const size = Math.max(4, Math.min(200, Math.round(Number(block.getFieldValue('SIZE')) || 30)));
   const colour = block.getFieldValue('COLOUR');
   const [r, g, b] = PALETTE[colour] || PALETTE.white;
-  let code = `graph = make_look(${SHAPES[shape] ?? 0}, ${size}, ${r}, ${g}, ${b});   // a ${colour} ${shape}\n`;
+  const look = comment('CODE_LOOK', { colour: optionLabel('COLOUR', colour), shape: optionLabel('SHAPE', shape) });
+  let code = `graph = make_look(${SHAPES[shape] ?? 0}, ${size}, ${r}, ${g}, ${b});   ${look}\n`;
   if (s.usesBounce)
   {
     code += `look_half = ${Math.floor(size / 2)};\n`;
@@ -350,7 +365,7 @@ forBlock.div_say = function (block)
 forBlock.div_set_angle = function (block)
 {
   const angle = value(block, 'ANGLE', Order.MULTIPLICATIVE);
-  return `angle = ${angle} * 1000;   // DIV angles are in thousandths of a degree\n`;
+  return `angle = ${angle} * 1000;   ${comment('CODE_ANGLE')}\n`;
 };
 
 forBlock.div_turn = function (block)
@@ -414,7 +429,7 @@ forBlock.div_bounce = function ()
 {
   const w = SCREEN_WIDTH;
   const h = SCREEN_HEIGHT;
-  return '// bounce off the edges\n'
+  return `${comment('CODE_BOUNCE')}\n`
     + 'IF (x < look_half) x = look_half; angle = 180000 - angle; END\n'
     + `IF (x > ${w} - look_half) x = ${w} - look_half; angle = 180000 - angle; END\n`
     + 'IF (y < look_half) y = look_half; angle = -angle; END\n'
@@ -469,12 +484,12 @@ forBlock.div_wait = function (block)
   const indent = divGenerator.INDENT;
   const frames = value(block, 'FRAMES', Order.NONE);
   const i = counter('wait');
-  return `FOR ${i} = 1 TO ${frames}   // wait\n${indent}FRAME;\nEND\n`;
+  return `FOR ${i} = 1 TO ${frames}   ${comment('CODE_WAIT')}\n${indent}FRAME;\nEND\n`;
 };
 
 forBlock.div_delete = function ()
 {
-  return 'RETURN;   // delete this sprite\n';
+  return `RETURN;   ${comment('CODE_DELETE')}\n`;
 };
 
 // Sensing
@@ -602,8 +617,9 @@ forBlock.div_sound = function (block)
 
 // ── Helpers the program may need ────────────────────────────────────────
 
-const MAKE_LOOK = `// Makes a shape as a new graphic, or reuses the one made before with the
-// same shape (0 circle, 1 box, 2 triangle), size and colour.
+function makeLook()
+{
+  return `${comment('CODE_MAKE_LOOK')}
 FUNCTION make_look(shape, d, r, g, b);
 PRIVATE i = 0; gr = 0; rgb = 0;
 BEGIN
@@ -621,7 +637,7 @@ BEGIN
     gfx_rect(gr, 0, 0, d, d, r, g, b);
   END
   IF (shape == 2)
-    // Pointing right (angle 0): one line per column, shorter towards the tip.
+${comment('CODE_TRIANGLE', {}, '    ')}
     FOR i = 0 TO d - 1
       gfx_line(gr, i, i / 2, i, d - 1 - i / 2, r, g, b);
     END
@@ -636,6 +652,7 @@ BEGIN
   RETURN gr;
 END
 `;
+}
 
 // ── Whole program ───────────────────────────────────────────────────────
 
@@ -648,7 +665,8 @@ function isHat(block)
 // Returns { code, warnings: [{ id, text }] } - warnings name blocks that
 // could not be used as they are (a second "when the game starts", a sprite
 // name used twice, a sprite that does not exist), in the page's language.
-// The code itself is the same in every language.
+// The code's comments are in the page's language too; the code itself is
+// the same in every language.
 export function generateDiv(workspace)
 {
   const gen = divGenerator;
@@ -722,18 +740,18 @@ export function generateDiv(workspace)
     main = 'BEGIN\n'
       + `  set_mode(${SCREEN_WIDTH}, ${SCREEN_HEIGHT});\n`
       + '  set_fps(60, 0);\n'
-      + '  // Add a "when the game starts" block to start the game.\n'
+      + `${comment('CODE_NO_START', {}, '  ')}\n`
       + '  LOOP\n    FRAME;\n  END\nEND\n';
   }
 
   // Assemble.
-  let code = '// Made with DivJS Blocks\n';
-  code += '// Open it in the playground to go on in text.\n';
+  let code = `${comment('CODE_HEADER')}\n`;
+  code += `${comment('CODE_HEADER_NEXT')}\n`;
   code += 'PROGRAM my_game;\n';
   const globals = variables.map((v) => `  ${s.variables.get(v.getId())} = 0;\n`);
   if (s.usesLook)
   {
-    globals.push('  // Shapes made by make_look, to reuse them.\n');
+    globals.push(`${comment('CODE_LOOKS_MADE', {}, '  ')}\n`);
     globals.push('  look_shape[63]; look_size[63]; look_rgb[63]; look_graph[63];\n');
     globals.push('  look_count = 0;\n');
   }
@@ -743,7 +761,7 @@ export function generateDiv(workspace)
   }
   if (s.usesBounce)
   {
-    code += '\nLOCAL\n  look_half = 0;   // half the size of the sprite\'s shape (for bouncing)\n';
+    code += `\nLOCAL\n  look_half = 0;   ${comment('CODE_LOOK_HALF')}\n`;
   }
   for (const proc of processes)
   {
@@ -751,9 +769,9 @@ export function generateDiv(workspace)
   }
   if (s.usesLook)
   {
-    code += `\n${MAKE_LOOK}`;
+    code += `\n${makeLook()}`;
   }
-  code += `\n// The game starts here.\n${main}`;
+  code += `\n${comment('CODE_STARTS_HERE')}\n${main}`;
   gen.divState = null;
   return { code, warnings: s.warnings };
 }

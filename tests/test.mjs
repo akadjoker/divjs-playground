@@ -610,28 +610,83 @@ for (const name of readdirSync(programsDir)) {
 			report(`blocks: every text in ${language}`, problems, `${BLOCK_TYPES.length} blocks, ${LESSONS.length} lessons`);
 		}
 
-		// The same DIV code, byte for byte, in every language.
+		// The same blocks make the same DIV code in every language, byte
+		// for byte once the comments are taken out; the comments are in the
+		// page's language (none of them left in English), and the code
+		// compiles in every language.
 		{
+			// The code without its // comments (a // inside a 'string' is
+			// kept) and without the spaces left before them.
+			const withoutComments = (code) => code.split('\n').map((line) =>
+			{
+				let quote = false;
+				for (let i = 0; i < line.length; i++)
+				{
+					if (quote && line[i] === '\\')
+					{
+						i += 1;
+					}
+					else if (line[i] === '\'')
+					{
+						quote = !quote;
+					}
+					else if (!quote && line.startsWith('//', i))
+					{
+						return line.slice(0, i).trimEnd();
+					}
+				}
+				return line;
+			}).join('\n');
+			const comments = (code) => code.split('\n').filter((line) => line.includes('//'))
+				.map((line) => line.slice(withoutComments(line).length).trim()).filter((c) => c.startsWith('//'));
 			const problems = [];
 			let count = 0;
 			for (const lesson of LESSONS)
 			{
 				for (const which of ['start', 'solution'])
 				{
+					// One state for all languages: the lesson's, in English.
+					setLanguage('en');
+					const state = lesson[which];
 					const codes = LANGUAGES.map((language) =>
 					{
 						setLanguage(language);
-						return generate(lesson[which]).code;
+						return generate(state).code;
 					});
 					count += 1;
-					if (codes.some((code) => code !== codes[0]))
+					if (codes.some((code) => withoutComments(code) !== withoutComments(codes[0])))
 					{
-						problems.push(`${lesson.id} ${which}`);
+						problems.push(`${lesson.id} ${which}: the code differs`);
 					}
+					const english = new Set(comments(codes[0]));
+					LANGUAGES.forEach((language, i) =>
+					{
+						if (language !== 'en')
+						{
+							const left = comments(codes[i]).filter((c) => english.has(c));
+							if (left.length > 0)
+							{
+								problems.push(`${lesson.id} ${which} in ${language}: comments in English: ${left.join(' / ')}`);
+							}
+						}
+						try
+						{
+							compile(codes[i]);
+						}
+						catch (err)
+						{
+							problems.push(`${lesson.id} ${which} in ${language}: ${err?.message || String(err)}`);
+						}
+					});
 				}
 			}
+			// A // inside a string is not a comment.
+			if (withoutComments('text(1, 2, \'a // b\');   // c') !== 'text(1, 2, \'a // b\');')
+			{
+				problems.push('withoutComments cuts inside a string');
+			}
 			setLanguage('en');
-			report('blocks: code is the same in every language', problems, `${count} workspaces in ${LANGUAGES.join(', ')}`);
+			report('blocks: same code in every language', problems, `${count} workspaces in ${LANGUAGES.join(', ')}, comments translated`);
 		}
 	}
 }
